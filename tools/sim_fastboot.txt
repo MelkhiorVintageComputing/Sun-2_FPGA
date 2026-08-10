@@ -1,0 +1,30 @@
+# Extra patch, applied on top of sim_speedup.txt, that shortens the PROM's
+# RAM initialisation pass.  This is NOT part of the image the old working build
+# used -- use it for runs where memory is not what is being tested, and use the
+# plain patched image for full-system validation.
+#
+# Line format: <address> <expected> <new>   (hex, 16-bit words, PROM at 0xef0000)
+
+# The initialisation loop at ef01de..ef01f8 fills every installed byte with
+# 0xffffffff:
+#
+#   ef01de  lea 0x1000,%sp          <- start just above the vectors
+#   ef01e2  moveq #-1,%d0
+#   ef01e4  movel 0x488,%d1         <- top of memory, found by the sizing probe
+#   ef01e8  subl %sp,%d1
+#   ef01ea  asrl #2,%d1             <- ... as a longword count
+#   ef01ee  movel %d0,%sp@+
+#   ef01f0  dbf %d1,0xef01ee
+#   ef01f4  clrw %d1                <- 32-bit dbf: borrow into the high word
+#   ef01f6  subql #1,%d1
+#   ef01f8  bccs 0xef01ee
+#
+# Turning the `asrl #2` into `asrl #8` divides the count by 64, so the loop
+# still runs -- and still initialises low memory, where the monitor keeps its
+# own data -- but finishes 64 times sooner.  On a 7 MiB machine that is 112 KiB
+# written instead of 7 MiB.
+#
+# Preferred over NOPing the loop out entirely: the loop and its 32-bit
+# wraparound still get exercised, and the memory the monitor actually uses is
+# still initialised.
+ef01ea e481 e081

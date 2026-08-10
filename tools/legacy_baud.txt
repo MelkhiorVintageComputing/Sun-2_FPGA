@@ -1,0 +1,32 @@
+# The one word where we deliberately differ from the image the old working
+# build used.  It was a workaround for the old Suska SCC; with the z8530_scc
+# fed a 4.9152 MHz clock it is not needed, and applying it would only halve the
+# console baud rate.  Applying it on top of sim_speedup.txt reproduces the old
+# image bit for bit, which is all `make check` uses it for -- it is not part of
+# any ROM the simulation actually runs.
+#
+# Line format: <address> <expected> <new>   (hex, 16-bit words, PROM at 0xef0000)
+
+# ef70de..ef70f2 is the SCC channel A initialisation table, as (register,
+# value) byte pairs:
+#
+#   04 46   WR4  = x16 clock mode, 1 stop bit, no parity
+#   03 c0   WR3  = Rx 8 bits/char, Rx disabled
+#   05 e2   WR5  = DTR, Tx 8 bits/char, RTS
+#   09 02   WR9
+#   0b 51   WR11 = Rx clock and Tx clock both from the baud rate generator
+#   0c 0e   WR12 = baud rate time constant, low byte  <- ef70e8
+#   0d 00   WR13 = baud rate time constant, high byte
+#   0e 02   WR14 = BRG source = PCLK
+#   03 c1   WR3  = Rx enable
+#   05 ea   WR5  = Tx enable
+#   0e 03   WR14 = BRG enable
+#
+# With the SCC clocked at 4.9152 MHz, a time constant of 14 gives
+#
+#   4915200 / (2 * (14 + 2) * 16) = 9600 baud
+#
+# which is what a real Sun-2 console runs at.  Changing the constant to 30
+# doubles the divisor and halves that to 4800 -- the compensation the old Suska
+# SCC needed.  The z8530_scc does not, so we keep the PROM's own value.
+ef70e8 0c0e 0c1e

@@ -1,0 +1,23 @@
+# Patches applied to sun2-multi-rev-R.bin to make simulation tractable.
+#
+# These are three of the four words that differ between the pristine PROM and
+# the image compiled into the last known-working build of the old design
+# (Old/sun2-fpga/rtl-fpga/bootrom_patched_16bits.v).  The fourth is the console
+# baud rate constant, which we deliberately leave alone -- see legacy_baud.txt.
+#
+# Line format: <address> <expected> <new>   (hex, 16-bit words, PROM at 0xef0000)
+
+# ef0b7c  movel #50000,%d0        <- LED/diagnostic delay loop at ef0b7c..ef0b86
+# ef0b82  subql #1,%d0                (`movel #50000,%d0; subql #1,%d0; bnew`)
+# ef0b84  bnew  0xef0b82
+# Shorten the iteration count from 50000 to 2; this is a pure wall-clock delay
+# and 50000 iterations of it dominate simulated time.
+ef0b80 c350 0002
+
+# ef0e80  moveq #-114,%d0         <- "Mcontop", entry of the destructive main
+#                                    memory test
+# Replace with `jmp %pc@(0xef01b6)`, i.e. straight to the code that follows the
+# call site at ef01b2.  The memory test walks all of RAM several times over and
+# is hopeless to simulate; the memory model is trustworthy by construction.
+ef0e80 708e 4efa
+ef0e82 0e38 f334
