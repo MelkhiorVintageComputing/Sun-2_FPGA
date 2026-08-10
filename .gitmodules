@@ -10,3 +10,6 @@
 [submodule "Inputs/sunos-34-src"]
 	path = Inputs/sunos-34-src
 	url = https://github.com/calmsacibis995/sunos-34-src
+[submodule "Inputs/doc/QM_XC7A100T_WUKONG_BOARD"]
+	path = Inputs/doc/QM_XC7A100T_WUKONG_BOARD
+	url = https://github.com/ChinaQMTECH/QM_XC7A100T_WUKONG_BOARD
