@@ -1,0 +1,107 @@
+#!/bin/bash
+#
+# Run the Sun-2 simulation under Vivado's xsim.
+#
+# xsim is the primary flow because the design is mixed-language: the Suska
+# MC68010 is VHDL, everything else is Verilog / SystemVerilog.
+#
+# Environment:
+#   XILINX_VIVADO   Vivado install (default /opt/Xilinx/2025.2/Vivado)
+#   SUN2_DEFINES    extra `define's, e.g. "MEM_SIM_ONLY ROM_PRISTINE"
+#   SUN2_BAUD       console decode rate (default 9600)
+#
+# Any arguments are passed through to xsim, so plusargs work:
+#   ./run_xsim.sh -testplusarg timeout_ms=500
+#
+set -e -o pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+top=$(cd "$here/.." && pwd)
+
+: "${XILINX_VIVADO:=/opt/Xilinx/2025.2/Vivado}"
+if [ ! -x "$XILINX_VIVADO/bin/xvlog" ]; then
+	echo "xsim not found under $XILINX_VIVADO -- set XILINX_VIVADO" >&2
+	exit 1
+fi
+export PATH="$XILINX_VIVADO/bin:$PATH"
+
+# xelab links the snapshot with Vivado's bundled gcc, which does not know about
+# Debian/Ubuntu multiarch paths and so cannot find crt1.o on its own.
+if [ -z "$LIBRARY_PATH" ] && [ -e /usr/lib/x86_64-linux-gnu/crt1.o ]; then
+	export LIBRARY_PATH=/usr/lib/x86_64-linux-gnu
+fi
+
+rundir="$top/build/sim/xsim"
+mkdir -p "$rundir"
+
+# The boot PROM include lives in build/rom; generate it if it isn't there yet.
+make -s -C "$top/tools"
+
+defargs=()
+for d in $SUN2_DEFINES; do
+	defargs+=(-d "$d")
+done
+
+cd "$rundir"
+
+echo "== compiling the Suska MC68010 (VHDL) =="
+# wf68k10_pkg first: everything else depends on it.
+# -2008 is required: the core connects `buffer` formals to `out` actuals, which
+# only VHDL-2008 allows.
+xvhdl -2008 --work sun2 \
+	"$top/Inputs/Suska_Configware/68K10/wf68k10_pkg.vhd" \
+	"$top/Inputs/Suska_Configware/68K10/wf68k10_address_registers.vhd" \
+	"$top/Inputs/Suska_Configware/68K10/wf68k10_alu.vhd" \
+	"$top/Inputs/Suska_Configware/68K10/wf68k10_bus_interface.vhd" \
+	"$top/Inputs/Suska_Configware/68K10/wf68k10_control.vhd" \
+	"$top/Inputs/Suska_Configware/68K10/wf68k10_data_registers.vhd" \
+	"$top/Inputs/Suska_Configware/68K10/wf68k10_exception_handler.vhd" \
+	"$top/Inputs/Suska_Configware/68K10/wf68k10_opcode_decoder.vhd" \
+	"$top/Inputs/Suska_Configware/68K10/wf68k10_top.vhd"
+
+# The Sun-2 gateware is plain Verilog-2001 and relies on a couple of
+# use-before-declare wires that SystemVerilog rejects, so it is compiled in
+# Verilog mode; only the SCC and the testbench are SystemVerilog.
+echo "== compiling the Sun-2 gateware (Verilog) =="
+xvlog --work sun2 \
+	"${defargs[@]}" \
+	-i "$top/rtl" -i "$top/build/rom" \
+	"$top/rtl/top_fpga.v" \
+	"$top/rtl/sun2_fpga.v" \
+	"$top/rtl/sun2_mmu.v" \
+	"$top/rtl/ctx_reg.v" \
+	"$top/rtl/pmap.v" \
+	"$top/rtl/smap.v" \
+	"$top/rtl/sram_sync.v" \
+	"$top/rtl/sram_sync_16bits_bytewritable.v" \
+	"$top/rtl/bootrom.v" \
+	"$top/rtl/idprom.v" \
+	"$top/rtl/gen8bit_reg.v" \
+	"$top/rtl/ttl_am9513.v" \
+	"$top/rtl/ttl_74F151.v" \
+	"$top/rtl/ttl_74LS148.v" \
+	"$top/rtl/sun2_wishbone_bridge.v" \
+	"$top/rtl/tolog.v"
+
+echo "== compiling the SCC and testbench (SystemVerilog) =="
+xvlog --sv --work sun2 \
+	"${defargs[@]}" \
+	-i "$top/rtl" -i "$top/build/rom" \
+	"$top/Inputs/z8530_scc/z8530_scc.sv" \
+	"$top/tb/wb_ram_model.sv" \
+	"$top/tb/uart_monitor.sv" \
+	"$top/tb/tb_sun2.sv"
+
+# Signal visibility for $dumpvars costs a lot of run time, so it is opt-in.
+# Set SUN2_VCD=1 alongside the +vcd / +vcd_full plusargs.
+debug=off
+[ -n "${SUN2_VCD:-}" ] && debug=typical
+
+echo "== elaborating (debug=$debug) =="
+xelab -debug $debug -O3 --timescale 1ns/1ps \
+	-L sun2 -L unisim \
+	-generic_top "BAUD=${SUN2_BAUD:-9600}" \
+	sun2.tb_sun2 -s sun2_sim
+
+echo "== running =="
+exec xsim sun2_sim -R "$@"
