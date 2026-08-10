@@ -17,3 +17,8 @@ Old
 xsim.dir/
 .Xil/
 work-obj*.cf
+
+# Vivado drops these wherever it is invoked
+clockInfo.txt
+hs_err_pid*.log
+*.str
