@@ -5,16 +5,19 @@ Sun 2/120: MC68010, the Sun-2 MMU, the AMD 9513 timer and a Zilog 8530 SCC for
 the serial console, booting the real Rev R boot PROM. A MultiBus Sun-2 has no
 on-board Ethernet, so there is none here either.
 
-Right now the design is exercised in simulation only, where it passes the
-PROM's self test and reaches the monitor prompt.
+In simulation it passes the PROM's self test and reaches the monitor prompt.
+It also builds into a timing-clean bitstream for a QMTech Wukong V1
+(XC7A100T-2FGG676) with DDR3 main memory — untested on real hardware so far.
 
 ## Layout
 
 | Path | What |
 |---|---|
 | `rtl/` | the Sun-2 gateware: bus, MMU, PROM, timer, registers, Wishbone bridge |
-| `tb/` | testbench, Wishbone memory model, serial console decoder |
+| `rtl/board/` | the board layer: clock generation, reset, Wishbone-to-DDR3 |
+| `tb/` | testbenches and simulation models |
 | `sim/` | simulation flows |
+| `syn/` | FPGA build: constraints, MIG configuration, Vivado scripts |
 | `tools/` | boot PROM preparation |
 | `Inputs/` | third-party and reference material — **immutable** |
 | `Old/` | the previous working implementation, kept for reference — not in git, never modified |
@@ -165,7 +168,7 @@ so it can be forced from the command line.
 
 | Define | Effect |
 |---|---|
-| *(default)* | main memory external, behind `sun2_wishbone_bridge` — 7 MiB, DTACK from the Wishbone ack. This is what the FPGA build uses, with LiteDRAM behind it. |
+| *(default)* | main memory external, behind `sun2_wishbone_bridge` — 7 MiB, DTACK from the Wishbone ack. This is what the FPGA build uses, with DDR3 behind it. |
 | `MEM_SIM_ONLY` | 512 KiB synchronous SRAM inside `sun2_fpga`, DTACK from fixed bus timing. |
 | `MEM_PAGES` | installed memory in 2 KiB pages; default 3584 (7 MiB, the architectural maximum). Only affects what the PROM finds installed — the bus still answers over the full 7 MiB so the PROM's sizing probe works. |
 | `ROM_FASTBOOT` | boot PROM with the RAM initialisation pass shortened 64-fold. |
@@ -175,3 +178,113 @@ so it can be forced from the command line.
 per-access register trace. It is off because it prints on every timer access
 and dominates run time; instantiate the timer as `ttl_am9513 #(.TRACE(1))` in
 `rtl/sun2_fpga.v` to get it back.
+
+## Building for hardware
+
+Target: QMTech Wukong **V1** (XC7A100T-2FGG676, one MT41K128M16JT-125 DDR3L,
+50 MHz oscillator). The board layer replaces what a LiteX SoC wrapper used to
+provide — clocks, DDR3 controller, Wishbone clock crossing, DRAM
+initialisation, reset sequencing and pin constraints — with plain
+SystemVerilog plus Xilinx's MIG, and no LiteX at all.
+
+```sh
+make -C syn ip           # generate the MIG DDR3 controller from its .prj
+make -C syn bitstream    # 12.5 MHz CPU clock
+make -C syn bitstream CPU_HZ=40000000
+make -C syn both
+```
+
+Nothing generated is committed. `syn/mig/sun2_mig.prj` is the source of truth
+for the memory controller (see `syn/mig/README.md` for its provenance and the
+four fields we changed); everything MIG emits lands in `build/ip/`. The build
+refuses to write a bitstream if timing is not met.
+
+Both configurations build clean on Vivado 2025.2:
+
+| CPU clock | Worst setup slack | Worst hold slack |
+|---|---|---|
+| 12.5 MHz | +1.281 ns | +0.044 ns |
+| 40 MHz | +0.151 ns | +0.055 ns |
+
+40 MHz closes, but with little margin — treat it as the fast option, not the
+default. Utilisation is the same either way and leaves plenty of room: 13878
+LUTs (22%), 7137 registers (6%), 20 block RAMs (15%), 3 of 6 MMCMs (two ours,
+one MIG's).
+
+### Clocks
+
+Two MMCMs in `rtl/board/wukong_clkgen.sv`, instantiated directly rather than
+through the clocking wizard, so the file reads and simulates like any other
+source.
+
+| Clock | Derivation | Result |
+|---|---|---|
+| MIG `sys_clk` 166.667 MHz | MMCM A, VCO 1000 MHz, ÷6 | exact |
+| `cpu_clk` 12.5 or 40 MHz | MMCM A, ÷80 or ÷25 | exact |
+| IDELAYCTRL 200 MHz | MMCM A, ÷5 | exact |
+| SCC `serial_clk` 4.9152 MHz | MMCM B, ÷2 ×24.625 ÷125.25 | 4.915170 MHz, +0.0006% |
+
+4.9152 MHz is not a rational multiple of 50 MHz with small terms, so it gets an
+MMCM to itself — where the fractional CLKOUT0 divider brings it within
+0.0006%, and where changing `CPU_CLK_HZ` cannot perturb it. That matters
+because the PROM derives the 9600 baud console straight from this clock. The
+200 MHz output is needed because MIG only allows its "use the system clock"
+IDELAYCTRL option when the input clock *is* 200 MHz.
+
+`tb_clkgen` measures all four in simulation rather than trusting the
+arithmetic — which is how the step-1 baud rate bug would have been caught.
+
+### Memory
+
+`rtl/board/wb_to_mig_ui.sv` adapts the Sun-2's Wishbone master to MIG's native
+user interface: 32-bit words in the CPU clock domain to 128-bit beats in MIG's
+83.33 MHz `ui_clk`, with a two-phase handshake across the domains and one
+transaction in flight. `app_wdf_mask` masks per byte, so sub-word writes need
+no read-modify-write. `tb_wb_to_mig_ui` checks it against `wb_ram_model` over
+randomised traffic with randomised stalls on both of MIG's ready signals.
+
+### Board-level simulation
+
+```sh
+make -C sim board                    # behavioural RAM, boots to the prompt
+make -C sim board BOARD_MEM=ddr3     # real MIG + Micron's DDR3 model
+```
+
+The fast configuration leaves MIG out and hangs `wb_ram_model` on the Wishbone
+port, and generates the clocks behaviourally: the MMCME2 model simulates a
+1 GHz VCO and costs more events than the rest of the machine put together,
+about 6× overall. Use `BOARD_CLKGEN=real` to simulate the actual MMCMs.
+
+The `ddr3` configuration is for bring-up, not booting: MIG calibrates against
+the Micron model at 125 µs and the reset chain releases the Sun-2 190 ns later,
+but the boot PROM does not touch main memory until `L_M_MAP` around 600 ms,
+which is far past what a full DDR3 model can simulate in reasonable time.
+
+That leaves one join the two board configurations do not cover — the adapter
+talking to the *actual* controller rather than a model of it — so there is a
+third test for exactly that:
+
+```sh
+make -C sim migddr3    # wb_to_mig_ui + real MIG + Micron model, ~3 minutes
+make -C sim adapter    # wb_to_mig_ui vs the reference, randomised, seconds
+make -C sim clkgen     # measure the generated clocks
+```
+
+Micron's DDR3 model comes from the *generated* example design, not the copy in
+the Vivado install — that one is an unsubstituted template full of
+`%MEM_DENSITY` placeholders. Either way it is referenced, never committed: it
+carries Micron's AS-IS licence, not an open one.
+
+### Things about this board worth knowing
+
+* **The V1 50 MHz input (M22) is not on a clock-capable pin**, so the XDC needs
+  `CLOCK_DEDICATED_ROUTE FALSE` on it. V2/V3 moved the oscillator to M21.
+* **DDR3 `CS#` must not be driven.** Sheet 3 of the V1 schematic shows it tied
+  low through R35 and not routed to the FPGA; E22 is a free I/O. MIG's
+  configuration has the chip-select pin disabled, which is correct. The old
+  LiteX XDC constrains `ddram_cs_n` to E22 and is wrong.
+* **Bank 16 needs `INTERNAL_VREF 0.675`** — MIG emits this itself.
+* Two Vivado non-project traps, both handled in `syn/build.tcl`: the part must
+  be set *before* `read_ip`, or the IP silently locks against a default Kintex
+  device; and `read_ip` alone is not enough — the IP needs `synth_ip`, or the
+  top fails with a misleading "module not found".
