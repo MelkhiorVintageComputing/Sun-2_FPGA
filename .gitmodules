@@ -1,0 +1,12 @@
+[submodule "Inputs/Suska_Configware"]
+	path = Inputs/Suska_Configware
+	url = git@github.com:MelkhiorVintageComputing/Suska_Configware.git
+[submodule "Inputs/z8530_scc"]
+	path = Inputs/z8530_scc
+	url = https://github.com/vz50938/z8530_scc
+[submodule "Inputs/Wish82586"]
+	path = Inputs/Wish82586
+	url = git@github.com:MelkhiorVintageComputing/Wish82586.git
+[submodule "Inputs/sunos-34-src"]
+	path = Inputs/sunos-34-src
+	url = https://github.com/calmsacibis995/sunos-34-src

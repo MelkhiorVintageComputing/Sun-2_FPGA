@@ -1,0 +1,19 @@
+*~
+Old
+
+# generated artefacts
+/build/
+
+# tool binaries
+/tools/rom
+/tools/patchrom
+
+# simulator droppings
+*.vcd
+*.log
+*.jou
+*.pb
+*.wdb
+xsim.dir/
+.Xil/
+work-obj*.cf
