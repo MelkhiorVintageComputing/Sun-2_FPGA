@@ -1,7 +1,8 @@
 `timescale 1ns / 1ps
 
 //
-// Testbench for the MultiBus Sun 2/120 replica.
+// Testbench for the Sun-2 replica -- whichever machine sun2_config.vh selects.
+// It is machine-agnostic: the design announces what it was built as at time 0.
 //
 // Drives the `top` module (Sun-2 glue + Suska MC68010) with the clocks and
 // reset the FPGA board would supply, hangs a behavioural Wishbone RAM off the
@@ -230,7 +231,7 @@ module tb_sun2 #(
       void'($value$plusargs("timeout_ms=%f", timeout_ms));
       void'($value$plusargs("clk4m_bit=%d", clk4m_bit));
 
-      $display("=== Sun-2 (MultiBus) simulation ===");
+      $display("=== Sun-2 simulation ===");
       $display("cpu_clk %0.4f MHz, clk40 %0.4f MHz, SCC clock %0.4f MHz (clk40 / %0d)",
                500.0 / CPUCLK_HALF, 500.0 / CLK40_HALF,
                (500.0 / CLK40_HALF) / real'(2 << clk4m_bit), 2 << clk4m_bit);

@@ -2,9 +2,9 @@
 #
 #   make xsim              boot the patched PROM against the Wishbone memory
 #   make xsim MEM=sim_only use the 512 KiB in-core SRAM instead
-#   make xsim ROM=pristine use the unmodified PROM (very slow)
+#   make xsim ROM=pristine use this machine's unmodified PROM (very slow)
 #   make xsim MEM_MIB=1    pretend only 1 MiB is installed (much faster boot)
-#   make xsim MACHINE=vme ROM=sun250   be a Sun 2/50 instead of a 2/120
+#   make xsim MACHINE=vme  be a Sun 2/50 (VME) instead of a 2/120 (MultiBus)
 #   make iverilog          the open-source flow (GHDL-converted CPU), best effort
 #   make check             assert the console reached the monitor prompt
 #
@@ -27,16 +27,18 @@ BUILD   = $(TOP)/build/sim
 # under test.  7 is the architectural maximum; real Sun-2s usually had 2 or 4.
 MEM_MIB ?= 7
 
-# Which machine to be: multibus (a 2/120, the default) or vme (a 2/50).  The
-# three settings that differ are collected here -- device space base, the size
-# of memory space, and what the ID PROM claims -- all of them MultiBus values
-# that were constants until the 2/50 PROM ran into them.
+# Which machine to be: multibus (a 2/120, the default) or vme (a 2/50).  This
+# is the only knob needed -- rtl/sun2_config.vh derives the device space base,
+# the size of memory space, the ID PROM's machine type and which boot PROM is
+# compiled in from it.
 MACHINE ?= multibus
 
 # --- configuration knobs -> `define's -------------------------------------
 DEFINES = MEM_PAGES=$(shell expr $(MEM_MIB) \* 512)
 ifeq ($(MACHINE),vme)
-DEFINES += DEV_PAGE_BASE=4064 MEM_SPACE_PAGES=4096 IDPROM_MACHINE_TYPE=2
+DEFINES += SUN2_VME
+else
+DEFINES += SUN2_MULTIBUS
 endif
 ifeq ($(MEM),sim_only)
 DEFINES += MEM_SIM_ONLY
@@ -46,12 +48,6 @@ DEFINES += ROM_PRISTINE
 endif
 ifeq ($(ROM),fast)
 DEFINES += ROM_FASTBOOT
-endif
-ifeq ($(ROM),sun250)
-DEFINES += ROM_SUN250
-endif
-ifeq ($(ROM),sun250-raw)
-DEFINES += ROM_SUN250_RAW
 endif
 
 # Simulated milliseconds before giving up, and the console string that means

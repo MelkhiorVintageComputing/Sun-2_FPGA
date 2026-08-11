@@ -45,8 +45,10 @@ The sources under `Inputs/`:
   9600 baud console.
 * `Wish82586` — Intel 82586 Ethernet, for the VME machines later.
 * `sun2-multi-rev-R.bin` — Rev R boot PROM of a MultiBus Sun 2/120.
-* `sun250_prom_combined.bin` — boot PROM of a VME Sun 2/50 (not used yet).
-* `doc/` — the Sun-2 Architecture Manual and the QMTech Wukong board documents.
+* `sun250_prom_combined.bin` — boot PROM of a VME Sun 2/50, used by
+  `MACHINE=vme` (see [Which machine](#which-machine)).
+* `doc/` — the Sun-2 Architecture Manual, the Sun 2/50 schematic, and the
+  QMTech Wukong board documents.
 
 ## Running the simulation
 
@@ -87,7 +89,8 @@ make -C sim xsim MEM_MIB=1              # a 1 MiB machine: much faster to boot
 make -C sim xsim ROM=fast               # skip most of the RAM init pass too
 make -C sim xsim TIMEOUT_MS=8000        # simulated milliseconds before giving up
 make -C sim xsim MEM=sim_only           # 512 KiB in-core SRAM instead of Wishbone
-make -C sim xsim ROM=pristine           # the unmodified PROM (very slow)
+make -C sim xsim ROM=pristine           # this machine's unmodified PROM (very slow)
+make -C sim xsim MACHINE=vme            # be a Sun 2/50 (VME) instead of a 2/120
 make -C sim xsim XSIMARGS="-testplusarg heartbeat_ms=100"
 SUN2_VCD=1 make -C sim xsim XSIMARGS="-testplusarg vcd_full"
 make -C sim check                       # assert the console reached the prompt
@@ -119,8 +122,8 @@ seconds at `MEM_MIB=1 ROM=fast`, and about 4.5 at the 7 MiB default.
 
 ### Boot PROM variants
 
-`tools/` turns `Inputs/sun2-multi-rev-R.bin` into the Verilog `case` body that
-`rtl/bootrom.v` includes, in three flavours:
+`tools/` turns the PROM images into the Verilog `case` body that `rtl/bootrom.v`
+includes. For the MultiBus `sun2-multi-rev-R.bin`, in three flavours:
 
 * **patched** (default) — three words changed, per `tools/sim_speedup.txt`: a
   diagnostic delay loop shortened from 50000 iterations to 2, and the
@@ -142,6 +145,12 @@ seconds at `MEM_MIB=1 ROM=fast`, and about 4.5 at the 7 MiB default.
   but 64 times less of RAM is written. Not the known-good image, so don't use
   it for full-system or memory-related validation.
 * **pristine** (`ROM=pristine`) — the PROM exactly as dumped.
+
+The VME `sun250_prom_combined.bin` gets the same treatment minus fastboot:
+patched by default per `tools/sim_speedup_sun250.txt`, or pristine with
+`ROM=pristine`. Its two patch sites are at different addresses, and the delay
+loop needed care — `movel #50000,%d0` appears twice with byte-identical
+context, and the first occurrence is on an error path that never runs.
 
 ### Simulators
 
@@ -166,13 +175,52 @@ comment at the top of `sim/run_iverilog.sh`.
 `rtl/sun2_config.vh` holds the compile-time options; each is `ifndef`-guarded
 so it can be forced from the command line.
 
+### Which machine
+
+The Architecture Manual describes two Sun-2s, and the design can be built as
+either. One define picks it, and everything machine-dependent follows:
+
+| | `SUN2_MULTIBUS` (default) | `SUN2_VME` |
+|---|---|---|
+| Model | 2/120, 2/170 | 2/50, 2/160 |
+| "Machine Type" | 1 | 2 |
+| System bus | MultiBus / IEEE-796 | VME |
+| Boot PROM | `Inputs/sun2-multi-rev-R.bin` | `Inputs/sun250_prom_combined.bin` |
+| `DEV_PAGE_BASE` | 0 (page 0x000) | 4064 (page 0xFE0) |
+| `MEM_SPACE_PAGES` | 3584 (7 MiB) | 4096 (8 MiB) |
+| `IDPROM_MACHINE_TYPE` | 1 | 2 |
+| State | boots to the monitor prompt | self-tests, then halts probing the I/O bus |
+
+`make -C sim xsim MACHINE=vme` is the whole of it. The three parameters are
+individually overridable if an experiment wants a combination that is not
+either real machine; `sun2_fpga` prints the resulting configuration at time 0
+so the combination in force is never in doubt.
+
+The VME machine gets as far as
+
+```
+Self Test completed successfully.
+
+Sun Workstation, Model Sun-2/50 or Sun-2/160, Sun-2 keyboard
+ROM Rev Q, 1MB memory installed
+Serial #3442, Ethernet address 8:0:20:1:6:E0
+
+Probing I/O bus: ie
+```
+
+and then double-faults, on hardware that genuinely is not there: the VME bus
+itself (page-map type 2) and the 2/50's on-board keyboard/mouse port at page
+0xFE3. Both are out of scope for now.
+
+### Everything else
+
 | Define | Effect |
 |---|---|
-| *(default)* | main memory external, behind `sun2_wishbone_bridge` — 7 MiB, DTACK from the Wishbone ack. This is what the FPGA build uses, with DDR3 behind it. |
+| *(default)* | main memory external, behind `sun2_wishbone_bridge` — DTACK from the Wishbone ack. This is what the FPGA build uses, with DDR3 behind it. |
 | `MEM_SIM_ONLY` | 512 KiB synchronous SRAM inside `sun2_fpga`, DTACK from fixed bus timing. |
-| `MEM_PAGES` | installed memory in 2 KiB pages; default 3584 (7 MiB, the architectural maximum). Only affects what the PROM finds installed — the bus still answers over the full 7 MiB so the PROM's sizing probe works. |
-| `ROM_FASTBOOT` | boot PROM with the RAM initialisation pass shortened 64-fold. |
-| `ROM_PRISTINE` | use the unmodified boot PROM. |
+| `MEM_PAGES` | installed memory in 2 KiB pages; default 3584 (7 MiB). Only affects what the PROM finds installed — the bus still answers over the whole of `MEM_SPACE_PAGES` so the PROM's sizing probe works. |
+| `ROM_FASTBOOT` | boot PROM with the RAM initialisation pass shortened 64-fold. MultiBus only. |
+| `ROM_PRISTINE` | use this machine's unmodified boot PROM. |
 
 `ttl_am9513` additionally takes a `TRACE` parameter (default 0) that turns on a
 per-access register trace. It is off because it prints on every timer access
@@ -191,9 +239,11 @@ SystemVerilog plus Xilinx's MIG, and no LiteX at all.
 make -C syn ip           # generate the MIG DDR3 controller from its .prj
 make -C syn bitstream    # 12.5 MHz CPU clock
 make -C syn bitstream CPU_HZ=40000000
+make -C syn bitstream MACHINE=vme   # a 2/50 instead of a 2/120
 make -C syn both
 ```
 
+Each combination gets its own output directory, `build/syn/<machine>-cpu<MHz>/`.
 Nothing generated is committed. `syn/mig/sun2_mig.prj` is the source of truth
 for the memory controller (see `syn/mig/README.md` for its provenance and the
 four fields we changed); everything MIG emits lands in `build/ip/`. The build

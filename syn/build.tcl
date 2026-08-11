@@ -1,6 +1,8 @@
 # Non-project Vivado build for the Sun-2 on a QMTech Wukong V1.
 #
-#   vivado -mode batch -source syn/build.tcl [-tclargs CPU_HZ]
+#   vivado -mode batch -source syn/build.tcl [-tclargs CPU_HZ MACHINE]
+#
+# MACHINE is multibus (default) or vme; see "Which machine" in the README.
 #
 # Nothing generated is committed: the MIG IP comes from syn/mig/sun2_mig.prj
 # via syn/generate_ip.tcl, and everything lands in build/.
@@ -11,12 +13,20 @@
 set here [file normalize [file dirname [info script]]]
 set top  [file normalize $here/..]
 
-set cpu_hz 12500000
-if {[llength $argv] > 0} { set cpu_hz [lindex $argv 0] }
+set cpu_hz  12500000
+set machine multibus
+if {[llength $argv] > 0} { set cpu_hz  [lindex $argv 0] }
+if {[llength $argv] > 1} { set machine [lindex $argv 1] }
+
+switch -- $machine {
+    multibus { set machine_define SUN2_MULTIBUS }
+    vme      { set machine_define SUN2_VME }
+    default  { puts "ERROR: MACHINE must be multibus or vme, not '$machine'"; exit 1 }
+}
 
 set part    xc7a100tfgg676-2
 set ipdir   $top/build/ip
-set outdir  $top/build/syn/cpu[expr {$cpu_hz / 1000000}]
+set outdir  $top/build/syn/$machine-cpu[expr {$cpu_hz / 1000000}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir
@@ -27,7 +37,7 @@ if {![file isdirectory $migrtl]} {
     exit 1
 }
 
-puts "== Sun-2 for Wukong V1, CPU clock $cpu_hz Hz =="
+puts "== Sun-2 for Wukong V1, $machine, CPU clock $cpu_hz Hz =="
 
 # Set the part before reading anything.  read_ip validates the IP against the
 # current part, and in non-project mode that defaults to a Kintex device until
@@ -98,6 +108,7 @@ read_xdc $here/wukong_v1.xdc
 # ---------------------------------------------------------------------------
 synth_design -top wukong_v1_top -part $part \
     -include_dirs [list $top/rtl $top/build/rom] \
+    -verilog_define $machine_define \
     -generic CPU_CLK_HZ=$cpu_hz \
     -directive Default
 

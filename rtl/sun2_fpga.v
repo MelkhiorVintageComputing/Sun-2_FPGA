@@ -62,6 +62,27 @@ module sun2_fpga(input         cpu_clk,
    wire CLK;
    assign CLK = C100;
 
+   // Say which machine this was built as.  The settings that differ between
+   // the two are easy to get into a combination that half works, and the
+   // symptom is a bus error thousands of cycles later, so state it up front.
+   initial begin
+      $display("Sun-2: %s", `SUN2_MACHINE_NAME);
+      $display("   device pages at %0d (0x%03x), memory space %0d KiB, installed %0d KiB, ID PROM type %0d",
+               `DEV_PAGE_BASE, `DEV_PAGE_BASE, `MEM_SPACE_PAGES * 2, `MEM_PAGES * 2,
+               `IDPROM_MACHINE_TYPE);
+`ifdef SUN2_VME
+ `ifdef SUN2_MULTIBUS
+      $fatal(1, "sun2_config.vh: define SUN2_MULTIBUS or SUN2_VME, not both");
+ `endif
+ `ifdef ROM_FASTBOOT
+      $fatal(1, "ROM_FASTBOOT is MultiBus only: there is no fastboot image for the 2/50 PROM");
+ `endif
+`endif
+      if (`MEM_PAGES > `MEM_SPACE_PAGES)
+        $fatal(1, "MEM_PAGES (%0d) exceeds MEM_SPACE_PAGES (%0d): memory is installed where nothing answers",
+               `MEM_PAGES, `MEM_SPACE_PAGES);
+   end
+
    reg 	POR_n;
    initial
      begin
