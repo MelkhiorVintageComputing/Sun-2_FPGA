@@ -18,7 +18,7 @@ module ctx_reg(input CLK,
      begin
 	if (WR) ctx <= {din[11:8],din[3:0]};
 	dout <= {4'h0, ctx[7:4], 4'h0, ctx[3:0]};
-     end;
+     end
    assign cx = USER_n ? dout[10:8] : dout[2:0];
    
 endmodule // ctx_reg
