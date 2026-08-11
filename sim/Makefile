@@ -40,6 +40,9 @@ endif
 ifeq ($(ROM),sun250)
 DEFINES += ROM_SUN250
 endif
+ifeq ($(ROM),sun250-raw)
+DEFINES += ROM_SUN250_RAW
+endif
 
 # Simulated milliseconds before giving up, and the console string that means
 # we got there: the Rev R monitor prompt.  A full boot needs a bit over four

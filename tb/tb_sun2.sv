@@ -176,9 +176,14 @@ module tb_sun2 #(
          n_repeat++;
       end else begin
          flush_repeats();
-         $display("[%t] BUS ERROR #%0d: A=%06x FC=%0d %s  (%s)",
+         // Report the physical side too: the virtual address says little on a
+         // machine with an MMU, and what actually decodes is the page map's
+         // type field and physical page.  type 0 = memory, 1 = on-board I/O,
+         // 2 = the system bus.
+         $display("[%t] BUS ERROR #%0d: A=%06x FC=%0d %s -> type %0d page %03x  (%s)",
                   $realtime, n_berr, a, dut.P_FC,
                   dut.P_RW_n ? "read" : "write",
+                  dut.sun2.TYPE, dut.sun2.ma_pmap2devices,
                   t ? "timeout, nothing answered"
                     : "protection violation from the page map");
          last_berr_a = a;

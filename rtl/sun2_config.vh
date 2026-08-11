@@ -43,6 +43,23 @@
 `endif
 
 //
+// How much of memory space answers on the bus at all, in 2 KiB pages, whether
+// or not memory is installed there.  This is deliberately larger than
+// MEM_PAGES: the boot PROM sizes memory by writing and reading back, and needs
+// an out-of-range access to return the wrong value rather than take a bus
+// error, so the addressable range has to cover everything it will probe.
+//
+// 3584 (0xE00, 7 MiB) is the MultiBus maximum.  A VME Sun-2's memory space runs
+// to 8 MiB -- see the Type 0 assignments for Machine Type 2 in the
+// Architecture Manual -- and the 2/50 PROM probes at exactly 7 MiB, so it needs
+// 4096 here.  Plain decimal, not a sized literal: 12'h1000 would truncate to
+// zero in a 12-bit comparison.
+//
+`ifndef MEM_SPACE_PAGES
+ `define MEM_SPACE_PAGES 3584
+`endif
+
+//
 // Device space base page
 // ----------------------
 // The eight on-board device pages sit at page 0x000 on a MultiBus Sun-2 and at
@@ -71,9 +88,11 @@
 //                  not use it for memory-related work.
 //   ROM_PRISTINE   the PROM exactly as dumped from real hardware.
 //
-// ROM_SUN250 selects the VME Sun 2/50 PROM instead, unpatched.  The machine
-// this design models is a MultiBus 2/120, so that PROM is being run on
-// hardware it was not written for; see the notes in README.md.
+// ROM_SUN250 selects the VME Sun 2/50 PROM, with the same two speedups applied
+// (tools/sim_speedup_sun250.txt); ROM_SUN250_RAW takes it exactly as dumped.
+// The machine this design models is a MultiBus 2/120, so that PROM is being run
+// on hardware it was not written for -- it needs DEV_PAGE_BASE=12'hFE0 and
+// MEM_SPACE_PAGES=4096 to get anywhere.  See README.md.
 //
 `ifndef BOOTROM_FILE
  `ifdef ROM_PRISTINE
@@ -81,6 +100,8 @@
  `elsif ROM_FASTBOOT
   `define BOOTROM_FILE "bootrom_fastboot_16bits.vh"
  `elsif ROM_SUN250
+  `define BOOTROM_FILE "bootrom_sun250_patched_16bits.vh"
+ `elsif ROM_SUN250_RAW
   `define BOOTROM_FILE "bootrom_sun250_16bits.vh"
  `else
   `define BOOTROM_FILE "bootrom_patched_16bits.vh"

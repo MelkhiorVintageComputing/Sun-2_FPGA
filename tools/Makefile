@@ -29,7 +29,8 @@ CC     ?= cc
 CFLAGS ?= -O2 -Wall
 
 all: $(ROMDIR)/bootrom_16bits.vh $(ROMDIR)/bootrom_patched_16bits.vh \
-     $(ROMDIR)/bootrom_fastboot_16bits.vh $(ROMDIR)/bootrom_sun250_16bits.vh
+     $(ROMDIR)/bootrom_fastboot_16bits.vh $(ROMDIR)/bootrom_sun250_16bits.vh \
+     $(ROMDIR)/bootrom_sun250_patched_16bits.vh
 
 $(ROMDIR):
 	mkdir -p $(ROMDIR)
@@ -59,6 +60,15 @@ $(ROMDIR)/bootrom_fastboot_16bits.vh: rom $(ROMDIR)/sun2-multi-rev-R-fastboot.bi
 
 $(ROMDIR)/bootrom_sun250_16bits.vh: rom $(PROM250) | $(ROMDIR)
 	./rom W <$(PROM250) >$@
+
+# ... and the same two speedups sim_speedup.txt applies to the MultiBus PROM,
+# at the addresses the VME one uses.  Without them it is not simulable to the
+# monitor prompt in reasonable time.
+$(ROMDIR)/sun250-patched.bin: rompatch sim_speedup_sun250.txt $(PROM250) | $(ROMDIR)
+	./rompatch $(PROM250) $@ sim_speedup_sun250.txt
+
+$(ROMDIR)/bootrom_sun250_patched_16bits.vh: rom $(ROMDIR)/sun250-patched.bin
+	./rom W <$(ROMDIR)/sun250-patched.bin >$@
 
 # Sanity check: our patches plus legacy_baud.txt must reproduce the PROM
 # compiled into the last known-working build of the old design, bit for bit.

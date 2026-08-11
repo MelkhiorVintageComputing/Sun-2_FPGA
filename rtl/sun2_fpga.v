@@ -330,7 +330,10 @@ module sun2_fpga(input         cpu_clk,
    // "physically" installed memory, in 2 KiB pages -- see MEM_PAGES in sun2_config.vh
    assign MATCH_MEM      = (FC_GENERAL) & (TYPE == 3'h0) & (ma_pmap2devices[11:0] < `MEM_PAGES) & C_S6;
 `endif
-   assign MATCH_MEMX     = (FC_GENERAL) & (TYPE == 3'h0) & (ma_pmap2devices[11:0] < 12'hE00) & C_S6; // addressable, for DTACK (so auto-sizing works, as it uses "wrong values" rather than bus error in the Rev R ROM)
+   // Addressable memory space, for DTACK: auto-sizing works by reading back
+   // wrong values rather than by taking a bus error, so everything the PROM
+   // probes has to answer.  See MEM_SPACE_PAGES in sun2_config.vh.
+   assign MATCH_MEMX     = (FC_GENERAL) & (TYPE == 3'h0) & (ma_pmap2devices < `MEM_SPACE_PAGES) & C_S6;
 
    wire [15:0] 			 timer_out;
    wire 			 FOUT, timer_int[5:1]; /* FOUT for completeness, not et implemented in the TTL code */

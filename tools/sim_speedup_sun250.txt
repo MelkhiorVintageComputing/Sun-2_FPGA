@@ -1,0 +1,41 @@
+# Patches applied to sun250_prom_combined.bin to make simulation tractable.
+#
+# The same two changes sim_speedup.txt makes to the MultiBus PROM, at the
+# addresses this one uses.  Unlike that file these are not reproducing any
+# previously known image -- there is no old working 2/50 build to match -- they
+# are derived here, and rompatch's expected-value check is what keeps them
+# honest.
+#
+# Line format: <address> <expected> <new>   (hex, 16-bit words, PROM at 0xef0000)
+
+# The LED walk's delay, as at ef0b7c on the MultiBus PROM:
+#
+#   ef0b66  movew #32767,%d7
+#   ef0b68  movesb %d7,0xb        <- write the front panel LEDs
+#   ef0b6c  movel #50000,%d0
+#   ef0b72  subql #1,%d0
+#   ef0b74  bnew ef0b72
+#   ef0b78  rolw #1,%d7           <- walk the lit LED along
+#
+# Shorten the count to 2: it is pure wall-clock delay and 50000 iterations of
+# it dominate simulated time.
+#
+# Note both PROMs contain this instruction TWICE with identical surrounding
+# bytes -- the other copy (ef0b52 MultiBus, ef0b42 here) is the error path,
+# `addql #1,%d3` then delay then `jmp %a0@`, which only runs when a test fails.
+# Patching that one changes nothing on a good boot; it is the second copy that
+# matters.  rompatch's expected-value check cannot tell them apart, since the
+# bytes are the same.
+ef0b70 c350 0002
+
+# ef0e62  moveq #-114,%d0      <- entry of the destructive main memory test.
+#                                 The seven words here are byte-identical to the
+#                                 MultiBus PROM's at ef0e80.
+# Replace with `jmp %pc@(0xef01b4)`, the instruction after the call site at
+# ef01b0 (`jmp %pc@(0xef0b50)`) -- the same relationship the MultiBus patch
+# uses between ef0e80 and ef01b6.  The test walks all of RAM several times and
+# is hopeless to simulate; the memory model is trustworthy by construction.
+#
+#   displacement: 0xef01b4 - (0xef0e62 + 2) = -3248 = 0xf350
+ef0e62 708e 4efa
+ef0e64 0e38 f350
