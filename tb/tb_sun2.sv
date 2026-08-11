@@ -194,6 +194,20 @@ module tb_sun2 #(
 
    // A 68010 that takes a bus error while already handling one double-faults
    // and halts.  From outside that looks identical to a tight loop, so say it.
+   // Timer/interrupt tracing.  Off by default -- +trace_irq=N prints the first
+   // N timer-output and IPL changes, which is how you tell whether the NMI
+   // clock the boot monitor measures wall time with is running at all.
+   int trace_irq = 0, n_irqtrace = 0;
+   initial void'($value$plusargs("trace_irq=%d", trace_irq));
+
+   always @(dut.sun2.timer_int[1] or dut.sun2.EN_INT)
+     if (n_irqtrace < trace_irq) begin
+        n_irqtrace++;
+        $display("[%t] timer OUT1=%b EN_INT=%b IPL_n=%b%b%b", $realtime,
+                 dut.sun2.timer_int[1], dut.sun2.EN_INT,
+                 dut.IPL2_n, dut.IPL1_n, dut.IPL0_n);
+     end
+
    always @(negedge dut.HALT_OUTn)
      $display("[%t] CPU HALTED (double bus fault) with A=%06x", $realtime, {dut.P_A, 1'b0});
 

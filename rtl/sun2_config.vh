@@ -42,9 +42,12 @@
 //---------------------------------------------------------------------
 // Device space base page
 //---------------------------------------------------------------------
-// The eight on-board device pages hold the same devices in the same order on
-// both buses, but at a different base: page 0x000 on MultiBus, 0xFE0 (byte
-// address 0x7F0000) on VME.  This is the first thing the two boot PROMs
+// The eight on-board device pages sit at a different base on the two machines:
+// page 0x000 on MultiBus, 0xFE0 (byte address 0x7F0000) on VME.  Most hold the
+// same device in the same slot -- PROM, encryption processor, serial SCC and
+// timer are pages 0, 2, 4 and 5 either way -- but pages 1, 3, 6 and 7 do not
+// agree, and sun2_fpga instantiates the two that matter (Ethernet at 1,
+// keyboard/mouse at 3) only for VME.  This is the first thing the two boot PROMs
 // disagree about -- each writes a single page-map entry pointing at the timer,
 // page 0x005 or 0xFE5 -- so a PROM run against the wrong base takes a bus
 // timeout within 50 us and double-faults.

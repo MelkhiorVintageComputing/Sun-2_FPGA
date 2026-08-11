@@ -1,11 +1,12 @@
 # Sun-2 FPGA
 
-A replica of a Sun-2 workstation in an FPGA. The current target is the MultiBus
-Sun 2/120: MC68010, the Sun-2 MMU, the AMD 9513 timer and a Zilog 8530 SCC for
-the serial console, booting the real Rev R boot PROM. A MultiBus Sun-2 has no
-on-board Ethernet, so there is none here either.
+A replica of a Sun-2 workstation in an FPGA: MC68010, the Sun-2 MMU, the AMD
+9513 timer and Zilog 8530 SCCs for the serial console and keyboard, booting the
+real boot PROMs. Both machine types are supported — the MultiBus Sun 2/120
+(Rev R PROM) and the VME Sun 2/50 (Rev Q) — selected by one define; see
+[Which machine](#which-machine).
 
-In simulation it passes the PROM's self test and reaches the monitor prompt.
+In simulation both pass the PROM's self test and reach the monitor prompt.
 It also builds into a timing-clean bitstream for a QMTech Wukong V1
 (XC7A100T-2FGG676) with DDR3 main memory — untested on real hardware so far.
 
@@ -43,12 +44,22 @@ The sources under `Inputs/`:
   so the CPU clock is free — the Suska SCC constrains it far too tightly. Feed
   its serial clock 4.9152 MHz and the PROM's own register table gives a correct
   9600 baud console.
-* `Wish82586` — Intel 82586 Ethernet, for the VME machines later.
+* `Wish82586` — Intel 82586 Ethernet, for the VME machines later. Not built
+  yet; its `src/wb_csr_sun2.sv` is the same control register `rtl/sun2_ether_ctl.v`
+  implements natively, and the two should be kept reconcilable.
+* `sunos-34-src` — [calmsacibis995/sunos-34-src](https://github.com/calmsacibis995/sunos-34-src).
+  Contains `sun/prom_monitor/`, which is **the source of the boot PROMs
+  themselves**: `msun/` builds the MultiBus monitor, `rsun/` the VME one, from
+  the same files behind `#ifdef VME`. It is the single most useful reference
+  here — `sys/mon/s2map.h` names every I/O page numerically, `mon/kernel/sunmon.c`
+  has both machines' page-map setup side by side, and `mon/h/buserr.h` documents
+  register semantics no manual spells out. Reach for it before guessing at
+  what a PROM is doing.
 * `sun2-multi-rev-R.bin` — Rev R boot PROM of a MultiBus Sun 2/120.
 * `sun250_prom_combined.bin` — boot PROM of a VME Sun 2/50, used by
   `MACHINE=vme` (see [Which machine](#which-machine)).
-* `doc/` — the Sun-2 Architecture Manual, the Sun 2/50 schematic, and the
-  QMTech Wukong board documents.
+* `doc/` — the Sun-2 Architecture Manual, the Sun 2/50 schematic and
+  engineering manual, and the QMTech Wukong board documents.
 
 ## Running the simulation
 
@@ -148,9 +159,12 @@ includes. For the MultiBus `sun2-multi-rev-R.bin`, in three flavours:
 
 The VME `sun250_prom_combined.bin` gets the same treatment minus fastboot:
 patched by default per `tools/sim_speedup_sun250.txt`, or pristine with
-`ROM=pristine`. Its two patch sites are at different addresses, and the delay
-loop needed care — `movel #50000,%d0` appears twice with byte-identical
-context, and the first occurrence is on an error path that never runs.
+`ROM=pristine`. The two shared patch sites are at different addresses, and the
+delay loop needed care — `movel #50000,%d0` appears twice with byte-identical
+context, and the first occurrence is on an error path that never runs. It also
+carries a third patch of its own, shortening the 100000-iteration poll in
+`iereset()` that auto-boot always runs into; see the file for why that is a
+speedup rather than a fix.
 
 ### Simulators
 
@@ -189,14 +203,14 @@ either. One define picks it, and everything machine-dependent follows:
 | `DEV_PAGE_BASE` | 0 (page 0x000) | 4064 (page 0xFE0) |
 | `MEM_SPACE_PAGES` | 3584 (7 MiB) | 4096 (8 MiB) |
 | `IDPROM_MACHINE_TYPE` | 1 | 2 |
-| State | boots to the monitor prompt | self-tests, then halts probing the I/O bus |
+| State | boots to the monitor prompt | boots to the monitor prompt |
 
 `make -C sim xsim MACHINE=vme` is the whole of it. The three parameters are
 individually overridable if an experiment wants a combination that is not
 either real machine; `sun2_fpga` prints the resulting configuration at time 0
 so the combination in force is never in doubt.
 
-The VME machine gets as far as
+The VME machine reaches the prompt too:
 
 ```
 Self Test completed successfully.
@@ -206,11 +220,52 @@ ROM Rev Q, 1MB memory installed
 Serial #3442, Ethernet address 8:0:20:1:6:E0
 
 Probing I/O bus: ie
+Using RS232 A input.
+Auto-boot in progress...
+Boot: ie(0,0,0)vmunix
+ie: cannot initialize
+>
 ```
 
-and then double-faults, on hardware that genuinely is not there: the VME bus
-itself (page-map type 2) and the 2/50's on-board keyboard/mouse port at page
-0xFE3. Both are out of scope for now.
+`ie: cannot initialize` is correct behaviour, not a failure. `ieprobe()` on a
+VME machine reports Ethernet present from the ID PROM's machine-type byte
+alone, without issuing a bus cycle, so `ie` always joins the boot device list
+and auto-boot always tries it. There is no 82586 behind the control register,
+so the driver polls, gives up, and falls through to the prompt.
+
+Two device pages differ from MultiBus and are instantiated only for VME
+(`VIOPG_*` in the monitor's `sys/mon/s2map.h`):
+
+| Page | VME | MultiBus |
+|---|---|---|
+| 0xFE1 | Ethernet control register (`rtl/sun2_ether_ctl.v`) | 80287 socket, not implemented |
+| 0xFE3 | keyboard/mouse Z8530, a second instance of the serial SCC | parallel port, not implemented |
+
+Nothing is attached to the keyboard SCC, so the monitor's keyboard hunt times
+out and the console stays on serial A — which is what we want. The frame
+buffer and video control (type 1 pages 0x000 and 0x040) are deliberately
+outside the decoded device window, so `s2fbthere()` fails for the same reason.
+
+Getting there also needed three things that had never worked in this design
+and are shared with MultiBus, all of them latent because no unprotected bus
+error and no interrupt had ever occurred on the way to the MultiBus prompt:
+
+* **the bus error register was not writable.** It is read-to-inspect,
+  write-to-clear; the default handler in `trap.s` acknowledges by writing it,
+  and that write was not acked, so the handler bus-errored inside itself and
+  nested until the stack ran off the bottom of memory. Any unprotected bus
+  error anywhere was an unrecoverable double fault.
+* **interrupts could not be acknowledged.** A 68010 has one VPA pin serving
+  both 6800-style cycles and autovectoring; the Suska core splits it into
+  `VPAn` and `AVECn`, and the Sun-2's VPA was wired to the former. The core
+  took its vector off the data bus instead, picking up `0xAD` from the read
+  mux's `16'hDEAD` fall-through.
+* **the timer never counted.** `ttl_am9513` drove its OUT pins from a register
+  nothing assigned, ignored the count-source field, and wrote counter
+  registers a byte at a time even in the 16-bit mode the monitor selects — so
+  the NMI timer's mode word `0x0C22` was stored as `0x2200`, selecting an
+  unconnected input pin. Counter 1 is the NMI clock the monitor measures wall
+  time with, and the 2/50 waits on it with no way around.
 
 ### Everything else
 

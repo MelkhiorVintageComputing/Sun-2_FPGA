@@ -126,10 +126,26 @@ module top(input         cpu_clk,
 			   .RESET_OUT(RESET_OUT),
 			   .HALT_INn(HALT_INn),
 			   .HALT_OUTn(HALT_OUTn),
-			   .AVECn(1'b1),
+			   // A real 68010 has one VPA pin doing two jobs: 6800-style
+			   // peripheral cycles, and autovectoring an interrupt
+			   // acknowledge.  Suska splits them, so the Sun-2's VPA --
+			   // asserted for every CPU-space cycle, i.e. every IACK --
+			   // belongs on AVECn, not on VPAn.
+			   //
+			   // Wired the other way round, as it was, AVECn stayed
+			   // deasserted and the core took the interrupt vector off
+			   // the data bus instead: the read mux's 16'hDEAD
+			   // fall-through gave vector 0xAD, and the monitor reported
+			   // "Exception 2B4" (173 * 4).  It went unnoticed because
+			   // no interrupt had ever reached the CPU -- the timer's
+			   // OUT pins were tied to a register nothing drove.
+			   //
+			   // VPAn stays deasserted: there are no 6800 peripherals on
+			   // a Sun-2, and asserting it starts an E/VMA cycle.
+			   .AVECn(P_VPA_n),
 			   .IPLn({IPL2_n, IPL1_n, IPL0_n}),
 			   .DTACKn(P_DTACK_n),
-			   .VPAn(P_VPA_n),
+			   .VPAn(1'b1),
 			   .BRn(P_BR_n),
 			   .BGACKn(P_BGACK_n),
 			   .K6800n(1'b1),

@@ -39,3 +39,27 @@ ef0b70 c350 0002
 #   displacement: 0xef01b4 - (0xef0e62 + 2) = -3248 = 0xf350
 ef0e62 708e 4efa
 ef0e64 0e38 f350
+
+# ef4012  the poll inside iereset(), sys/sunif/if_ie.c:
+#
+#   for (i = 0; i < 100000; i++)
+#           if (iscp->ie_busy != 1) { gotit = 1; break; }
+#
+#   ef400c  ...
+#   ef4010  cmpil #100000,%fp@(-20)   <- immediate long at ef4012/ef4014
+#   ef4018  bges  ...
+#
+# On a VME machine ieprobe() reports Ethernet present from the ID PROM's
+# machine-type byte alone, without touching the hardware, so `ie' always joins
+# the boot device list and auto-boot always calls iereset().  With no 82586
+# behind the control register the ISCP busy flag never clears, and the driver
+# grinds through 100000 polls ten times over before printing "ie: cannot
+# initialize" and moving on.  A real 2/50 with no network does exactly the
+# same, and takes a second or so over it; simulated, it does not finish inside
+# any sane timeout.
+#
+# Cut the count to 2.  This is a simulation speedup, not a fix: the outcome is
+# identical, only reached sooner.  Wiring up a real 82586 would make the loop
+# exit on its own.
+ef4012 0001 0000
+ef4014 86a0 0002

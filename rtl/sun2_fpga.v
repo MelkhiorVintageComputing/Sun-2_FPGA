@@ -235,14 +235,33 @@ module sun2_fpga(input         cpu_clk,
    assign PROTERR   = PROTERR_raw   &  C_S8 & FC_GENERAL; // can't have a protection error unless the MMU is doing its job
    //assign PROTERR_n = PROTERR_raw_n | ~C_S8 & FC_GENERAL;
    
-   ttl_74F151 gen_proterr(.D0(ps_pmap2devices[8]),
-			  .D1(ps_pmap2devices[7]),
-			  .D2(ps_pmap2devices[6]),
-			  .D3(1'b0),
-			  .D4(ps_pmap2devices[11]),
-			  .D5(ps_pmap2devices[10]),
-			  .D6(ps_pmap2devices[9]),
-			  .D7(1'b0),
+   // The permission check.  Select is {P_FC[2], P_FC[1], ~P_RW_n}, so the eight
+   // inputs are the eight access classes; D3 and D7 are writes to program
+   // space, never permitted whatever the entry says.
+   //
+   // Note D4: supervisor data read is checked against VALID, not PROT5, and
+   // the whole chain sits one bit high -- PROT0 is checked by nothing at all.
+   // Per the monitor's own page map layout (`struct pgmapent' in
+   // sys/mon/s2map.h, with PMREALBITS 0xFFF00FFF making ps_pmap2devices[11:0]
+   // exactly entry bits 31..20) the six PMP_* permissions are PROT5..PROT0 and
+   // supervisor read should be PROT5.
+   //
+   // Do not "fix" this without measuring.  Shifting the six inputs down one to
+   // match the header was tried: the MultiBus PROM still reached the prompt,
+   // but took ~28000 bus errors instead of ~23629, including a fresh one on
+   // every character of console output.  So the PROM does not write only
+   // PMP_ALL and zero, and this apparently-off-by-one wiring is what it
+   // expects.  Either the header's field order is not what it looks like, or
+   // the page map stores the entry differently than the read-back suggests --
+   // unresolved, and left alone because the machine boots.
+   ttl_74F151 gen_proterr(.D0(PROT3),  // user  data    read
+			  .D1(PROT2),  // user  data    write
+			  .D2(PROT1),  // user  program read
+			  .D3(1'b0),   // user  program write -- never
+			  .D4(VALID),  // super data    read   <-- see above
+			  .D5(PROT5),  // super data    write
+			  .D6(PROT4),  // super program read
+			  .D7(1'b0),   // super program write -- never
 			  .A(~P_RW_n),
 			  .B(P_FC[1]),
 			  .C(P_FC[2]),
@@ -268,18 +287,59 @@ module sun2_fpga(input         cpu_clk,
 		    );
    assign diag_leds = ~leds;
    
-   // Bus Error Register, read-only
+   // Bus Error Register: read to inspect, *write to clear*.  From the boot
+   // monitor's own mon/h/buserr.h:
+   //
+   //   "If multiple bus errors occur, only the first one is kept.  Software
+   //    indicates that it has read out that bus error by writing to the bus
+   //    error reg; the data doesn't matter and isn't saved."
+   //
+   // Both halves of that matter.  The default bus error handler (trap.s
+   // _bus_error) reads this register and then writes it back; if the write
+   // does not complete, the handler faults inside itself and every nesting
+   // pushes another 58-byte 68010 long frame until the stack runs off the
+   // bottom of memory and the CPU double-faults.  That is not a VME quirk --
+   // it made *any* unprotected bus error unrecoverable.
+   //
+   // Bit assignment, from the BE_* constants in the same header:
+   //
+   //   7 VALID     the page map entry's valid bit was on
+   //   6 VMEBUSERR bus error signalled on the VME bus
+   //   5,4         reserved
+   //   3 PROTERR   protection violation
+   //   2 TIMEOUT   nothing answered
+   //   1 PARERR_U  parity error, upper byte
+   //   0 PARERR_L  parity error, lower byte
+   //
+   // VALID is what separates the two meanings of PROTERR: set means the
+   // protection field refused the access, clear means the entry was not valid
+   // at all.  VMEBUSERR and the two parity bits have nothing behind them --
+   // no system bus of either kind, no parity memory -- so they are honestly
+   // zero rather than merely unimplemented.
    wire [7:0] 			 berr_in;
    wire [7:0] 			 berr_out;
-   //assign berr_in = {C_S4, 1'b0, 1'b0, AEN, PROTERR, TIMEOUT, PARRERRU, PARRERRL};
-   assign berr_in = {1'b0, 1'b0, 1'b0, 1'b0, PROTERR, TIMEOUT, 1'b0, 1'b0}; // FIXME: partial
+   assign berr_in = {VALID, 1'b0, 1'b0, 1'b0, PROTERR, TIMEOUT, 1'b0, 1'b0};
    wire 			 ERR;
-   assign ERR = (PROTERR | TIMEOUT) & C_S4; // FIXME: partial
+   assign ERR = (PROTERR | TIMEOUT) & C_S4;
+
+   // The acknowledge: any write to the register, data discarded.
+   wire 			 berr_ack;
+   assign berr_ack = WR & MATCH_BERR & C_S4;
+
+   // Hold the *first* error until acknowledged.  Latching every error instead
+   // would report the last one, so a handler that took a nested fault on its
+   // way to reading this would find the wrong cause.
+   reg 				 berr_latched;
+   always @(posedge CLK)
+     if (sys_reset)        berr_latched <= 1'b0;
+     else if (berr_ack)    berr_latched <= 1'b0;
+     else if (ERR)         berr_latched <= 1'b1;
+
    gen8bit_reg berr(.CLK(CLK),
 		    .din(berr_in),
-		    .WR(ERR),
+		    .WR(ERR & ~berr_latched),
 		    .dout(berr_out),
-		    .CLR_n(1'b1)
+		    .CLR_n(~(berr_ack | sys_reset))
 		    );
    assign P_BERR_n = ~ERR;
 
@@ -358,7 +418,14 @@ module sun2_fpga(input         cpu_clk,
 
    wire [15:0] 			 timer_out;
    wire 			 FOUT, timer_int[5:1]; /* FOUT for completeness, not et implemented in the TTL code */
+   // X1/X2 is the 4.9152 MHz crystal oscillator (schematic sheet A05: the
+   // 9513 shares C.204 with both SCCs), not the CPU clock -- it is what sets
+   // every timer period, including the NMI tick the monitor measures wall
+   // time with.  CLK is the bus side, which has no equivalent on the real
+   // chip and has to be fast enough to sample X2; see the scaler comment in
+   // ttl_am9513.v.
    ttl_am9513 timer (
+		     .CLK(C100),
 		     .reset_n(~sys_reset),
 		   .DIN(P_DIN),
 		   .DOUT(timer_out),
@@ -366,8 +433,8 @@ module sun2_fpga(input         cpu_clk,
 		   .CS_n(1'b0), // always on
 		   .RD_n(~MATCH_TIMER | ~RD),
 		   .WR_n(~MATCH_TIMER | ~WR),
-		   .X1(),
-		   .X2(C100), // FIXME!
+		   .X1(1'b0),
+		   .X2(clk4m9152),
 		   .FOUT(FOUT),
 		   .SRC1(1'b0),
 		   .SRC2(1'b0),
@@ -500,9 +567,125 @@ module sun2_fpga(input         cpu_clk,
 			  .rtsb_n(),        // Request to send B (active low)
 			  .dtrb_n()         // Data terminal ready B (active low)
 			  );
-   
-   
-   
+
+   /* keyboard and mouse port -- VME machines only */
+   //
+   // Device page 3.  On a 2/50 or 2/160 this is a second Z8530, identical to
+   // the serial one above: the Architecture Manual's sections 6.6 and 6.7 give
+   // byte-for-byte the same register table (channel B control/data at 0 and 2,
+   // channel A at 4 and 6, level 6, 4.9152 MHz clock), and schematic sheet A06
+   // wires U600 and U601 alike.  They differ only in what hangs off the pins:
+   // channel A is the keyboard, channel B the mouse.
+   //
+   // A MultiBus machine has a parallel port here instead, and puts its
+   // keyboard/mouse SCC on the video board at page type 0, page 0xF00.  So
+   // this is the first device that genuinely differs between the two machines,
+   // and MATCH_KBM is tied off to nothing on MultiBus rather than decoded.
+   //
+   // Nothing is attached: the monitor resets the SCC, programs 1200 baud,
+   // polls for a keyboard, gets no answer and falls back to the serial console
+   // -- which is what we want while the console *is* the serial port.  The
+   // point of having it at all is that the write lands, instead of taking a
+   // bus error the monitor has no handler for.
+   wire [7:0] 			 kbm_out;
+   wire 			 MATCH_KBM;
+`ifdef SUN2_VME
+   assign MATCH_KBM = MATCH_PARALLEL;
+
+   wire 			 kbm_int_n; // FIXME: level 6, not wired to the IPL encoder yet
+
+   z8530_scc  #(.SOFT_RESET_EN(1),
+		.RR8_CTRL_POP(1),
+		.BRG_SRC_A(1),
+		.BRG_SRC_B(1),
+		.UNIPLUS_BAUD_PATCH_B(0),
+		.AUTO_ENABLES_EN(0),
+		.RTXC_XTAL_FULLRATE_A(0),
+		.RTXC_XTAL_FULLRATE_B(0),
+		.RDWR_RESET_EN(1)
+		) keybmouse (
+			  .clk(C100),
+			  .pclk(clk4m9152),
+			  .sclk(clk4m9152),
+			  .reset_n(~sys_reset),
+
+			  .cs_n(1'b0),
+			  .rd_n(~MATCH_KBM | ~RD & ~sys_reset),
+			  .wr_n(~MATCH_KBM | ~WR & ~sys_reset),
+			  .a_b(P_A[2]),           // 1=A (keyboard), 0=B (mouse)
+			  .d_c(P_A[1]),           // 1=Data, 0=Control
+			  .data_in(P_DIN[15:8]),
+			  .data_out(kbm_out),
+			  .data_oe(),
+
+			  .int_n(kbm_int_n),
+			  .intack_n(1'b1),
+
+			  // Channel A -- keyboard.  Nothing plugged in, so the
+			  // receive line sits at mark and the transmit line goes
+			  // nowhere.  Section 6.7: "Control lines are not used",
+			  // and the board fits no drivers for them, so the modem
+			  // inputs are held deasserted rather than left floating.
+			  .rxca(1'b0),
+			  .txca(1'b0),
+			  .rxda(1'b1),
+			  .txda(),
+			  .ctsa_n(1'b1),
+			  .dcda_n(1'b1),
+			  .synca_n(1'b1),
+			  .rtsa_n(),
+			  .dtra_n(),
+
+			  // Channel B -- mouse.  Same treatment.
+			  .rxcb(1'b0),
+			  .txcb(1'b0),
+			  .rxdb(1'b1),
+			  .txdb(),
+			  .ctsb_n(1'b1),
+			  .dcdb_n(1'b1),
+			  .syncb_n(1'b1),
+			  .rtsb_n(),
+			  .dtrb_n()
+			  );
+`else
+   // MultiBus: page 3 is the parallel port, which we do not implement.  Held
+   // at zero so the read mux and DTACK terms below fold away entirely.
+   assign MATCH_KBM = 1'b0;
+   assign kbm_out   = 8'h00;
+`endif
+
+   /* Ethernet control register -- VME machines only */
+   //
+   // Device page 1.  See rtl/sun2_ether_ctl.v for the bit assignment and for
+   // why this has to answer even though there is no 82586 behind it: the boot
+   // PROM decides Ethernet is present from the ID PROM alone, so auto-boot
+   // reaches iereset() regardless.  On MultiBus page 1 is an 80287 socket,
+   // which we do not implement either.
+   wire [7:0] 			 ether_out;
+   wire 			 MATCH_ETHER;
+`ifdef SUN2_VME
+   assign MATCH_ETHER = MATCH_RSVD;
+
+   sun2_ether_ctl etherctl(.CLK(CLK),
+			   .RESET(sys_reset),
+			   .din(P_DIN[15:8]),
+			   .WR(WR & MATCH_ETHER & C_S8),
+			   .dout(ether_out),
+			   // Nothing on the other side yet.
+			   .core_reset_n(),
+			   .loopback_n(),
+			   .ca(),
+			   .int_en(),
+			   .int_in(1'b0),
+			   .bus_err_in(1'b0)
+			   );
+`else
+   assign MATCH_ETHER = 1'b0;
+   assign ether_out   = 8'h00;
+`endif
+
+
+
    // Answering the CPU
    // bus muxer. CPU has priority via DATA_EN, otherwise whomever is matched own the bus
    assign P_DOUT = DATA_EN         ? P_DIN : // loopback
@@ -522,6 +705,8 @@ module sun2_fpga(input         cpu_clk,
 		   MATCH_MEM       ? wishbone_out :
 `endif
 		   MATCH_SERIAL    ? {serial_out, 8'h0} :
+		   MATCH_KBM       ? {kbm_out, 8'h0} :
+		   MATCH_ETHER     ? {ether_out, 8'h0} :
 		   16'hDEAD;
 
    // DTACK generator. has knowledge of timings for all devices
@@ -531,7 +716,7 @@ module sun2_fpga(input         cpu_clk,
 			( P_RW_n & C_S4 & (MATCH_CTX | MATCH_IDPROM | MATCH_SYSEN | MATCH_BERR | MATCH_PROM_BOOT)) | // entering S4, quick devices
 			( P_RW_n & C_S4 & (MATCH_SMAP)) |  // entering S4, quick devices (CTX is 1 clock but went valid after being written, not affected by P_A)
 			( P_RW_n & C_S6 & (MATCH_PMAP_PS | MATCH_PMAP_MA)) |  // entering S6, physical map needed an extra cycle
-			( P_RW_n & C_S8 & (MATCH_TIMER | MATCH_PROM | MATCH_SERIAL)) | // entering S8, devices going through the MMU
+			( P_RW_n & C_S8 & (MATCH_TIMER | MATCH_PROM | MATCH_SERIAL | MATCH_KBM | MATCH_ETHER)) | // entering S8, devices going through the MMU
 `ifdef MEM_SIM_ONLY
 		        ( P_RW_n & C_S8 & (MATCH_MEMX)) | // entering S8, memory going through the MMU
 `else
@@ -540,10 +725,13 @@ module sun2_fpga(input         cpu_clk,
 		        ( P_RW_n & C_S8 & (MATCH_MEMX & ~MATCH_MEM)) | // entering S8, memory going through the MMU
 `endif
 			/* writes */
-			(~P_RW_n & C_S4 & (MATCH_CTX | MATCH_SYSEN | MATCH_DIAG)) | // entering S4, quick devices
+			// MATCH_BERR is a write-to-clear acknowledge -- see the Bus
+			// Error Register above.  Leaving it out of this list is
+			// what turned every unprotected bus error into a halt.
+			(~P_RW_n & C_S4 & (MATCH_CTX | MATCH_SYSEN | MATCH_DIAG | MATCH_BERR)) | // entering S4, quick devices
 			(~P_RW_n & C_S4 & (MATCH_SMAP)) |  // entering S4, quick devices (CTX is 1 clock but went valid after being written, not affected by P_A)
 			(~P_RW_n & C_S6 & (MATCH_PMAP_PS | MATCH_PMAP_MA)) |  // entering S6, physical map needed an extra cycle
-			(~P_RW_n & C_S8 & (MATCH_TIMER |              MATCH_SERIAL)) | // entering S8, devices going through the MMU
+			(~P_RW_n & C_S8 & (MATCH_TIMER |              MATCH_SERIAL | MATCH_KBM | MATCH_ETHER)) | // entering S8, devices going through the MMU
 `ifdef MEM_SIM_ONLY
 		        (~P_RW_n & C_S8 & (MATCH_MEMX)) | // entering S8, memory going through the MMU
 `else

@@ -77,6 +77,7 @@ xvlog --work sun2 \
 	"$top/rtl/bootrom.v" \
 	"$top/rtl/idprom.v" \
 	"$top/rtl/gen8bit_reg.v" \
+	"$top/rtl/sun2_ether_ctl.v" \
 	"$top/rtl/ttl_am9513.v" \
 	"$top/rtl/ttl_74F151.v" \
 	"$top/rtl/ttl_74LS148.v" \

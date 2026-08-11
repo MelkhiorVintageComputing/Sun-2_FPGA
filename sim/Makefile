@@ -7,6 +7,7 @@
 #   make xsim MACHINE=vme  be a Sun 2/50 (VME) instead of a 2/120 (MultiBus)
 #   make iverilog          the open-source flow (GHDL-converted CPU), best effort
 #   make check             assert the console reached the monitor prompt
+#                          (pass the same MACHINE= as the run it is checking)
 #
 # Board level -- the Sun-2 as it will be on a QMTech Wukong V1:
 #
@@ -80,7 +81,7 @@ board: rom
 		./run_xsim_board.sh $(PLUSARGS) $(XSIMARGS)
 
 board-check:
-	./check_console.sh $(BUILD)/board-$(BOARD_MEM)/console.log
+	./check_console.sh $(BUILD)/board-$(BOARD_MEM)/console.log $(MACHINE)
 
 # --- unit tests for the board layer ---------------------------------------
 clkgen adapter migddr3: rom
@@ -90,7 +91,7 @@ iverilog: rom
 	SUN2_DEFINES="$(DEFINES)" ./run_iverilog.sh $(PLUSARGS) $(IVSIMARGS)
 
 check:
-	./check_console.sh $(BUILD)/xsim/console.log
+	./check_console.sh $(BUILD)/xsim/console.log $(MACHINE)
 
 clean:
 	rm -rf $(BUILD)
