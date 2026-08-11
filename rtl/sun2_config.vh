@@ -68,8 +68,20 @@
 // writes a single page-map entry pointing at the timer, page 0x005 or 0xFE5 --
 // so a VME PROM on the MultiBus base takes a bus timeout within 50 us.
 //
+// Plain decimal, so it survives being passed through make and the shell:
+// 0 = 0x000 (MultiBus), 4064 = 0xFE0 (VME).
 `ifndef DEV_PAGE_BASE
- `define DEV_PAGE_BASE 12'h000
+ `define DEV_PAGE_BASE 0
+`endif
+
+//
+// What the ID PROM says this machine is: 1 = MultiBus, 2 = VME.  The 2/50
+// board is "Machine Type 2" in the Architecture Manual, and its boot PROM
+// prints "ID PROM INVALID" for anything else.  rtl/idprom.v recomputes the
+// checksum from this, so it cannot fall out of step.
+//
+`ifndef IDPROM_MACHINE_TYPE
+ `define IDPROM_MACHINE_TYPE 1
 `endif
 
 //
