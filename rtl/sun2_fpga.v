@@ -306,15 +306,23 @@ module sun2_fpga(input         cpu_clk,
    // matching late as we need to be sure the MA is now valid, two clocks after the address is valid
    // that happens on entry in S2 (rising edge), so on that edge IA becomes valid
    // then on entry in S4 MA becomes valid
+   // Device space is eight 2 KiB pages in the same order on both Sun-2 buses,
+   // but at a different base: page 0x000 on MultiBus, 0xFE0 (byte 0x7F0000) on
+   // VME -- see the device space map in the Architecture Manual.  DEV_PAGE_BASE
+   // selects which, so the same decode serves both machines.
+   wire 			 MATCH_DEV;
+   assign MATCH_DEV      = (FC_GENERAL) & (TYPE == 3'h1) & C_S6 &
+                           (ma_pmap2devices[11:3] == (`DEV_PAGE_BASE >> 3));
+
    wire 			 MATCH_PROM, MATCH_RSVD, MATCH_DPC, MATCH_PARALLEL, MATCH_SERIAL, MATCH_TIMER, MATCH_ROPS, MATCH_RTC;
-   assign MATCH_PROM     = (FC_GENERAL) & (TYPE == 3'h1) & (ma_pmap2devices == 12'h000) & C_S6;
-   assign MATCH_RSVD     = (FC_GENERAL) & (TYPE == 3'h1) & (ma_pmap2devices == 12'h001) & C_S6;
-   assign MATCH_DPC      = (FC_GENERAL) & (TYPE == 3'h1) & (ma_pmap2devices == 12'h002) & C_S6; // not installed
-   assign MATCH_PARALLEL = (FC_GENERAL) & (TYPE == 3'h1) & (ma_pmap2devices == 12'h003) & C_S6;
-   assign MATCH_SERIAL   = (FC_GENERAL) & (TYPE == 3'h1) & (ma_pmap2devices == 12'h004) & C_S6;
-   assign MATCH_TIMER    = (FC_GENERAL) & (TYPE == 3'h1) & (ma_pmap2devices == 12'h005) & C_S6;
-   assign MATCH_ROPS     = (FC_GENERAL) & (TYPE == 3'h1) & (ma_pmap2devices == 12'h006) & C_S6; // not in prime
-   assign MATCH_RTC      = (FC_GENERAL) & (TYPE == 3'h1) & (ma_pmap2devices == 12'h007) & C_S6; // not in prime
+   assign MATCH_PROM     = MATCH_DEV & (ma_pmap2devices[2:0] == 3'h0);
+   assign MATCH_RSVD     = MATCH_DEV & (ma_pmap2devices[2:0] == 3'h1); // Ethernet on VME
+   assign MATCH_DPC      = MATCH_DEV & (ma_pmap2devices[2:0] == 3'h2); // not installed
+   assign MATCH_PARALLEL = MATCH_DEV & (ma_pmap2devices[2:0] == 3'h3); // keyboard/mouse on VME
+   assign MATCH_SERIAL   = MATCH_DEV & (ma_pmap2devices[2:0] == 3'h4);
+   assign MATCH_TIMER    = MATCH_DEV & (ma_pmap2devices[2:0] == 3'h5);
+   assign MATCH_ROPS     = MATCH_DEV & (ma_pmap2devices[2:0] == 3'h6); // not in prime
+   assign MATCH_RTC      = MATCH_DEV & (ma_pmap2devices[2:0] == 3'h7); // not in prime
    
 `ifdef MEM_SIM_ONLY
    assign MATCH_MEM      = (FC_GENERAL) & (TYPE == 3'h0) & (ma_pmap2devices[11:8] == 4'h0) & C_S6; // "physically" installed (simulation => reduced)

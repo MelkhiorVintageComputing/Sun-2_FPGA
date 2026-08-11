@@ -19,11 +19,17 @@ TOP     = ..
 ROMDIR  = $(TOP)/build/rom
 PROM    = $(TOP)/Inputs/sun2-multi-rev-R.bin
 
+# The VME machine's PROM, for experimenting with a Sun 2/50 on hardware that is
+# currently wired as a MultiBus 2/120.  Used pristine: the speedup patches are
+# addresses and opcodes specific to the MultiBus image, and rompatch refuses to
+# apply them here, which is exactly what it is for.
+PROM250 = $(TOP)/Inputs/sun250_prom_combined.bin
+
 CC     ?= cc
 CFLAGS ?= -O2 -Wall
 
 all: $(ROMDIR)/bootrom_16bits.vh $(ROMDIR)/bootrom_patched_16bits.vh \
-     $(ROMDIR)/bootrom_fastboot_16bits.vh
+     $(ROMDIR)/bootrom_fastboot_16bits.vh $(ROMDIR)/bootrom_sun250_16bits.vh
 
 $(ROMDIR):
 	mkdir -p $(ROMDIR)
@@ -50,6 +56,9 @@ $(ROMDIR)/sun2-multi-rev-R-fastboot.bin: rompatch sim_speedup.txt sim_fastboot.t
 
 $(ROMDIR)/bootrom_fastboot_16bits.vh: rom $(ROMDIR)/sun2-multi-rev-R-fastboot.bin
 	./rom W <$(ROMDIR)/sun2-multi-rev-R-fastboot.bin >$@
+
+$(ROMDIR)/bootrom_sun250_16bits.vh: rom $(PROM250) | $(ROMDIR)
+	./rom W <$(PROM250) >$@
 
 # Sanity check: our patches plus legacy_baud.txt must reproduce the PROM
 # compiled into the last known-working build of the old design, bit for bit.

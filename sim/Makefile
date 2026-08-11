@@ -37,6 +37,9 @@ endif
 ifeq ($(ROM),fast)
 DEFINES += ROM_FASTBOOT
 endif
+ifeq ($(ROM),sun250)
+DEFINES += ROM_SUN250
+endif
 
 # Simulated milliseconds before giving up, and the console string that means
 # we got there: the Rev R monitor prompt.  A full boot needs a bit over four

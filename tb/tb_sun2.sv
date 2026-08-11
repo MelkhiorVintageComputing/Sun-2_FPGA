@@ -149,6 +149,48 @@ module tb_sun2 #(
    always @(diag_leds)
      $display("[%t] diag_leds = %02x (boot=%0d)", $realtime, diag_leds, en_boot);
 
+   // Bus errors.  A PROM written for different hardware tends to fail by
+   // touching something that does not answer, so say where and why rather than
+   // leaving a silent stall to be reverse-engineered from a waveform.
+   // The Sun-2 raises BERR either on a protection violation from the page map
+   // or on a bus timeout (see the ERR term in sun2_fpga.v).
+   // Diagnostics that deliberately provoke protection faults hit the same
+   // address thousands of times, so collapse repeats: report each distinct
+   // (address, cause) once and say how many followed.  Otherwise the
+   // interesting error after a burst is never seen.
+   int    n_berr = 0, n_repeat = 0;
+   logic [23:0] last_berr_a = 24'hffffff;
+   logic        last_berr_t;
+
+   task automatic flush_repeats();
+      if (n_repeat > 0)
+        $display("                ... and %0d more at that address", n_repeat);
+      n_repeat = 0;
+   endtask
+
+   always @(negedge dut.P_BERR_n) begin
+      automatic logic [23:0] a = {dut.P_A, 1'b0};
+      automatic logic        t = dut.sun2.TIMEOUT;
+      n_berr++;
+      if (a === last_berr_a && t === last_berr_t) begin
+         n_repeat++;
+      end else begin
+         flush_repeats();
+         $display("[%t] BUS ERROR #%0d: A=%06x FC=%0d %s  (%s)",
+                  $realtime, n_berr, a, dut.P_FC,
+                  dut.P_RW_n ? "read" : "write",
+                  t ? "timeout, nothing answered"
+                    : "protection violation from the page map");
+         last_berr_a = a;
+         last_berr_t = t;
+      end
+   end
+
+   // A 68010 that takes a bus error while already handling one double-faults
+   // and halts.  From outside that looks identical to a tight loop, so say it.
+   always @(negedge dut.HALT_OUTn)
+     $display("[%t] CPU HALTED (double bus fault) with A=%06x", $realtime, {dut.P_A, 1'b0});
+
    // Heartbeat: where is the CPU?  Without this a long diagnostic loop and a
    // hang look exactly the same from the outside.
    real heartbeat_ms = 10.0;
@@ -170,6 +212,8 @@ module tb_sun2 #(
    task automatic wrap_up(input string why);
       $display("");
       $display("=== %s at %t ===", why, $realtime);
+      flush_repeats();
+      if (n_berr > 0) $display("%0d bus errors in total", n_berr);
       console_mon.report();
       ram.report();
       $finish;
