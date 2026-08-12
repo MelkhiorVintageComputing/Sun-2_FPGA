@@ -108,6 +108,87 @@ module tb_mig_ddr3;
    );
 
    // ------------------------------------------------------------------
+   // Latency measurement
+   // ------------------------------------------------------------------
+   // Two numbers, and nothing in this repo had ever recorded either:
+   //
+   //   L_mig  the controller's own read latency, from the cycle it accepts a
+   //          read command to the cycle it returns data, in ui_clk cycles.
+   //   L_wb   what the Sun-2 actually waits: Wishbone STB to ACK, in cpu_clk
+   //          cycles, which is what DTACK is built from.
+   //
+   // L_wb is the one that matters for DVMA.  Every simulation of this design
+   // so far has used wb_ram_model with ACK_LATENCY(0) -- a one-cycle memory --
+   // so the Ethernet's bus budget has never been tested against the real path.
+   int  mig_lat_min = 1000, mig_lat_max = 0, mig_lat_sum = 0, mig_lat_n = 0;
+   int  wb_lat_min  = 1000, wb_lat_max  = 0, wb_lat_sum  = 0, wb_lat_n  = 0;
+   int  mig_cnt = 0;
+   bit  mig_pending = 1'b0;
+
+   always @(posedge ui_clk) begin
+      if (ui_clk_sync_rst) begin
+         mig_pending <= 1'b0;
+      end else begin
+         if (mig_pending) mig_cnt <= mig_cnt + 1;
+         // a read command accepted by the controller
+         if (app_en && app_rdy && app_cmd == 3'b001) begin
+            mig_pending <= 1'b1;
+            mig_cnt     <= 0;
+         end
+         if (mig_pending && app_rd_data_valid) begin
+            mig_pending <= 1'b0;
+            mig_lat_n   <= mig_lat_n + 1;
+            mig_lat_sum <= mig_lat_sum + mig_cnt;
+            if (mig_cnt < mig_lat_min) mig_lat_min <= mig_cnt;
+            if (mig_cnt > mig_lat_max) mig_lat_max <= mig_cnt;
+         end
+      end
+   end
+
+   int  wb_cnt = 0;
+   bit  wb_busy = 1'b0;
+   always @(posedge cpu_clk) begin
+      if (wb_busy) begin
+         wb_cnt <= wb_cnt + 1;
+         if (wb_ack) begin
+            wb_busy    <= 1'b0;
+            wb_lat_n   <= wb_lat_n + 1;
+            wb_lat_sum <= wb_lat_sum + wb_cnt;
+            if (wb_cnt < wb_lat_min) wb_lat_min <= wb_cnt;
+            if (wb_cnt > wb_lat_max) wb_lat_max <= wb_cnt;
+         end
+      end else if (wb_cyc && wb_stb && !wb_we) begin
+         wb_busy <= 1'b1;
+         wb_cnt  <= 1;
+      end
+   end
+
+   task automatic report_latency();
+      real cpu_ns;
+      begin
+         cpu_ns = 1.0e9 / 12.5e6;   // the 12.5 MHz CPU clock this runs at
+         $display("");
+         $display("--- measured latency ---");
+         if (mig_lat_n > 0)
+           $display("MIG read, command accepted to data valid: min %0d, max %0d, mean %0.1f ui_clk (%0.1f ns at 83.33 MHz)",
+                    mig_lat_min, mig_lat_max, real'(mig_lat_sum)/mig_lat_n,
+                    (real'(mig_lat_sum)/mig_lat_n) * 12.0);
+         if (wb_lat_n > 0) begin
+            $display("Wishbone read, STB to ACK:                min %0d, max %0d, mean %0.1f cpu_clk (%0.1f ns at 12.5 MHz)",
+                     wb_lat_min, wb_lat_max, real'(wb_lat_sum)/wb_lat_n,
+                     (real'(wb_lat_sum)/wb_lat_n) * cpu_ns);
+            $display("");
+            $display("=> set wb_ram_model ACK_LATENCY to %0d to model this bus in the board simulation",
+                     (wb_lat_sum + wb_lat_n/2) / wb_lat_n);
+            // A 32-bit DVMA word is two 68010 cycles, each waiting this long
+            // plus arbitration; at 10 Mb/s the MAC needs one every 3.2 us.
+            $display("=> a 32-bit DVMA word costs about %0.1f us; at 10 Mb/s the budget is 3.2 us",
+                     2.0 * ((real'(wb_lat_sum)/wb_lat_n) + 5.0) * cpu_ns / 1000.0);
+         end
+      end
+   endtask
+
+   // ------------------------------------------------------------------
    // Stimulus
    // ------------------------------------------------------------------
    int errors = 0;
@@ -172,6 +253,7 @@ module tb_mig_ddr3;
 
       $display("[%t] %0d words written and read back, %0d errors",
                $realtime, N_WORDS, errors);
+      report_latency();
       if (errors == 0) $display("PASS: the adapter works against the real controller");
       else             $fatal(1, "FAIL: %0d mismatches", errors);
       $finish;

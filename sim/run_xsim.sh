@@ -9,6 +9,7 @@
 #   XILINX_VIVADO   Vivado install (default /opt/Xilinx/2025.2/Vivado)
 #   SUN2_DEFINES    extra `define's, e.g. "MEM_SIM_ONLY ROM_PRISTINE"
 #   SUN2_BAUD       console decode rate (default 9600)
+#   SUN2_MEM_LATENCY  memory wait states (default 0; 7 is what MIG measures at)
 #
 # Any arguments are passed through to xsim, so plusargs work:
 #   ./run_xsim.sh -testplusarg timeout_ms=500
@@ -19,6 +20,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 top=$(cd "$here/.." && pwd)
 
 : "${XILINX_VIVADO:=/opt/Xilinx/2025.2/Vivado}"
+"$top/tools/patch_inputs.sh" Wish82586
+
 if [ ! -x "$XILINX_VIVADO/bin/xvlog" ]; then
 	echo "xsim not found under $XILINX_VIVADO -- set XILINX_VIVADO" >&2
 	exit 1
@@ -31,7 +34,11 @@ if [ -z "$LIBRARY_PATH" ] && [ -e /usr/lib/x86_64-linux-gnu/crt1.o ]; then
 	export LIBRARY_PATH=/usr/lib/x86_64-linux-gnu
 fi
 
-rundir="$top/build/sim/xsim"
+# One directory per machine.  Two runs sharing a snapshot directory clobber
+# each other -- the second recompiles it while the first is executing, and xsim
+# dies with a kernel fatal that looks like a design fault rather than a race.
+# That cost a wrong diagnosis once.
+rundir="$top/build/sim/xsim${SUN2_MACHINE:+-$SUN2_MACHINE}"
 mkdir -p "$rundir"
 
 # The boot PROM include lives in build/rom; generate it if it isn't there yet.
@@ -89,19 +96,19 @@ echo "== compiling the SCC and testbench (SystemVerilog) =="
 xvlog --sv --work sun2 \
 	"${defargs[@]}" \
 	-i "$top/rtl" -i "$top/build/rom" \
-	"$top/Inputs/Wish82586/src/wish82586_pkg.sv" \
-	"$top/Inputs/Wish82586/src/async_fifo.sv" \
-	"$top/Inputs/Wish82586/src/sync_fifo.sv" \
-	"$top/Inputs/Wish82586/src/dp_ram.sv" \
-	"$top/Inputs/Wish82586/src/crc32_eth.sv" \
-	"$top/Inputs/Wish82586/src/mii_rx.sv" \
-	"$top/Inputs/Wish82586/src/mii_tx.sv" \
-	"$top/Inputs/Wish82586/src/wb_master.sv" \
-	"$top/Inputs/Wish82586/src/wb_arb.sv" \
-	"$top/Inputs/Wish82586/src/ie_core.sv" \
-	"$top/Inputs/Wish82586/src/ie_cu.sv" \
-	"$top/Inputs/Wish82586/src/ie_ru.sv" \
-	"$top/Inputs/Wish82586/src/wish82586.sv" \
+	"$top/build/inputs/Wish82586/src/wish82586_pkg.sv" \
+	"$top/build/inputs/Wish82586/src/async_fifo.sv" \
+	"$top/build/inputs/Wish82586/src/sync_fifo.sv" \
+	"$top/build/inputs/Wish82586/src/dp_ram.sv" \
+	"$top/build/inputs/Wish82586/src/crc32_eth.sv" \
+	"$top/build/inputs/Wish82586/src/mii_rx.sv" \
+	"$top/build/inputs/Wish82586/src/mii_tx.sv" \
+	"$top/build/inputs/Wish82586/src/wb_master.sv" \
+	"$top/build/inputs/Wish82586/src/wb_arb.sv" \
+	"$top/build/inputs/Wish82586/src/ie_core.sv" \
+	"$top/build/inputs/Wish82586/src/ie_cu.sv" \
+	"$top/build/inputs/Wish82586/src/ie_ru.sv" \
+	"$top/build/inputs/Wish82586/src/wish82586.sv" \
 	"$top/rtl/sun2_ethernet.sv" \
 	"$top/Inputs/z8530_scc/z8530_scc.sv" \
 	"$top/tb/wb_ram_model.sv" \
@@ -118,6 +125,7 @@ echo "== elaborating (debug=$debug) =="
 xelab -debug $debug -O3 --timescale 1ns/1ps \
 	-L sun2 -L unisim \
 	-generic_top "BAUD=${SUN2_BAUD:-9600}" \
+	-generic_top "MEM_LATENCY=${SUN2_MEM_LATENCY:-0}" \
 	sun2.tb_sun2 -s sun2_sim
 
 echo "== running =="

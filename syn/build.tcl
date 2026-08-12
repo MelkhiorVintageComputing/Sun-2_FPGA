@@ -87,19 +87,19 @@ read_verilog [list \
 ]
 
 read_verilog -sv [list \
-    $top/Inputs/Wish82586/src/wish82586_pkg.sv \
-    $top/Inputs/Wish82586/src/async_fifo.sv \
-    $top/Inputs/Wish82586/src/sync_fifo.sv \
-    $top/Inputs/Wish82586/src/dp_ram.sv \
-    $top/Inputs/Wish82586/src/crc32_eth.sv \
-    $top/Inputs/Wish82586/src/mii_rx.sv \
-    $top/Inputs/Wish82586/src/mii_tx.sv \
-    $top/Inputs/Wish82586/src/wb_master.sv \
-    $top/Inputs/Wish82586/src/wb_arb.sv \
-    $top/Inputs/Wish82586/src/ie_core.sv \
-    $top/Inputs/Wish82586/src/ie_cu.sv \
-    $top/Inputs/Wish82586/src/ie_ru.sv \
-    $top/Inputs/Wish82586/src/wish82586.sv \
+    $top/build/inputs/Wish82586/src/wish82586_pkg.sv \
+    $top/build/inputs/Wish82586/src/async_fifo.sv \
+    $top/build/inputs/Wish82586/src/sync_fifo.sv \
+    $top/build/inputs/Wish82586/src/dp_ram.sv \
+    $top/build/inputs/Wish82586/src/crc32_eth.sv \
+    $top/build/inputs/Wish82586/src/mii_rx.sv \
+    $top/build/inputs/Wish82586/src/mii_tx.sv \
+    $top/build/inputs/Wish82586/src/wb_master.sv \
+    $top/build/inputs/Wish82586/src/wb_arb.sv \
+    $top/build/inputs/Wish82586/src/ie_core.sv \
+    $top/build/inputs/Wish82586/src/ie_cu.sv \
+    $top/build/inputs/Wish82586/src/ie_ru.sv \
+    $top/build/inputs/Wish82586/src/wish82586.sv \
     $top/Inputs/z8530_scc/z8530_scc.sv \
     $top/rtl/board/wukong_clkgen.sv \
     $top/rtl/board/reset_sync.sv \

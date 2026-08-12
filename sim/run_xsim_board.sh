@@ -22,6 +22,8 @@ top=$(cd "$here/.." && pwd)
 : "${BOARD_MEM:=fast}"
 : "${SUN2_CPU_HZ:=12500000}"
 
+"$top/tools/patch_inputs.sh" Wish82586
+
 if [ ! -x "$XILINX_VIVADO/bin/xvlog" ]; then
 	echo "xsim not found under $XILINX_VIVADO -- set XILINX_VIVADO" >&2
 	exit 1
@@ -34,7 +36,10 @@ if [ -z "${LIBRARY_PATH:-}" ] && [ -e /usr/lib/x86_64-linux-gnu/crt1.o ]; then
 	export LIBRARY_PATH=/usr/lib/x86_64-linux-gnu
 fi
 
-rundir="$top/build/sim/board-$BOARD_MEM"
+# Per machine as well as per memory mode: two runs sharing a snapshot
+# directory clobber each other and xsim dies with a kernel fatal that looks
+# like a design fault.
+rundir="$top/build/sim/board-$BOARD_MEM${SUN2_MACHINE:+-$SUN2_MACHINE}"
 mkdir -p "$rundir"
 
 make -s -C "$top/tools"
@@ -108,7 +113,7 @@ xvlog --work sun2 "${defargs[@]}" \
 
 echo "== compiling the board layer and testbench (SystemVerilog) =="
 board_src=("$top/rtl/board/wukong_clkgen.sv" "$top/rtl/board/reset_sync.sv" "$top/rtl/board/wukong_v1_top.sv")
-tb_src=("$top/tb/wb_ram_model.sv" "$top/tb/uart_monitor.sv" "$top/tb/tb_wukong.sv")
+tb_src=("$top/tb/wb_ram_model.sv" "$top/tb/uart_monitor.sv" "$top/tb/mii_peer.sv" "$top/tb/tb_wukong.sv")
 
 if [ "$BOARD_MEM" = "ddr3" ]; then
 	board_src+=("$top/rtl/board/wb_to_mig_ui.sv")
@@ -134,19 +139,19 @@ fi
 
 xvlog --sv --work sun2 "${defargs[@]}" "${incargs[@]}" \
 	-i "$top/rtl" -i "$top/build/rom" \
-	"$top/Inputs/Wish82586/src/wish82586_pkg.sv" \
-	"$top/Inputs/Wish82586/src/async_fifo.sv" \
-	"$top/Inputs/Wish82586/src/sync_fifo.sv" \
-	"$top/Inputs/Wish82586/src/dp_ram.sv" \
-	"$top/Inputs/Wish82586/src/crc32_eth.sv" \
-	"$top/Inputs/Wish82586/src/mii_rx.sv" \
-	"$top/Inputs/Wish82586/src/mii_tx.sv" \
-	"$top/Inputs/Wish82586/src/wb_master.sv" \
-	"$top/Inputs/Wish82586/src/wb_arb.sv" \
-	"$top/Inputs/Wish82586/src/ie_core.sv" \
-	"$top/Inputs/Wish82586/src/ie_cu.sv" \
-	"$top/Inputs/Wish82586/src/ie_ru.sv" \
-	"$top/Inputs/Wish82586/src/wish82586.sv" \
+	"$top/build/inputs/Wish82586/src/wish82586_pkg.sv" \
+	"$top/build/inputs/Wish82586/src/async_fifo.sv" \
+	"$top/build/inputs/Wish82586/src/sync_fifo.sv" \
+	"$top/build/inputs/Wish82586/src/dp_ram.sv" \
+	"$top/build/inputs/Wish82586/src/crc32_eth.sv" \
+	"$top/build/inputs/Wish82586/src/mii_rx.sv" \
+	"$top/build/inputs/Wish82586/src/mii_tx.sv" \
+	"$top/build/inputs/Wish82586/src/wb_master.sv" \
+	"$top/build/inputs/Wish82586/src/wb_arb.sv" \
+	"$top/build/inputs/Wish82586/src/ie_core.sv" \
+	"$top/build/inputs/Wish82586/src/ie_cu.sv" \
+	"$top/build/inputs/Wish82586/src/ie_ru.sv" \
+	"$top/build/inputs/Wish82586/src/wish82586.sv" \
 	"$top/rtl/sun2_ethernet.sv" \
 	"$top/Inputs/z8530_scc/z8530_scc.sv" \
 	"${board_src[@]}" \

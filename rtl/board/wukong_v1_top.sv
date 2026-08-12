@@ -36,6 +36,34 @@ module wukong_v1_top #(
     output wire [7:0]  diag_leds0,    // Sun-2 front panel, on the PMOD
     input  wire        user_btn,
 
+    //
+    // Ethernet, to the RTL8211EG in bank 34.  Present on both machine types so
+    // the board top keeps one port list; a MultiBus build drives the outputs
+    // idle, because a 2/120 has no on-board Ethernet.
+    //
+    // The PHY is strapped for GMII and runs from its own 25 MHz crystal, but a
+    // Sun-2 is a 10 Mb/s machine: at 10 and 100 Mb/s the part presents the
+    // 4-bit MII and sources both clocks itself, which is what this uses.
+    //
+    // phy_mii_rx_dv, phy_mii_rx_er and phy_mii_col are also PHY configuration
+    // straps, latched when its reset releases.  They are inputs and must stay
+    // inputs -- driving them would change the PHY's address or put it into
+    // RGMII mode, where nothing would ever work in a way that looked like a
+    // MAC fault.
+    //
+    input  wire        phy_mii_tx_clk,   // M2, PHY-sourced, 2.5 MHz at 10 Mb/s
+    output wire [3:0]  phy_mii_txd,      // R2 P1 N2 N1
+    output wire        phy_mii_tx_en,    // T2
+    output wire        phy_mii_tx_er,    // J1
+    input  wire        phy_mii_rx_clk,   // P4, PHY-sourced
+    input  wire [3:0]  phy_mii_rxd,      // M4 N3 N4 P3
+    input  wire        phy_mii_rx_dv,    // L3  -- also PHY_AD2
+    input  wire        phy_mii_rx_er,    // U5  -- also AN1
+    input  wire        phy_mii_crs,      // U2
+    input  wire        phy_mii_col,      // U4  -- also Mode
+    output wire        phy_gtx_clk,      // U1, gigabit only: held low here
+    output wire        phy_reset_n,      // R1, active low, no external circuit
+
 `ifdef BOARD_MEM_FAST
     // Simulation only: the Wishbone port, straight out
     output wire        wb_cyc_o,
@@ -71,6 +99,41 @@ module wukong_v1_top #(
    // Clocks
    // ------------------------------------------------------------------
    wire board_reset = ~cpu_reset;      // button is active low
+
+   wire eth_crs_stuck;
+
+   //
+   // PHY reset.  Nothing external drives it -- no pull-up, no RC, no
+   // supervisor -- so R1 is undefined from power-on until this bitstream is
+   // live, and the PHY has already latched its straps and begun negotiating by
+   // then.  Assert it deliberately, hold it well past the part's minimum, and
+   // leave a long settle before anything talks MDIO: a read of 0xFFFF because
+   // the PHY was still resetting is the classic first-bring-up failure.
+   //
+   // 20 ms low, then 50 ms more before MDIO is allowed, counted on clk50.
+   //
+   localparam int PHY_RST_CYCLES  = 50_000 * 20;   // 20 ms of 50 MHz
+   localparam int PHY_WAIT_CYCLES = 50_000 * 50;   // 50 ms more
+   reg [21:0] phy_rst_ctr  = 22'h0;
+   reg        phy_rst_done = 1'b0;
+   reg        phy_mdio_ok  = 1'b0;
+   always @(posedge clk50) begin
+      if (board_reset) begin
+         phy_rst_ctr  <= 22'h0;
+         phy_rst_done <= 1'b0;
+         phy_mdio_ok  <= 1'b0;
+      end else if (phy_rst_ctr != PHY_RST_CYCLES[21:0] + PHY_WAIT_CYCLES[21:0]) begin
+         phy_rst_ctr <= phy_rst_ctr + 22'h1;
+         if (phy_rst_ctr == PHY_RST_CYCLES[21:0]) phy_rst_done <= 1'b1;
+      end else begin
+         phy_mdio_ok <= 1'b1;
+      end
+   end
+   assign phy_reset_n = phy_rst_done;
+
+   // Gigabit only, and this board cannot do gigabit anyway: the PHY's CLK125
+   // is not routed to the FPGA.  Held low rather than left floating into it.
+   assign phy_gtx_clk = 1'b0;
 
    wire clk_mig_sys, clk_idelay, cpu_clk, serial_clk, mmcm_locked;
 
@@ -143,19 +206,18 @@ module wukong_v1_top #(
        .en_boot    (en_boot),
        .todebug    (todebug),
 
-       // No PHY wired to the board yet.  The Wukong has an RTL8211EG strapped
-       // for GMII, but bringing it up is a separate step; a VME bitstream
-       // built now simply has an Ethernet that never sees a clock.
-       .mii_tx_clk (1'b0),
-       .mii_txd    (),
-       .mii_tx_en  (),
-       .mii_tx_er  (),
-       .mii_rx_clk (1'b0),
-       .mii_rxd    (4'h0),
-       .mii_rx_dv  (1'b0),
-       .mii_rx_er  (1'b0),
-       .mii_crs    (1'b0),
-       .mii_col    (1'b0),
+       .eth_crs_stuck (eth_crs_stuck),
+
+       .mii_tx_clk (phy_mii_tx_clk),
+       .mii_txd    (phy_mii_txd),
+       .mii_tx_en  (phy_mii_tx_en),
+       .mii_tx_er  (phy_mii_tx_er),
+       .mii_rx_clk (phy_mii_rx_clk),
+       .mii_rxd    (phy_mii_rxd),
+       .mii_rx_dv  (phy_mii_rx_dv),
+       .mii_rx_er  (phy_mii_rx_er),
+       .mii_crs    (phy_mii_crs),
+       .mii_col    (phy_mii_col),
 
        .wb_cyc_o   (wb_cyc),
        .wb_stb_o   (wb_stb),

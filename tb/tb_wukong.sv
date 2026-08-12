@@ -44,6 +44,24 @@ module tb_wukong #(
    // ------------------------------------------------------------------
    // DUT and its memory
    // ------------------------------------------------------------------
+   // The MII side.  Not optional: with no transmit clock the 82586 never
+   // finishes a TRANSMIT command and the boot PROM waits on that with no
+   // timeout, so the machine would simply stop with nothing printed.
+   wire       mii_tx_clk, mii_tx_en, mii_tx_er, mii_rx_clk, mii_rx_dv, mii_rx_er;
+   wire       mii_crs, mii_col, phy_reset_n;
+   wire [3:0] mii_txd, mii_rxd;
+
+   mii_peer peer(.mii_tx_clk(mii_tx_clk), .mii_txd(mii_txd),
+                 .mii_tx_en(mii_tx_en), .mii_tx_er(mii_tx_er),
+                 .mii_rx_clk(mii_rx_clk), .mii_rxd(mii_rxd),
+                 .mii_rx_dv(mii_rx_dv), .mii_rx_er(mii_rx_er),
+                 .mii_crs(mii_crs), .mii_col(mii_col));
+
+   // The PHY reset sequencer runs off clk50 and takes 70 ms; report it so a
+   // board run that never gets there is obvious.
+   always @(posedge phy_reset_n)
+     $display("[%t] PHY reset released", $realtime);
+
 `ifdef BOARD_MEM_FAST
 
    wire        wb_cyc, wb_stb, wb_we, wb_ack;
@@ -54,6 +72,19 @@ module tb_wukong #(
 
    wukong_v1_top #(.CPU_CLK_HZ(CPU_CLK_HZ)) dut (
        .clk50 (clk50), .cpu_reset (cpu_reset),
+       .phy_mii_tx_clk (mii_tx_clk),
+       .phy_mii_txd    (mii_txd),
+       .phy_mii_tx_en  (mii_tx_en),
+       .phy_mii_tx_er  (mii_tx_er),
+       .phy_mii_rx_clk (mii_rx_clk),
+       .phy_mii_rxd    (mii_rxd),
+       .phy_mii_rx_dv  (mii_rx_dv),
+       .phy_mii_rx_er  (mii_rx_er),
+       .phy_mii_crs    (mii_crs),
+       .phy_mii_col    (mii_col),
+       .phy_gtx_clk    (),
+       .phy_reset_n    (phy_reset_n),
+
        .serial_tx (serial_tx), .serial_rx (serial_rx),
        .user_led (user_led), .diag_leds0 (diag_leds0), .user_btn (1'b1),
        .wb_cyc_o (wb_cyc), .wb_stb_o (wb_stb), .wb_adr_o (wb_adr),
@@ -81,6 +112,19 @@ module tb_wukong #(
 
    wukong_v1_top #(.CPU_CLK_HZ(CPU_CLK_HZ)) dut (
        .clk50 (clk50), .cpu_reset (cpu_reset),
+       .phy_mii_tx_clk (mii_tx_clk),
+       .phy_mii_txd    (mii_txd),
+       .phy_mii_tx_en  (mii_tx_en),
+       .phy_mii_tx_er  (mii_tx_er),
+       .phy_mii_rx_clk (mii_rx_clk),
+       .phy_mii_rxd    (mii_rxd),
+       .phy_mii_rx_dv  (mii_rx_dv),
+       .phy_mii_rx_er  (mii_rx_er),
+       .phy_mii_crs    (mii_crs),
+       .phy_mii_col    (mii_col),
+       .phy_gtx_clk    (),
+       .phy_reset_n    (phy_reset_n),
+
        .serial_tx (serial_tx), .serial_rx (serial_rx),
        .user_led (user_led), .diag_leds0 (diag_leds0), .user_btn (1'b1),
        .ddr3_dq (ddr3_dq), .ddr3_dqs_p (ddr3_dqs_p), .ddr3_dqs_n (ddr3_dqs_n),

@@ -79,7 +79,7 @@ migddr3)
 	xelab -debug off -L unisims_ver -L unisim -L secureip \
 		work.tb_mig_ddr3 work.glbl -s migddr3_sim >/dev/null
 	xsim migddr3_sim -R | grep -vE 'ddr3\.(cmd_task|data_task|reset|dqs_)' \
-		| grep -E '===|calibration|written and read|MISMATCH|PASS|FAIL'
+		| grep -E '===|calibration|written and read|MISMATCH|PASS|FAIL|latency|^MIG read|^Wishbone read|^=>'
 	;;
 *)
 	echo "usage: $0 {clkgen|adapter|migddr3}" >&2

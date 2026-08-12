@@ -108,12 +108,26 @@ make -C sim xsim TIMEOUT_MS=8000        # simulated milliseconds before giving u
 make -C sim xsim MEM=sim_only           # 512 KiB in-core SRAM instead of Wishbone
 make -C sim xsim ROM=pristine           # this machine's unmodified PROM (very slow)
 make -C sim xsim MACHINE=vme            # be a Sun 2/50 (VME) instead of a 2/120
+make -C sim xsim MEM_LATENCY=7          # memory as slow as the real DDR3 path
 make -C sim xsim XSIMARGS="-testplusarg trace_dvma=16"   # Ethernet bus mastering
 make -C sim xsim XSIMARGS="-testplusarg trace_irq=20"     # timer/interrupt activity
 make -C sim xsim XSIMARGS="-testplusarg heartbeat_ms=100"
 SUN2_VCD=1 make -C sim xsim XSIMARGS="-testplusarg vcd_full"
 make -C sim check                       # assert the console reached the prompt
 ```
+
+`MEM_LATENCY` is worth knowing about. It defaults to 0 — a memory that
+answers the next cycle — which is what every simulation here used until the
+real path was measured. `make -C sim migddr3` reports what it actually costs:
+MIG returns read data 21 `ui_clk` after accepting the command, and a Wishbone
+read is **7 CPU clocks** from STB to ACK. Run with `MEM_LATENCY=7` before
+believing anything about bus bandwidth, particularly now that the Ethernet
+competes for the same bus by DVMA.
+
+Each machine gets its own directory under `build/sim/`, so a MultiBus and a VME
+run can proceed at the same time. Two runs of the *same* machine cannot — they
+share a snapshot directory, and the second recompiles it while the first is
+executing.
 
 `MEM_MIB` is the one to reach for first. The PROM writes every installed byte
 during its setup pass, so a 7 MiB machine spends over three simulated seconds
@@ -322,7 +336,19 @@ hard-wired), reads at `0x0A0400` (the ISCP), then a write of zero to
 `0x0A0400` — that last one is what the boot PROM spins on, and the difference
 between a working controller and a dead one.
 
-The MII side goes to `tb/mii_peer.sv`, which supplies clocks and a quiet line.
+On the board the MII goes to the RTL8211EG in bank 34, whose pins, clock
+constraints and MII I/O delays are in `syn/wukong_v1.xdc`, with a reset
+sequencer in `rtl/board/wukong_v1_top.sv` holding PHYRSTB low for 20 ms and
+waiting 50 ms more before MDIO is allowed — the datasheet asks for 10 and 30.
+Seven of those balls are also PHY configuration straps, latched when its reset
+releases; they are inputs and must stay inputs, with no pull property, or the
+PHY comes up at the wrong address or in RGMII mode.
+
+MDIO itself is not wired up yet, so the PHY would negotiate gigabit and the
+4-bit MII build would see nonsense. That is the next piece of work.
+
+In simulation the MII side goes to `tb/mii_peer.sv`, which supplies clocks and a
+quiet line.
 That is not optional: the PROM's driver waits on the controller with no timeout
 anywhere, so a transmit that never completes for want of a PHY clock hangs the
 machine solid with nothing printed.

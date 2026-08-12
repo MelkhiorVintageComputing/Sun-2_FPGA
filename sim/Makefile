@@ -4,6 +4,7 @@
 #   make xsim MEM=sim_only use the 512 KiB in-core SRAM instead
 #   make xsim ROM=pristine use this machine's unmodified PROM (very slow)
 #   make xsim MEM_MIB=1    pretend only 1 MiB is installed (much faster boot)
+#   make xsim MEM_LATENCY=7  memory as slow as the real DDR3 path
 #   make xsim MACHINE=vme  be a Sun 2/50 (VME) instead of a 2/120 (MultiBus)
 #   make iverilog          the open-source flow (GHDL-converted CPU), best effort
 #   make check             assert the console reached the monitor prompt
@@ -56,6 +57,12 @@ endif
 # we got there: the Rev R monitor prompt.  A full boot needs a bit over four
 # simulated seconds, nearly all of it the PROM's map diagnostics and the pass
 # that fills all 7 MiB of RAM.
+# Wait states before main memory acknowledges.  0 is the ideal memory every
+# simulation used until the real path was measured; MEM_LATENCY=7 is what a
+# Wishbone read actually costs through MIG (make -C sim migddr3 reports it),
+# and is the setting to use before believing anything about DVMA bandwidth.
+MEM_LATENCY ?= 0
+
 TIMEOUT_MS ?= 6000
 STOP_ON    ?= ">"
 
@@ -70,7 +77,8 @@ rom:
 	$(MAKE) -C $(TOP)/tools
 
 xsim: rom
-	SUN2_DEFINES="$(DEFINES)" ./run_xsim.sh $(PLUSARGS) $(XSIMARGS)
+	SUN2_DEFINES="$(DEFINES)" SUN2_MEM_LATENCY=$(MEM_LATENCY) \
+	SUN2_MACHINE=$(MACHINE) ./run_xsim.sh $(PLUSARGS) $(XSIMARGS)
 
 # --- board level: the Sun-2 as it will be on the Wukong --------------------
 #   make board                     behavioural RAM and clocks, boots to prompt
@@ -79,10 +87,10 @@ BOARD_MEM ?= fast
 
 board: rom
 	SUN2_DEFINES="$(DEFINES)" BOARD_MEM=$(BOARD_MEM) SUN2_CPU_HZ=$(CPU_HZ) \
-		./run_xsim_board.sh $(PLUSARGS) $(XSIMARGS)
+	SUN2_MACHINE=$(MACHINE) ./run_xsim_board.sh $(PLUSARGS) $(XSIMARGS)
 
 board-check:
-	./check_console.sh $(BUILD)/board-$(BOARD_MEM)/console.log $(MACHINE)
+	./check_console.sh $(BUILD)/board-$(BOARD_MEM)-$(MACHINE)/console.log $(MACHINE)
 
 # --- unit tests for the board layer ---------------------------------------
 clkgen adapter migddr3 dvma: rom
@@ -92,7 +100,7 @@ iverilog: rom
 	SUN2_DEFINES="$(DEFINES)" ./run_iverilog.sh $(PLUSARGS) $(IVSIMARGS)
 
 check:
-	./check_console.sh $(BUILD)/xsim/console.log $(MACHINE)
+	./check_console.sh $(BUILD)/xsim-$(MACHINE)/console.log $(MACHINE)
 
 clean:
 	rm -rf $(BUILD)

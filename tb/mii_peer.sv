@@ -48,6 +48,19 @@ module mii_peer #(
       mii_col    = 1'b0;   // and nobody to collide with
    end
 
+   // +crs_stuck jams carrier sense on, which is what a PHY out of reset, with
+   // no link, or with CRS wired to a pull-up looks like -- the Wukong pulls it
+   // up through R59.  Without a deferral timeout in the MAC this hangs the boot
+   // PROM outright, so this is how that defence gets tested rather than assumed.
+   int crs_stuck = 0;
+   initial begin
+      void'($value$plusargs("crs_stuck=%d", crs_stuck));
+      if (crs_stuck != 0) begin
+         $display("mii_peer: holding carrier sense asserted -- the medium never goes idle");
+         #1 mii_crs = 1'b1;
+      end
+   end
+
    // Two clocks of the same rate but deliberately not the same edge, as a PHY's
    // would be: the MAC crosses between them with gray-coded FIFOs and a
    // four-phase handshake, and running them in lockstep would hide a fault in

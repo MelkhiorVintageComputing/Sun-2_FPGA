@@ -283,18 +283,36 @@ module tb_dvma;
       checks++;
       if (!dvma_err) begin $display("FAIL: bus error did not latch dvma_err"); fail++; end
 
-      // A good address must now fail too -- the channel is stopped.
+      // A good address must now fail too -- the channel is stopped -- and,
+      // crucially, must not put a single cycle on the 68010 bus.  This is what
+      // keeps a faulting channel from becoming a memory scribbler: the 82586's
+      // units ignore bus errors entirely and will happily carry on with the
+      // zero they were handed, deriving a null descriptor pointer that is not
+      // the 0xFFFF they check for.  Nothing they then compute can reach memory,
+      // because the bridge refuses to run the cycle at all.
       err_lo = -1; err_hi = -1;
-      wb_access(1'b0, 22'h010, 4'b1111, 32'h0, rd, err);
-      checks++;
-      if (!err) begin
-         $display("FAIL: channel resumed after a bus error without an Ethernet reset");
-         fail++;
+      begin
+         int n0;
+         n0 = n_cycles;
+         mem[22'h010*4] = 8'h5A;
+         wb_access(1'b1, 22'h010, 4'b1111, 32'hDEADBEEF, rd, err);
+         checks++;
+         if (!err) begin
+            $display("FAIL: channel resumed after a bus error without an Ethernet reset");
+            fail++;
+         end
+         checks++;
+         if (n_cycles != n0) begin
+            $display("FAIL: a stopped channel still drove %0d bus cycles", n_cycles - n0);
+            fail++;
+         end
+         expect_byte(22'h010*4, 8'h5A, "memory untouched while the channel is stopped");
       end
 
       // Ethernet reset clears it.
       ether_reset <= 1'b1; repeat (2) @(posedge clk);
       ether_reset <= 1'b0; repeat (2) @(posedge clk);
+      wb_access(1'b1, 22'h010, 4'b1111, 32'hDDCCBBAA, rd, err);
       wb_access(1'b0, 22'h010, 4'b1111, 32'h0, rd, err);
       checks++;
       if (err) begin $display("FAIL: channel still stopped after Ethernet reset"); fail++; end

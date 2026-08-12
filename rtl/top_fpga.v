@@ -15,6 +15,11 @@ module top(input         cpu_clk,
 	   output 	 en_boot,
 	   output [7:0]  todebug,
 
+	   /* Ethernet diagnostics, for the board top to surface: a PHY that
+	    holds carrier sense asserted stops transmission dead, and it is the
+	    one failure the machine cannot otherwise report. */
+	   output 	 eth_crs_stuck,
+
 	   /* MII, for the on-board Ethernet of a VME machine.  Nothing on the
 	    Wukong drives these yet; in simulation they go to tb/mii_peer.sv. */
 	   input 	 mii_tx_clk,
@@ -241,6 +246,7 @@ module top(input         cpu_clk,
 			  .int_en(ether_int_en),
 			  .int_o(ether_int),
 			  .bus_err_o(ether_bus_err),
+			  .crs_stuck_o(eth_crs_stuck),
 
 			  .EN_DVMA(EN_DVMA),
 			  .P_BR_n(P_BR_n),
@@ -279,6 +285,7 @@ module top(input         cpu_clk,
    //
    assign ether_int     = 1'b0;
    assign ether_bus_err = 1'b0;
+   assign eth_crs_stuck = 1'b0;
    assign mii_txd       = 4'h0;
    assign mii_tx_en     = 1'b0;
    assign mii_tx_er     = 1'b0;

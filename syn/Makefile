@@ -43,7 +43,11 @@ ip: $(IPDIR)/sun2_mig.xci
 rom:
 	$(MAKE) -C $(TOP)/tools
 
-bitstream: ip rom | $(WORKDIR)
+# Immutable inputs that need a patch are copied and patched into build/inputs.
+inputs:
+	$(TOP)/tools/patch_inputs.sh Wish82586
+
+bitstream: ip rom inputs | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
 		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE)
 	@echo "bitstream: $(OUTDIR)/sun2_wukong_v1.bit"
@@ -58,4 +62,4 @@ clean:
 clean-ip:
 	rm -rf $(TOP)/build/ip
 
-.PHONY: all ip rom bitstream both clean clean-ip
+.PHONY: all ip rom inputs bitstream both clean clean-ip

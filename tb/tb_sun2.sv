@@ -26,7 +26,14 @@ module tb_sun2 #(
     // Console rate.  The PROM programs the SCC for 9600 from its 4.9152 MHz
     // clock (time constant 14, x16 mode).  Override with -generic_top / -P.
     parameter int    BAUD    = 9600,
-    parameter string CONSOLE = "console.log"
+    parameter string CONSOLE = "console.log",
+    // Wait states before the memory acknowledges.  Zero is a memory that
+    // answers next cycle, which is what every simulation of this design used
+    // until the real path was measured: through MIG a Wishbone read takes 7
+    // cpu_clk from STB to ACK (make -C sim migddr3 reports it).  That matters
+    // now that the Ethernet competes for the same bus by DVMA, so run the VME
+    // machine at 7 before trusting anything about Ethernet bandwidth.
+    parameter int    MEM_LATENCY = 0
 )();
 
    // ------------------------------------------------------------------
@@ -107,6 +114,13 @@ module tb_sun2 #(
    wire       mii_tx_clk, mii_tx_en, mii_tx_er, mii_rx_clk, mii_rx_dv, mii_rx_er;
    wire       mii_crs, mii_col;
    wire [3:0] mii_txd, mii_rxd;
+   wire       eth_crs_stuck;
+
+   // A PHY that never releases carrier hangs the boot PROM with nothing
+   // printed; say so rather than letting the run just time out.
+   always @(posedge eth_crs_stuck)
+     $display("[%t] WARNING: carrier sense stuck asserted -- transmission cannot proceed",
+              $realtime);
 
    mii_peer peer(.mii_tx_clk(mii_tx_clk), .mii_txd(mii_txd),
                  .mii_tx_en(mii_tx_en), .mii_tx_er(mii_tx_er),
@@ -125,6 +139,8 @@ module tb_sun2 #(
            .diag_leds(diag_leds),
            .en_boot(en_boot),
            .todebug(todebug),
+
+           .eth_crs_stuck(eth_crs_stuck),
 
            .mii_tx_clk(mii_tx_clk),
            .mii_txd(mii_txd),
@@ -149,7 +165,7 @@ module tb_sun2 #(
 
    // Main memory. In the FPGA build this is LiteDRAM behind a clock-domain
    // crossing; here a plain one-cycle-ack model in the CPU clock domain.
-   wb_ram_model #(.ACK_LATENCY(0)) ram(.clk(cpu_clk),
+   wb_ram_model #(.ACK_LATENCY(MEM_LATENCY)) ram(.clk(cpu_clk),
                                        .reset(sys_reset),
                                        .wb_cyc_i(wb_cyc),
                                        .wb_stb_i(wb_stb),

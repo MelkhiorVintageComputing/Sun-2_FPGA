@@ -1,0 +1,91 @@
+--- a/src/mii_tx.sv	2026-08-10 15:36:34.377181762 +0200
++++ b/src/mii_tx.sv	2026-08-12 16:11:26.041852952 +0200
+@@ -20,7 +20,27 @@
+ // runs, which cannot happen while a transmit is in flight.
+ 
+ module mii_tx #(
+-    parameter int DATA_W = 4
++    parameter int DATA_W = 4,
++    // Give up deferring after this many symbol times of continuous carrier,
++    // and report the frame as failed rather than waiting for a medium that is
++    // never going to go idle.  Zero restores the real part's behaviour, which
++    // is to defer forever.
++    //
++    // A real 82586 has no such timeout, and on a working network it would never
++    // matter: the longest legitimate carrier is one maximum-length frame, about
++    // 1.2 ms at 10 Mb/s.  It matters on a board being brought up for the first
++    // time, because a PHY that holds CRS asserted -- out of reset, with no link,
++    // or wired to a pull-up, as on a QMTech Wukong -- otherwise stops the
++    // machine dead.  The 82586's driver waits on the command block's done bit
++    // with no timeout of its own, so a transmit that never finishes is a hang
++    // with nothing printed and no bus error to show for it.
++    //
++    // The default is 2^16 symbol times: 26 ms at the 2.5 MHz MII clock of a
++    // 10 Mb/s link.  The longest carrier a conforming station can produce is
++    // one maximum-length frame -- 1214 us, about 3000 symbol times -- so this
++    // is twenty times past anything legitimate and still short enough to
++    // simulate.
++    parameter int DEFER_LIMIT = 1 << 16
+ ) (
+     input  logic        tx_clk,
+     input  logic        rst,
+@@ -88,6 +108,7 @@
+   logic [4:0]  pre_cnt;
+   logic [2:0]  fcs_cnt;
+   logic [15:0] gap_cnt;
++  logic [23:0] defer_ctr;   // symbol times spent waiting for a quiet medium
+   logic [4:0]  jam_cnt;
+   logic [3:0]  attempt;
+   logic        deferred;
+@@ -166,6 +187,7 @@
+       jam_cnt  <= 5'h0;
+       attempt  <= 4'h0;
+       deferred <= 1'b0;
++      defer_ctr <= 24'h0;
+       lfsr     <= 16'hace1;
+       txd      <= '0;
+       tx_en    <= 1'b0;
+@@ -192,6 +214,7 @@
+             xcoll_o  <= 1'b0;
+             no_crs_o <= 1'b0;
+             gap_cnt  <= ifs_nibbles;
++            defer_ctr <= 24'h0;
+             state    <= T_DEFER;
+           end
+         end
+@@ -201,13 +224,30 @@
+           if (crs) begin
+             deferred <= 1'b1;
+             gap_cnt  <= ifs_nibbles;
++            // Carrier that never goes away.  Report it the way the medium
++            // being unusable is normally reported -- excessive collisions --
++            // because that is a status the driver already acts on: the Sun-2
++            // boot PROM prints "ie: Ethernet cable problem", which is an
++            // accurate description of a jammed or absent link and is visible
++            // on the console without any other instrumentation.
++            if (DEFER_LIMIT != 0) begin
++              if (defer_ctr == 24'(DEFER_LIMIT)) begin
++                xcoll_o   <= 1'b1;
++                defer_ctr <= 24'h0;
++                state     <= T_DONE;
++              end else begin
++                defer_ctr <= defer_ctr + 24'd1;
++              end
++            end
+           end else if (gap_cnt != 16'h0) begin
+-            gap_cnt <= gap_cnt - 16'd1;
++            gap_cnt   <= gap_cnt - 16'd1;
++            defer_ctr <= 24'h0;
+           end else begin
+-            idx     <= 16'h0;
+-            phase   <= 1'b0;
+-            pre_cnt <= (DATA_W == 4) ? 5'd16 : 5'd8;
+-            state   <= T_PREAMBLE;
++            idx       <= 16'h0;
++            phase     <= 1'b0;
++            pre_cnt   <= (DATA_W == 4) ? 5'd16 : 5'd8;
++            defer_ctr <= 24'h0;
++            state     <= T_PREAMBLE;
+           end
+         end
+ 

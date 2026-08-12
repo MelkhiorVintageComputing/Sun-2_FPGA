@@ -37,6 +37,7 @@ module sun2_ethernet #(
     input  wire        int_en,
     output wire        int_o,        // to the level 3 interrupt
     output wire        bus_err_o,    // the E.ERR bit, latched until reset
+    output wire        crs_stuck_o,  // carrier has been asserted implausibly long
 
     // Arbitration and the CPU bus, muxed in top_fpga
     input  wire        EN_DVMA,
@@ -80,6 +81,54 @@ module sun2_ethernet #(
      if (RESET) ca_d <= 1'b0;
      else       ca_d <= ca;
 
+   //
+   // Carrier sense and collision, synchronised.
+   //
+   // IEEE 802.3 clause 22.2.2.11/12 defines CRS and COL as asynchronous to
+   // both MII clocks -- the PHY is free to move them whenever it likes -- and
+   // the MAC consumes them directly in transmit FSM next-state terms and in
+   // its CRC enable.  Two flops in the transmit clock domain is the standard
+   // answer, and it belongs here rather than in the MAC because this is the
+   // module that owns the pins.
+   //
+   // This matters more than it looks on this board.  R59 pulls CRS *up*, so
+   // any moment the PHY is not actively driving it low -- during its own
+   // reset, with no link, or depending on how it behaves in full duplex --
+   // the line reads as "carrier present".  The MAC's T_DEFER state reloads
+   // its interframe counter for as long as carrier is asserted, with no
+   // timeout, so a high CRS means the transmit never completes, the command
+   // unit waits forever, and the boot PROM's `while (!cb->ie_done)` never
+   // returns.  No message, no bus error, no LED: the machine simply stops.
+   //
+   // Synchronising removes the metastability half of that.  The missing
+   // timeout is a Wish82586 matter and is still worth fixing there.
+   //
+   // Tying mii_tx_clk to a constant, as a board with no PHY does, leaves these
+   // registers unclocked and reading zero -- which is the safe direction: no
+   // carrier, so nothing defers.
+   (* ASYNC_REG = "TRUE" *) reg crs_s1, crs_s2, col_s1, col_s2;
+   always @(posedge mii_tx_clk or posedge RESET)
+     if (RESET) begin
+        crs_s1 <= 1'b0; crs_s2 <= 1'b0;
+        col_s1 <= 1'b0; col_s2 <= 1'b0;
+     end else begin
+        crs_s1 <= mii_crs; crs_s2 <= crs_s1;
+        col_s1 <= mii_col; col_s2 <= col_s1;
+     end
+
+   // How long carrier has been continuously asserted, for the diagnostic
+   // register: a PHY that never lets go is the failure this cannot otherwise
+   // report, and on a board that cannot be probed it is worth a counter.
+   reg [15:0] crs_stuck_ctr;
+   always @(posedge mii_tx_clk or posedge RESET)
+     if (RESET)          crs_stuck_ctr <= 16'h0;
+     else if (~crs_s2)   crs_stuck_ctr <= 16'h0;
+     else if (~&crs_stuck_ctr) crs_stuck_ctr <= crs_stuck_ctr + 16'h1;
+
+   // Saturated is ~26 ms of transmit clock at 10 Mb/s -- orders of magnitude
+   // longer than any legitimate deferral.
+   assign crs_stuck_o = &crs_stuck_ctr;
+
    wire        wbm_cyc, wbm_stb, wbm_we, wbm_ack, wbm_err;
    wire [3:0]  wbm_sel;
    wire [29:0] wbm_adr;
@@ -119,8 +168,8 @@ module sun2_ethernet #(
        .mii_rxd(mii_rxd),
        .mii_rx_dv(mii_rx_dv),
        .mii_rx_er(mii_rx_er),
-       .mii_crs(mii_crs),
-       .mii_col(mii_col)
+       .mii_crs(crs_s2),
+       .mii_col(col_s2)
    );
 
    // The master drives 22 meaningful address bits -- the 24-bit byte space the
