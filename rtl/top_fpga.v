@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+`include "sun2_config.vh"
+
 module top(input         cpu_clk,
 	   input 	 clk40,
 	   input 	 clk4m9152,
@@ -12,6 +14,19 @@ module top(input         cpu_clk,
 	   output [7:0]  diag_leds,
 	   output 	 en_boot,
 	   output [7:0]  todebug,
+
+	   /* MII, for the on-board Ethernet of a VME machine.  Nothing on the
+	    Wukong drives these yet; in simulation they go to tb/mii_peer.sv. */
+	   input 	 mii_tx_clk,
+	   output [3:0]  mii_txd,
+	   output 	 mii_tx_en,
+	   output 	 mii_tx_er,
+	   input 	 mii_rx_clk,
+	   input [3:0] 	 mii_rxd,
+	   input 	 mii_rx_dv,
+	   input 	 mii_rx_er,
+	   input 	 mii_crs,
+	   input 	 mii_col,
 
 	   /* wishbone */
 	   output 	 wb_cyc_o,
@@ -51,6 +66,19 @@ module top(input         cpu_clk,
    wire [15:0] P_DOUT;
    wire        DATA_EN;
    wire [31:0] ADR_OUT;
+
+   // The CPU's own bus outputs, before the DVMA mux below.
+   wire [2:0]  cpu_fc;
+   wire        cpu_as_n, cpu_rw_n, cpu_uds_n, cpu_lds_n;
+   wire [15:0] cpu_dout;
+
+   // The alternate master's, and the Ethernet control register's signals.
+   wire        EN_DVMA, dvma_active, dvma_as_n, dvma_rw_n, dvma_uds_n, dvma_lds_n;
+   wire [23:1] dvma_a;
+   wire [2:0]  dvma_fc;
+   wire [15:0] dvma_dout;
+   wire        ether_core_reset_n, ether_loopback_n, ether_ca, ether_int_en;
+   wire        ether_int, ether_bus_err;
    
    
    sun2_fpga sun2(.cpu_clk(cpu_clk),
@@ -61,8 +89,6 @@ module top(input         cpu_clk,
 		  .P_VPA_n(P_VPA_n),
 		  .P_BERR_n(P_BERR_n),
 		  .P_DTACK_n(P_DTACK_n),
-		  .P_BR_n(P_BR_n),
-		  .P_BGACK_n(P_BGACK_n),
 		  
   		  .P_RESET_n(P_RESET_n),
 		  .P_HALT_n(P_HALT_n),
@@ -89,6 +115,14 @@ module top(input         cpu_clk,
 		  .tx(tx),
 		  .rx(rx),
 
+		  .EN_DVMA_o(EN_DVMA),
+		  .ether_core_reset_n(ether_core_reset_n),
+		  .ether_loopback_n(ether_loopback_n),
+		  .ether_ca(ether_ca),
+		  .ether_int_en(ether_int_en),
+		  .ether_int(ether_int),
+		  .ether_bus_err(ether_bus_err),
+
 		  .diag_leds(diag_leds),
 		  .en_boot(en_boot),
 		  .todebug(todebug),
@@ -114,7 +148,32 @@ module top(input         cpu_clk,
    assign P_RESET_n = ~sys_reset;// & ~RESET_OUT; /* board reset or CPU reset => reset system */
    assign HALT_INn = ~sys_reset;// & ~RESET_OUT; /* board reset => reset CPU (HALTn seem needed) */
 
-   assign P_A = ADR_OUT[23:1];
+   //
+   // The bus mux: CPU, or the alternate master doing DVMA.
+   //
+   // Everything downstream of these wires -- the MMU, the protection check, the
+   // bus timing chain, DTACK, the bus error register, every device decode --
+   // is shared, which is exactly how the real machine works.  Schematic sheet
+   // A03 and Architecture Manual section 7: DVMA cycles are translated and
+   // protected identically to CPU cycles, so a DVMA cycle is a supervisor-data
+   // CPU cycle as far as anything past this point can tell.
+   //
+   // dvma_active is only ever asserted after the Suska core has granted the bus
+   // *and* dropped BUS_EN, so the two never drive together.
+   //
+   assign P_A     = dvma_active ? dvma_a     : ADR_OUT[23:1];
+   assign P_FC    = dvma_active ? dvma_fc    : cpu_fc;
+   assign P_AS_n  = dvma_active ? dvma_as_n  : cpu_as_n;
+   assign P_RW_n  = dvma_active ? dvma_rw_n  : cpu_rw_n;
+   assign P_UDS_n = dvma_active ? dvma_uds_n : cpu_uds_n;
+   assign P_LDS_n = dvma_active ? dvma_lds_n : cpu_lds_n;
+   assign P_DIN   = dvma_active ? dvma_dout  : cpu_dout;
+
+   // Two-wire arbitration, as on the 2/50: BGACK is tied high and a master
+   // holds BR for as long as it wants the bus.  MC68000UM section 5.2 requires
+   // BGACK pulled high for this, and the Suska core's arbiter handles it in its
+   // GRANT state.  Deliberate, not a stub.
+   assign P_BGACK_n = 1'b1;
 
    wire        P_RMC_n; // unused
    wire [31:0] PC;
@@ -150,14 +209,14 @@ module top(input         cpu_clk,
 			   .BGACKn(P_BGACK_n),
 			   .K6800n(1'b1),
 			   .ADR_OUT(ADR_OUT),
-			   .DATA_OUT(P_DIN), // OUT for CPU, IN for sun2
+			   .DATA_OUT(cpu_dout), // OUT for CPU, IN for sun2
 			   .DATA_EN(DATA_EN),
-			   .FC_OUT(P_FC),
-			   .ASn(P_AS_n),
-			   .RWn(P_RW_n),
+			   .FC_OUT(cpu_fc),
+			   .ASn(cpu_as_n),
+			   .RWn(cpu_rw_n),
 			   .RMCn(P_RMC_n),
-			   .UDSn(P_UDS_n),
-			   .LDSn(P_LDS_n),
+			   .UDSn(cpu_uds_n),
+			   .LDSn(cpu_lds_n),
 			    .DBENn(),
 			   .BUS_EN(BUS_EN),
 			    .E(),
@@ -166,6 +225,100 @@ module top(input         cpu_clk,
 			   .BGn(P_BG_n)
 			   //,.PC(PC)
 			   );
+
+   //
+   // DVMA bus master.  Nothing requests through it yet -- the 82586 goes in
+   // next -- so dvma_active stays low and the machine behaves exactly as it did
+   // before the mux above existed.
+   //
+`ifdef SUN2_VME
+   sun2_ethernet ethernet(.CLK(C100),
+			  .RESET(sys_reset),
+
+			  .core_reset_n(ether_core_reset_n),
+			  .loopback_n(ether_loopback_n),
+			  .ca(ether_ca),
+			  .int_en(ether_int_en),
+			  .int_o(ether_int),
+			  .bus_err_o(ether_bus_err),
+
+			  .EN_DVMA(EN_DVMA),
+			  .P_BR_n(P_BR_n),
+			  .P_BG_n(P_BG_n),
+			  .BUS_EN(BUS_EN),
+			  .cpu_as_n(cpu_as_n),
+
+			  .dvma_active(dvma_active),
+			  .dvma_a(dvma_a),
+			  .dvma_fc(dvma_fc),
+			  .dvma_as_n(dvma_as_n),
+			  .dvma_rw_n(dvma_rw_n),
+			  .dvma_uds_n(dvma_uds_n),
+			  .dvma_lds_n(dvma_lds_n),
+			  .dvma_dout(dvma_dout),
+			  .dvma_din(P_DOUT),
+			  .P_DTACK_n(P_DTACK_n),
+			  .P_BERR_n(P_BERR_n),
+
+			  .mii_tx_clk(mii_tx_clk),
+			  .mii_txd(mii_txd),
+			  .mii_tx_en(mii_tx_en),
+			  .mii_tx_er(mii_tx_er),
+			  .mii_rx_clk(mii_rx_clk),
+			  .mii_rxd(mii_rxd),
+			  .mii_rx_dv(mii_rx_dv),
+			  .mii_rx_er(mii_rx_er),
+			  .mii_crs(mii_crs),
+			  .mii_col(mii_col)
+			  );
+`else
+   //
+   // MultiBus: no on-board Ethernet.  The 2/120's equivalent I/O page is an
+   // 80287 socket, so there is nothing here to request the bus and the mux
+   // above folds away entirely.
+   //
+   assign ether_int     = 1'b0;
+   assign ether_bus_err = 1'b0;
+   assign mii_txd       = 4'h0;
+   assign mii_tx_en     = 1'b0;
+   assign mii_tx_er     = 1'b0;
+
+   sun2_dvma dvma(.CLK(C100),
+		  .RESET(sys_reset),
+
+		  .wb_cyc_i(1'b0),
+		  .wb_stb_i(1'b0),
+		  .wb_we_i(1'b0),
+		  .wb_sel_i(4'h0),
+		  .wb_adr_i(22'h0),
+		  .wb_dat_i(32'h0),
+		  .wb_dat_o(),
+		  .wb_ack_o(),
+		  .wb_err_o(),
+
+		  .EN_DVMA(EN_DVMA),
+		  .P_BR_n(P_BR_n),
+		  .P_BG_n(P_BG_n),
+		  .BUS_EN(BUS_EN),
+		  .cpu_as_n(cpu_as_n),
+
+		  .dvma_active(dvma_active),
+		  .dvma_a(dvma_a),
+		  .dvma_fc(dvma_fc),
+		  .dvma_as_n(dvma_as_n),
+		  .dvma_rw_n(dvma_rw_n),
+		  .dvma_uds_n(dvma_uds_n),
+		  .dvma_lds_n(dvma_lds_n),
+		  .dvma_dout(dvma_dout),
+
+		  .dvma_din(P_DOUT),
+		  .P_DTACK_n(P_DTACK_n),
+		  .P_BERR_n(P_BERR_n),
+
+		  .ether_reset(~ether_core_reset_n),
+		  .dvma_err()
+		  );
+`endif
 
    // assign todebug = PC[7:0] ;
 

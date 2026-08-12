@@ -10,8 +10,6 @@ module sun2_fpga(input         cpu_clk,
 		 output        P_VPA_n,
 		 output        P_BERR_n,
 		 output        P_DTACK_n,
-		 output        P_BR_n,
-		 output        P_BGACK_n,
 
 		 input 	       P_RESET_n, // CPU reset, not full board
 		 output        P_HALT_n, // checkme
@@ -37,6 +35,17 @@ module sun2_fpga(input         cpu_clk,
 		 /* serial */
 		 output        tx,
 		 input 	       rx,
+		 /* DVMA and on-board Ethernet.  The controller and its bus
+		  master live in top_fpga, because that is where the CPU bus is
+		  muxed; what belongs here is the control register in device
+		  space and the enable bit in the system register. */
+		 output        EN_DVMA_o,
+		 output        ether_core_reset_n,
+		 output        ether_loopback_n,
+		 output        ether_ca,
+		 output        ether_int_en,
+		 input 	       ether_int,
+		 input 	       ether_bus_err,
 		 /* debug */
 		 output [7:0]  diag_leds,
 		 output        en_boot,
@@ -54,8 +63,6 @@ module sun2_fpga(input         cpu_clk,
    // 180° clock
    wire 	       C100_n;
 
-   assign P_BR_n = 1'b1; // FIXME for actual devices
-   assign P_BGACK_n = 1'b1; // FIXME for actual devices
    
    assign P_HALT_n = 1'b1; // FIXME ?
 
@@ -359,6 +366,7 @@ module sun2_fpga(input         cpu_clk,
    assign EN_INT3   = sys_out[3];
    assign EN_PARERR = sys_out[4];
    assign EN_DVMA   = sys_out[5];
+   assign EN_DVMA_o = EN_DVMA;
    assign EN_INT    = sys_out[6];
    assign BOOT_n    = sys_out[7];
 
@@ -671,13 +679,12 @@ module sun2_fpga(input         cpu_clk,
 			   .din(P_DIN[15:8]),
 			   .WR(WR & MATCH_ETHER & C_S8),
 			   .dout(ether_out),
-			   // Nothing on the other side yet.
-			   .core_reset_n(),
-			   .loopback_n(),
-			   .ca(),
-			   .int_en(),
-			   .int_in(1'b0),
-			   .bus_err_in(1'b0)
+			   .core_reset_n(ether_core_reset_n),
+			   .loopback_n(ether_loopback_n),
+			   .ca(ether_ca),
+			   .int_en(ether_int_en),
+			   .int_in(ether_int),
+			   .bus_err_in(ether_bus_err)
 			   );
 `else
    assign MATCH_ETHER = 1'b0;
@@ -810,7 +817,12 @@ module sun2_fpga(input         cpu_clk,
 			   );
    assign INT1_n = ~EN_INT1;
    assign INT2_n = ~EN_INT2;
-   assign INT3_n = ~EN_INT3;
+   // Level 3 carries both the software-settable interrupt and the on-board
+   // Ethernet (Architecture Manual 6.13, "Interrupts: Level 3"); the control
+   // register's INTEN gates the latter, and sun2_ether_ctl has already applied
+   // it.  A MultiBus machine has no on-board Ethernet, so ether_int is tied low
+   // there and this reduces to what it always was.
+   assign INT3_n = ~(EN_INT3 | ether_int);
    assign INT4_n = 1'b1; // FIXME
    assign INT5_n = ~timer_int[2] & ~timer_int[3] & ~timer_int[4] & ~timer_int[5];
    assign INT6_n = serial_int_n;

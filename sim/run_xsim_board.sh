@@ -99,6 +99,7 @@ xvlog --work sun2 "${defargs[@]}" \
 	"$top/rtl/idprom.v" \
 	"$top/rtl/gen8bit_reg.v" \
 	"$top/rtl/sun2_ether_ctl.v" \
+	"$top/rtl/sun2_dvma.v" \
 	"$top/rtl/ttl_am9513.v" \
 	"$top/rtl/ttl_74F151.v" \
 	"$top/rtl/ttl_74LS148.v" \
@@ -133,6 +134,20 @@ fi
 
 xvlog --sv --work sun2 "${defargs[@]}" "${incargs[@]}" \
 	-i "$top/rtl" -i "$top/build/rom" \
+	"$top/Inputs/Wish82586/src/wish82586_pkg.sv" \
+	"$top/Inputs/Wish82586/src/async_fifo.sv" \
+	"$top/Inputs/Wish82586/src/sync_fifo.sv" \
+	"$top/Inputs/Wish82586/src/dp_ram.sv" \
+	"$top/Inputs/Wish82586/src/crc32_eth.sv" \
+	"$top/Inputs/Wish82586/src/mii_rx.sv" \
+	"$top/Inputs/Wish82586/src/mii_tx.sv" \
+	"$top/Inputs/Wish82586/src/wb_master.sv" \
+	"$top/Inputs/Wish82586/src/wb_arb.sv" \
+	"$top/Inputs/Wish82586/src/ie_core.sv" \
+	"$top/Inputs/Wish82586/src/ie_cu.sv" \
+	"$top/Inputs/Wish82586/src/ie_ru.sv" \
+	"$top/Inputs/Wish82586/src/wish82586.sv" \
+	"$top/rtl/sun2_ethernet.sv" \
 	"$top/Inputs/z8530_scc/z8530_scc.sv" \
 	"${board_src[@]}" \
 	"${tb_src[@]}"

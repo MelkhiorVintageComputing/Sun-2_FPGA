@@ -16,6 +16,7 @@
 #   make board-check               assert that boot reached the prompt
 #   make clkgen                    measure what the clock generator produces
 #   make adapter                   check the Wishbone-to-MIG adapter
+#   make dvma                      check the Wishbone-to-68010 DVMA bridge
 #
 # Extra plusargs go through XSIMARGS, e.g.
 #   make xsim XSIMARGS="-testplusarg vcd_full"
@@ -84,7 +85,7 @@ board-check:
 	./check_console.sh $(BUILD)/board-$(BOARD_MEM)/console.log $(MACHINE)
 
 # --- unit tests for the board layer ---------------------------------------
-clkgen adapter migddr3: rom
+clkgen adapter migddr3 dvma: rom
 	./run_unit.sh $@
 
 iverilog: rom

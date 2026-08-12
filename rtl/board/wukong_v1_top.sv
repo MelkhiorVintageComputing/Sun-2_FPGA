@@ -143,6 +143,20 @@ module wukong_v1_top #(
        .en_boot    (en_boot),
        .todebug    (todebug),
 
+       // No PHY wired to the board yet.  The Wukong has an RTL8211EG strapped
+       // for GMII, but bringing it up is a separate step; a VME bitstream
+       // built now simply has an Ethernet that never sees a clock.
+       .mii_tx_clk (1'b0),
+       .mii_txd    (),
+       .mii_tx_en  (),
+       .mii_tx_er  (),
+       .mii_rx_clk (1'b0),
+       .mii_rxd    (4'h0),
+       .mii_rx_dv  (1'b0),
+       .mii_rx_er  (1'b0),
+       .mii_crs    (1'b0),
+       .mii_col    (1'b0),
+
        .wb_cyc_o   (wb_cyc),
        .wb_stb_o   (wb_stb),
        .wb_adr_o   (wb_adr),

@@ -58,8 +58,37 @@ ef0e64 0e38 f350
 # same, and takes a second or so over it; simulated, it does not finish inside
 # any sane timeout.
 #
-# Cut the count to 2.  This is a simulation speedup, not a fix: the outcome is
-# identical, only reached sooner.  Wiring up a real 82586 would make the loop
-# exit on its own.
+# Cut the count to 1000.  With a working 82586 the loop exits on the first or
+# second pass, so this costs nothing; without one it bounds the ten retries at
+# about 75 ms of simulated time instead of ten seconds.
+#
+# Do not cut it much further.  The chip has real work to do inside this window
+# -- fetch the SCP, read the ISCP, write the busy byte back -- and every one of
+# those is a DVMA cycle arbitrated against the CPU.  At two iterations, which is
+# what this said while page 0xFE1 was still a stub, a perfectly good controller
+# looks broken.
 ef4012 0001 0000
-ef4014 86a0 0002
+ef4014 86a0 03e8
+
+# ef4d40  the retry count in ndread(), mon/prom2/nd.c:
+#
+#   for (i = 0; i < limit; i++) {
+#           ndxmit(sip);
+#           if ((ok = ndrecv(sip)) >= 0) break;
+#           printf("?\b");
+#   }
+#   if (i == limit) { printf("nd: no file server, giving up.\n"); return (-1); }
+#
+#   ef4d3c  movel #500,%fp@(-16)      <- immediate long at ef4d3e/ef4d40
+#
+# Each pass broadcasts an ND read request and waits two seconds of NMI-clock
+# time for an answer, then resets the whole chip.  With no server on the wire
+# that is 500 x ~0.8 s of simulated time -- several minutes of it -- before the
+# monitor gives up and returns to the prompt.
+#
+# Cut it to 3.  The behaviour is identical, just reached sooner: the machine
+# still sends real frames, still times out on each, still prints its "?" per
+# attempt and still ends at "nd: no file server, giving up."  Put a server on
+# the other end of tb/mii_peer.sv and the first pass would succeed regardless
+# of this count.
+ef4d40 01f4 0003

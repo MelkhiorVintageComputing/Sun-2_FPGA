@@ -4,6 +4,7 @@
 #
 #   ./run_unit.sh clkgen    measures what wukong_clkgen actually generates
 #   ./run_unit.sh adapter   wb_to_mig_ui against wb_ram_model, randomised
+#   ./run_unit.sh dvma      sun2_dvma: Wishbone master -> 68010 bus cycles
 #
 set -e -o pipefail
 
@@ -34,6 +35,17 @@ clkgen)
 		xsim clkgen_sim -R | grep -E 'wukong_clkgen:|measured|PASS|FAIL|ok$|FAIL$|===|kHz'
 	done
 	;;
+dvma)
+	# Compiler output is filtered, not discarded: a syntax error here used to
+	# make the whole target exit silently with nothing to show for it.
+	# An `if' condition is exempt from set -e, so a clean compile does not
+	# abort the script just because grep matched nothing.
+	if xvlog "$top/rtl/sun2_dvma.v" | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xvlog --sv "$top/tb/tb_dvma.sv" | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug off work.tb_dvma -s dvma_sim | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	xsim dvma_sim -R | grep -E '===|PASS|FAIL|checks'
+	;;
+
 adapter)
 	xvlog --sv \
 		"$top/rtl/board/wb_to_mig_ui.sv" \

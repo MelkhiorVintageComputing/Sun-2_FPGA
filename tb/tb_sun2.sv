@@ -101,6 +101,19 @@ module tb_sun2 #(
    wire [31:0] wb_dat_m2s, wb_dat_s2m;
    wire [3:0]  wb_sel;
 
+   // The MII side.  Needed even though nothing is plugged in: without a
+   // transmit clock the 82586 never finishes a TRANSMIT command, and the boot
+   // PROM waits on that with no timeout.
+   wire       mii_tx_clk, mii_tx_en, mii_tx_er, mii_rx_clk, mii_rx_dv, mii_rx_er;
+   wire       mii_crs, mii_col;
+   wire [3:0] mii_txd, mii_rxd;
+
+   mii_peer peer(.mii_tx_clk(mii_tx_clk), .mii_txd(mii_txd),
+                 .mii_tx_en(mii_tx_en), .mii_tx_er(mii_tx_er),
+                 .mii_rx_clk(mii_rx_clk), .mii_rxd(mii_rxd),
+                 .mii_rx_dv(mii_rx_dv), .mii_rx_er(mii_rx_er),
+                 .mii_crs(mii_crs), .mii_col(mii_col));
+
    top dut(.cpu_clk(cpu_clk),
            .clk40(clk40),
            .clk4m9152(clk4m9152),
@@ -112,6 +125,17 @@ module tb_sun2 #(
            .diag_leds(diag_leds),
            .en_boot(en_boot),
            .todebug(todebug),
+
+           .mii_tx_clk(mii_tx_clk),
+           .mii_txd(mii_txd),
+           .mii_tx_en(mii_tx_en),
+           .mii_tx_er(mii_tx_er),
+           .mii_rx_clk(mii_rx_clk),
+           .mii_rxd(mii_rxd),
+           .mii_rx_dv(mii_rx_dv),
+           .mii_rx_er(mii_rx_er),
+           .mii_crs(mii_crs),
+           .mii_col(mii_col),
 
            .wb_cyc_o(wb_cyc),
            .wb_stb_o(wb_stb),
@@ -208,6 +232,70 @@ module tb_sun2 #(
                  dut.IPL2_n, dut.IPL1_n, dut.IPL0_n);
      end
 
+   // DVMA tracing.  +trace_dvma=N reports the first N bus cycles the Ethernet
+   // takes as an alternate master.  Without this a translation fault, a byte
+   // order mistake and a chip that never started are indistinguishable -- all
+   // three just leave the boot PROM printing "ie: cannot initialize", and its
+   // driver never reads the bus-error bit that would tell them apart.
+   //
+   // What to look for, in order: three reads around 0xFFFFF6 (the SCP the part
+   // has hard-wired), two at 0x0A0400 (the ISCP), then a write of zero to
+   // 0x0A0400 -- that last one is what the PROM is spinning on.
+   int trace_dvma = 0, n_dvma = 0;
+   initial void'($value$plusargs("trace_dvma=%d", trace_dvma));
+
+   // Everything is latched at the instant it is actually valid: address and
+   // strobes when AS falls, data on the clock edge the cycle is acknowledged.
+   // Sampling it all when AS rises reports the strobes already withdrawn and
+   // races the read mux, which is a good way to chase a bug that is not there.
+   logic [23:0] cap_a;
+   logic        cap_rw, cap_uds, cap_lds, cap_berr;
+   logic [15:0] cap_d;
+   logic [11:0] cap_pp;
+   logic [2:0]  cap_ty;
+
+   always @(negedge dut.dvma_as_n) begin
+      cap_a    <= {dut.dvma_a, 1'b0};
+      cap_rw   <= dut.dvma_rw_n;
+      cap_uds  <= ~dut.dvma_uds_n;
+      cap_lds  <= ~dut.dvma_lds_n;
+      cap_berr <= 1'b0;
+   end
+
+   always @(posedge dut.C100)
+     if (!dut.dvma_as_n && dut.dvma_active) begin
+        if (!dut.P_DTACK_n) begin
+           cap_d <= dut.dvma_rw_n ? dut.P_DOUT : dut.dvma_dout;
+           cap_pp <= dut.sun2.ma_pmap2devices;
+           cap_ty <= dut.sun2.TYPE;
+        end
+        if (!dut.P_BERR_n)
+          cap_berr <= 1'b1;
+     end
+
+   always @(posedge dut.dvma_as_n)
+     if (dut.dvma_active) begin
+        n_dvma++;
+        if (n_dvma <= trace_dvma)
+          $display("[%t] DVMA #%0d: A=%06x %s uds=%0d lds=%0d data=%04x -> type %0d page %03x%s",
+                   $realtime, n_dvma, cap_a, cap_rw ? "read " : "write",
+                   cap_uds, cap_lds, cap_d, cap_ty, cap_pp,
+                   cap_berr ? "  <- BUS ERROR" : "");
+     end
+
+   // What the CPU does to the same window.  The driver saves the ten bytes at
+   // 0xFFFFF6, writes its SCP there, lets the chip fetch it and puts them back;
+   // if the CPU's writes and the chip's reads do not land on the same physical
+   // page, that is the whole bug and this is what shows it.
+   always @(posedge dut.C100)
+     if (trace_dvma > 0 && !dut.dvma_active && !dut.P_AS_n && !dut.P_DTACK_n
+         && dut.sun2.FC_GENERAL && {dut.P_A, 1'b0} >= 24'hfffff6)
+       $display("[%t]  CPU: A=%06x %s FC=%0d uds=%0d lds=%0d data=%04x -> type %0d page %03x",
+                $realtime, {dut.P_A, 1'b0}, dut.P_RW_n ? "read " : "write",
+                dut.P_FC, ~dut.P_UDS_n, ~dut.P_LDS_n,
+                dut.P_RW_n ? dut.P_DOUT : dut.P_DIN,
+                dut.sun2.TYPE, dut.sun2.ma_pmap2devices);
+
    always @(negedge dut.HALT_OUTn)
      $display("[%t] CPU HALTED (double bus fault) with A=%06x", $realtime, {dut.P_A, 1'b0});
 
@@ -234,6 +322,7 @@ module tb_sun2 #(
       $display("=== %s at %t ===", why, $realtime);
       flush_repeats();
       if (n_berr > 0) $display("%0d bus errors in total", n_berr);
+      if (n_dvma > 0) $display("%0d DVMA cycles in total", n_dvma);
       console_mon.report();
       ram.report();
       $finish;

@@ -30,7 +30,9 @@ git submodule update --init
 ```
 
 Nothing under `Inputs/` is ever edited in place. If a change to that material
-becomes necessary, it lives as a patch in this repository instead.
+becomes necessary, it lives as a patch in this repository instead — the same
+principle as the boot PROM, which is patched into `build/rom/` rather than
+modified where it sits.
 
 The sources under `Inputs/`:
 
@@ -44,9 +46,11 @@ The sources under `Inputs/`:
   so the CPU clock is free — the Suska SCC constrains it far too tightly. Feed
   its serial clock 4.9152 MHz and the PROM's own register table gives a correct
   9600 baud console.
-* `Wish82586` — Intel 82586 Ethernet, for the VME machines later. Not built
-  yet; its `src/wb_csr_sun2.sv` is the same control register `rtl/sun2_ether_ctl.v`
-  implements natively, and the two should be kept reconcilable.
+* `Wish82586` — the Intel 82586 Ethernet controller, used as the VME machine's
+  on-board Ethernet. Its `src/wb_csr_sun2.sv` is the same control register
+  `rtl/sun2_ether_ctl.v` implements natively; we use ours, because it sits in
+  device space with the rest of the decode, and the two should be kept
+  reconcilable.
 * `sunos-34-src` — [calmsacibis995/sunos-34-src](https://github.com/calmsacibis995/sunos-34-src).
   Contains `sun/prom_monitor/`, which is **the source of the boot PROMs
   themselves**: `msun/` builds the MultiBus monitor, `rsun/` the VME one, from
@@ -59,7 +63,9 @@ The sources under `Inputs/`:
 * `sun250_prom_combined.bin` — boot PROM of a VME Sun 2/50, used by
   `MACHINE=vme` (see [Which machine](#which-machine)).
 * `doc/` — the Sun-2 Architecture Manual, the Sun 2/50 schematic and
-  engineering manual, and the QMTech Wukong board documents.
+  engineering manual, the MC68000 user manual, and the QMTech Wukong board
+  documents. The engineering manual is the one with an OCR text layer, and it
+  carries the U214/U215 PAL listings — the DVMA arbiter's actual equations.
 
 ## Running the simulation
 
@@ -102,6 +108,8 @@ make -C sim xsim TIMEOUT_MS=8000        # simulated milliseconds before giving u
 make -C sim xsim MEM=sim_only           # 512 KiB in-core SRAM instead of Wishbone
 make -C sim xsim ROM=pristine           # this machine's unmodified PROM (very slow)
 make -C sim xsim MACHINE=vme            # be a Sun 2/50 (VME) instead of a 2/120
+make -C sim xsim XSIMARGS="-testplusarg trace_dvma=16"   # Ethernet bus mastering
+make -C sim xsim XSIMARGS="-testplusarg trace_irq=20"     # timer/interrupt activity
 make -C sim xsim XSIMARGS="-testplusarg heartbeat_ms=100"
 SUN2_VCD=1 make -C sim xsim XSIMARGS="-testplusarg vcd_full"
 make -C sim check                       # assert the console reached the prompt
@@ -227,18 +235,18 @@ ie: cannot initialize
 >
 ```
 
-`ie: cannot initialize` is correct behaviour, not a failure. `ieprobe()` on a
-VME machine reports Ethernet present from the ID PROM's machine-type byte
-alone, without issuing a bus cycle, so `ie` always joins the boot device list
-and auto-boot always tries it. There is no 82586 behind the control register,
-so the driver polls, gives up, and falls through to the prompt.
+The `?`s are real: each is one ND boot request that went out on the wire and
+got no answer. `ieprobe()` on a VME machine reports Ethernet present from the
+ID PROM's machine-type byte alone, without issuing a bus cycle, so `ie` always
+joins the boot device list and auto-boot always tries it — and here it works,
+finds nothing, and gives up cleanly.
 
 Two device pages differ from MultiBus and are instantiated only for VME
 (`VIOPG_*` in the monitor's `sys/mon/s2map.h`):
 
 | Page | VME | MultiBus |
 |---|---|---|
-| 0xFE1 | Ethernet control register (`rtl/sun2_ether_ctl.v`) | 80287 socket, not implemented |
+| 0xFE1 | Intel 82586 Ethernet — control register (`rtl/sun2_ether_ctl.v`) plus the controller itself (`rtl/sun2_ethernet.sv`) | 80287 socket, not implemented |
 | 0xFE3 | keyboard/mouse Z8530, a second instance of the serial SCC | parallel port, not implemented |
 
 Nothing is attached to the keyboard SCC, so the monitor's keyboard hunt times
@@ -266,6 +274,58 @@ error and no interrupt had ever occurred on the way to the MultiBus prompt:
   the NMI timer's mode word `0x0C22` was stored as `0x2200`, selecting an
   unconnected input pin. Counter 1 is the NMI clock the monitor measures wall
   time with, and the 2/50 waits on it with no way around.
+
+### Ethernet, and DVMA
+
+The VME machine's on-board Ethernet is an Intel 82586 (`Inputs/Wish82586`),
+and the interesting part is not the controller but how it reaches memory. Its
+DMA addresses are **virtual**: on the real board they are latched straight onto
+the CPU's address bus and translated by the same MMU. Sun calls it DVMA, and
+Architecture Manual §7 is explicit that it exists to avoid *"the dual mapping
+problems of DMA in a virtual memory environment"*.
+
+So the controller is a bus master on the 68010 bus, not a client of the
+physical-memory Wishbone that main memory uses. `rtl/sun2_dvma.v` is that
+bridge: Wishbone slave in, 68010 cycles out. What makes it small is that a DVMA
+cycle is byte-for-byte a supervisor-data CPU cycle at the pins (schematic sheet
+A03) — so the MMU, the protection check, the bus timing chain, DTACK and the
+bus error register are all reused unchanged, and `rtl/top_fpga.v` only has to
+mux who drives the address, function code, strobes and write data.
+
+Three details are worth knowing before touching it:
+
+* **Two-wire arbitration.** The 2/50 ties BGACK high and a master simply holds
+  BR for as long as it wants the bus (MC68000UM §5.2). The Suska core supports
+  this properly and already exported `BUS_EN` for the wrapper to mux on.
+* **The byte lanes are crossed.** The driver byte-swaps every scalar in
+  software, so memory holds Intel little-endian data at matching byte
+  addresses; all the hardware must guarantee is that the 82586's byte address
+  N reaches the byte the 68010 calls N. A 68010 puts the even byte on D[15:8]
+  and an Intel part puts it on D[7:0], so crossing the lanes *cancels* the
+  mismatch rather than adding a second swap. This is the real board's
+  "permanently byte-reversed mode" (§6.13). Get it backwards and the chip reads
+  its configuration pointer one byte off, decides the host bus is 8 bits wide,
+  and looks exactly like a chip that is not there.
+* **Read data is latched a clock after DTACK**, as a 68010 does at the end of
+  S6 — the machine's memory path presents data behind its acknowledge.
+  Sampling on the DTACK edge silently returns the *previous* cycle's data.
+
+`make -C sim dvma` is the unit test, and it is written to fail loudly on all
+three: it drives a byte-addressed memory model that stores what a 68010 would
+store, so a lane crossing error shows up as bytes in the wrong order rather
+than as a machine that does not boot.
+
+`+trace_dvma=N` on a simulation run reports the first N cycles the controller
+takes as bus master, with the physical page each translated to. The sequence to
+look for is three reads around `0xFFFFF6` (the SCP address the part has
+hard-wired), reads at `0x0A0400` (the ISCP), then a write of zero to
+`0x0A0400` — that last one is what the boot PROM spins on, and the difference
+between a working controller and a dead one.
+
+The MII side goes to `tb/mii_peer.sv`, which supplies clocks and a quiet line.
+That is not optional: the PROM's driver waits on the controller with no timeout
+anywhere, so a transmit that never completes for want of a PHY clock hangs the
+machine solid with nothing printed.
 
 ### Everything else
 
@@ -372,6 +432,7 @@ third test for exactly that:
 ```sh
 make -C sim migddr3    # wb_to_mig_ui + real MIG + Micron model, ~3 minutes
 make -C sim adapter    # wb_to_mig_ui vs the reference, randomised, seconds
+make -C sim dvma       # sun2_dvma: Wishbone master -> 68010 bus cycles
 make -C sim clkgen     # measure the generated clocks
 ```
 

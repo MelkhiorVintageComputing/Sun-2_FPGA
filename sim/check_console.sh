@@ -20,8 +20,12 @@
 #   ...
 #   Auto-boot in progress...
 #   Boot: ie(0,0,0)vmunix
-#   ie: cannot initialize        <- no 82586 behind the control register
+#   ???nd: no file server, giving up.
 #   >
+#
+# Each "?" is one ND read request that went out on the wire and got no answer.
+# Reaching that point means the 82586 initialised, configured itself and
+# transmitted -- all of it by DVMA through the MMU.
 #
 # The banner is the only line that differs, so that is all the machine
 # argument selects.  Default multibus, to match sim/Makefile.
@@ -70,6 +74,21 @@ if grep -q '>' "$log"; then
 else
 	echo "FAIL: no monitor prompt"
 	rc=1
+fi
+
+# The VME machine has on-board Ethernet, and its boot PROM always tries to net
+# boot: ieprobe() reports the chip present from the ID PROM alone.  So how far
+# that gets is a real test of the 82586 and of DVMA, not a cosmetic one.
+if [ "$machine" = vme ]; then
+	if grep -q 'ie: cannot initialize' "$log"; then
+		echo "FAIL: the Ethernet controller did not initialise"
+		rc=1
+	elif grep -q 'no file server' "$log"; then
+		echo "PASS: Ethernet initialised, transmitted, and found no server"
+	else
+		echo "FAIL: the boot never reached the network"
+		rc=1
+	fi
 fi
 
 exit $rc
