@@ -5,6 +5,7 @@
 #   ./run_unit.sh clkgen    measures what wukong_clkgen actually generates
 #   ./run_unit.sh adapter   wb_to_mig_ui against wb_ram_model, randomised
 #   ./run_unit.sh dvma      sun2_dvma: Wishbone master -> 68010 bus cycles
+#   ./run_unit.sh phy       phy_rtl8211_init + wb_mdio against a PHY model
 #
 set -e -o pipefail
 
@@ -35,6 +36,16 @@ clkgen)
 		xsim clkgen_sim -R | grep -E 'wukong_clkgen:|measured|PASS|FAIL|ok$|FAIL$|===|kHz'
 	done
 	;;
+phy)
+	"$top/tools/patch_inputs.sh" Wish82586
+	W="$top/build/inputs/Wish82586/src"
+	if xvlog --sv "$W/wb_mdio.sv" "$top/rtl/board/phy_rtl8211_init.sv" \
+		"$top/tb/mdio_phy_model.sv" "$top/tb/tb_phy_init.sv" \
+		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug off --timescale 1ns/1ps work.tb_phy_init -s phy_sim | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	xsim phy_sim -R | grep -E '===|PASS|FAIL|checks|PHY id|link '
+	;;
+
 dvma)
 	# Compiler output is filtered, not discarded: a syntax error here used to
 	# make the whole target exit silently with nothing to show for it.

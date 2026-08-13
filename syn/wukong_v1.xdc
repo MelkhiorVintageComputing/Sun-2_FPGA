@@ -153,6 +153,8 @@ set_property -dict {PACKAGE_PIN U4 IOSTANDARD LVCMOS33} [get_ports phy_mii_col]
 
 set_property -dict {PACKAGE_PIN U1 IOSTANDARD LVCMOS33} [get_ports phy_gtx_clk]
 set_property -dict {PACKAGE_PIN R1 IOSTANDARD LVCMOS33} [get_ports phy_reset_n]
+set_property -dict {PACKAGE_PIN H2 IOSTANDARD LVCMOS33} [get_ports phy_mdc]
+set_property -dict {PACKAGE_PIN H1 IOSTANDARD LVCMOS33} [get_ports phy_mdio]
 
 # The two PHY clocks are created near the top, with clk50 -- see the note there.
 
@@ -169,3 +171,8 @@ set_false_path -from [get_ports {phy_mii_crs phy_mii_col}]
 
 # The PHY reset and the tied-off gigabit clock are static.
 set_false_path -to [get_ports {phy_reset_n phy_gtx_clk}]
+
+# Management runs at 125 kHz against a 2.5 MHz ceiling, from the CPU clock, so
+# there is nothing to time here that the CPU domain does not already cover.
+set_false_path -to   [get_ports {phy_mdc phy_mdio}]
+set_false_path -from [get_ports phy_mdio]

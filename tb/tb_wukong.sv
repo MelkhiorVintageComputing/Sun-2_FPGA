@@ -49,6 +49,9 @@ module tb_wukong #(
    // timeout, so the machine would simply stop with nothing printed.
    wire       mii_tx_clk, mii_tx_en, mii_tx_er, mii_rx_clk, mii_rx_dv, mii_rx_er;
    wire       mii_crs, mii_col, phy_reset_n;
+   // MDIO is open drain with a 1.5k pull-up on the board, so tri1.
+   wire       phy_mdc;
+   tri1       phy_mdio;
    wire [3:0] mii_txd, mii_rxd;
 
    mii_peer peer(.mii_tx_clk(mii_tx_clk), .mii_txd(mii_txd),
@@ -84,6 +87,8 @@ module tb_wukong #(
        .phy_mii_col    (mii_col),
        .phy_gtx_clk    (),
        .phy_reset_n    (phy_reset_n),
+       .phy_mdc        (phy_mdc),
+       .phy_mdio       (phy_mdio),
 
        .serial_tx (serial_tx), .serial_rx (serial_rx),
        .user_led (user_led), .diag_leds0 (diag_leds0), .user_btn (1'b1),
@@ -124,6 +129,8 @@ module tb_wukong #(
        .phy_mii_col    (mii_col),
        .phy_gtx_clk    (),
        .phy_reset_n    (phy_reset_n),
+       .phy_mdc        (phy_mdc),
+       .phy_mdio       (phy_mdio),
 
        .serial_tx (serial_tx), .serial_rx (serial_rx),
        .user_led (user_led), .diag_leds0 (diag_leds0), .user_btn (1'b1),

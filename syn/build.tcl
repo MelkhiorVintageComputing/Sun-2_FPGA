@@ -100,6 +100,8 @@ read_verilog -sv [list \
     $top/build/inputs/Wish82586/src/ie_cu.sv \
     $top/build/inputs/Wish82586/src/ie_ru.sv \
     $top/build/inputs/Wish82586/src/wish82586.sv \
+    $top/build/inputs/Wish82586/src/wb_mdio.sv \
+    $top/rtl/board/phy_rtl8211_init.sv \
     $top/Inputs/z8530_scc/z8530_scc.sv \
     $top/rtl/board/wukong_clkgen.sv \
     $top/rtl/board/reset_sync.sv \

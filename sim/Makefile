@@ -18,6 +18,7 @@
 #   make clkgen                    measure what the clock generator produces
 #   make adapter                   check the Wishbone-to-MIG adapter
 #   make dvma                      check the Wishbone-to-68010 DVMA bridge
+#   make phy                       check the RTL8211EG bring-up sequence
 #
 # Extra plusargs go through XSIMARGS, e.g.
 #   make xsim XSIMARGS="-testplusarg vcd_full"
@@ -93,7 +94,7 @@ board-check:
 	./check_console.sh $(BUILD)/board-$(BOARD_MEM)-$(MACHINE)/console.log $(MACHINE)
 
 # --- unit tests for the board layer ---------------------------------------
-clkgen adapter migddr3 dvma: rom
+clkgen adapter migddr3 dvma phy: rom
 	./run_unit.sh $@
 
 iverilog: rom

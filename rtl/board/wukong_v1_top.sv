@@ -63,6 +63,8 @@ module wukong_v1_top #(
     input  wire        phy_mii_col,      // U4  -- also Mode
     output wire        phy_gtx_clk,      // U1, gigabit only: held low here
     output wire        phy_reset_n,      // R1, active low, no external circuit
+    output wire        phy_mdc,          // H2
+    inout  wire        phy_mdio,         // H1, 1.5k pull-up on the board
 
 `ifdef BOARD_MEM_FAST
     // Simulation only: the Wishbone port, straight out
@@ -137,6 +139,18 @@ module wukong_v1_top #(
 
    wire clk_mig_sys, clk_idelay, cpu_clk, serial_clk, mmcm_locked;
 
+   // PHY management, declared here so the LED and the instances below can all
+   // see them; xvlog rejects a wire used before it is declared.
+   wire        mdio_cyc, mdio_stb, mdio_we, mdio_ack;
+   wire [3:0]  mdio_sel;
+   wire [5:0]  mdio_adr;
+   wire [31:0] mdio_dat_w, mdio_dat_r;
+   wire        mdio_o, mdio_oe, mdio_i;
+   wire [15:0] phy_id;
+   wire        phy_present, phy_cfg_done, phy_link, phy_fd;
+   wire [1:0]  phy_speed;
+
+
    wukong_clkgen #(.CPU_CLK_HZ(CPU_CLK_HZ)) clkgen (
        .clk50       (clk50),
        .reset       (board_reset),
@@ -178,7 +192,9 @@ module wukong_v1_top #(
 
    // Wukong LEDs are active low: lit means running.
    assign user_led[0] = sys_reset;
-   assign user_led[1] = ~init_calib_complete;
+   // Until DRAM is calibrated that is the interesting question; after it, the
+   // Ethernet link is.  Active low, so 0 is lit.
+   assign user_led[1] = phy_cfg_done ? ~phy_link : ~init_calib_complete;
 
    // ------------------------------------------------------------------
    // The Sun-2
@@ -189,6 +205,64 @@ module wukong_v1_top #(
    wire [3:0]  wb_sel;
    wire [7:0]  todebug;
    wire        en_boot;
+
+   //
+   // PHY management.  None of this exists on a Sun-2 -- the 82586 drove an 8502
+   // Manchester encoder straight onto an AUI cable and nothing in the machine
+   // knew what a PHY was -- so it lives here rather than in the machine.  See
+   // phy_rtl8211_init for what it does and why the order matters.
+   //
+   // MDC well under the 2.5 MHz the standard allows, and deliberately slower
+   // than it needs to be: management bandwidth buys nothing here, and a slow
+   // bus is far more tolerant of whatever capacitance is on the trace.
+   // 12.5 MHz / (2 * (49 + 1)) = 125 kHz.
+   wb_mdio #(.DIV_RESET(49)) mdio_station (
+       .clk        (cpu_clk),
+       .rst        (sys_reset),
+       .wbs_cyc_i  (mdio_cyc),
+       .wbs_stb_i  (mdio_stb),
+       .wbs_we_i   (mdio_we),
+       .wbs_sel_i  (mdio_sel),
+       .wbs_adr_i  (mdio_adr),
+       .wbs_dat_i  (mdio_dat_w),
+       .wbs_dat_o  (mdio_dat_r),
+       .wbs_ack_o  (mdio_ack),
+       .wbs_err_o  (),
+       .mdc        (phy_mdc),
+       .mdio_o     (mdio_o),
+       .mdio_oe    (mdio_oe),
+       .mdio_i     (mdio_i)
+   );
+
+   IOBUF mdio_pad (.O(mdio_i), .IO(phy_mdio), .I(mdio_o), .T(~mdio_oe));
+
+   // phy_mdio_ok is assembled in the clk50 domain; the station runs on cpu_clk.
+   (* ASYNC_REG = "TRUE" *) reg phy_ok_s1, phy_ok_s2;
+   always @(posedge cpu_clk) begin
+      phy_ok_s1 <= phy_mdio_ok;
+      phy_ok_s2 <= phy_ok_s1;
+   end
+   wire phy_mdio_ok_sync = phy_ok_s2;
+
+   phy_rtl8211_init #(.PHY_ADDR(5'd1)) phy_init (
+       .clk         (cpu_clk),
+       .rst         (sys_reset),
+       .enable      (phy_mdio_ok_sync),
+       .wbm_cyc_o   (mdio_cyc),
+       .wbm_stb_o   (mdio_stb),
+       .wbm_we_o    (mdio_we),
+       .wbm_sel_o   (mdio_sel),
+       .wbm_adr_o   (mdio_adr),
+       .wbm_dat_o   (mdio_dat_w),
+       .wbm_dat_i   (mdio_dat_r),
+       .wbm_ack_i   (mdio_ack),
+       .phy_id      (phy_id),
+       .phy_present (phy_present),
+       .cfg_done    (phy_cfg_done),
+       .link        (phy_link),
+       .speed       (phy_speed),
+       .full_duplex (phy_fd)
+   );
 
    top machine (
        .cpu_clk    (cpu_clk),
