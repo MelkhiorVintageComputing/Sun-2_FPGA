@@ -1,8 +1,12 @@
 # Bringing this up on real hardware
 
 Everything here has only ever run in simulation. This is the list of what to do
-on a QMTech Wukong V1 with the board in front of you, and of the tooling that
-was deliberately deferred until something actually misbehaves.
+with a QMTech Wukong in front of you, and of the tooling that was deliberately
+deferred until something actually misbehaves.
+
+Both board revisions are supported and share all their RTL. **The V1 is no
+longer sold; a new board will be a V3.** They differ in the FPGA speed grade
+and four pins, so pick the right `BOARD=` and the right pin column below.
 
 The rule that shapes the order: **each step has an unambiguous pass/fail, and
 nothing is switched on until the thing under it has passed.** The failure modes
@@ -11,18 +15,25 @@ carrier and a dead controller are the same thing at the console — so a step
 that "seems to work" is not a pass.
 
 ```sh
-make -C syn ip                        # once
-make -C syn bitstream MACHINE=vme     # -> build/syn/vme-cpu12/sun2_wukong_v1.bit
+make -C syn ip       BOARD=v3                    # once per board
+make -C syn bitstream BOARD=v3 MACHINE=vme       # -> build/syn/v3-vme-cpu12/sun2_wukong_v3.bit
 ```
 
-Console is 9600 8N1 on `serial_tx` E3 / `serial_rx` F3. Reset is the button on
-J8. Both on-board LEDs are active low.
+Console is 9600 8N1 on `serial_tx` **E3** / `serial_rx` **F3** on either board.
+Both on-board LEDs are active low.
 
-| LED | lit means |
-|---|---|
-| `user_led[0]` J6 | out of reset |
-| `user_led[1]` H6 | DRAM calibrated, until the PHY bring-up finishes; link up after it |
-| `diag_leds0[7:0]` | the Sun-2 front panel, on the PMOD — the PROM's own progress code |
+| | V1 | V3 |
+|---|---|---|
+| FPGA | XC7A100T-2FGG676I | XC7A100T-1FGG676C |
+| 50 MHz oscillator | M22 | M21 |
+| reset button | J8 | H7 |
+| `user_led[0]` — lit = out of reset | J6 | G21 |
+| `user_led[1]` — lit = DRAM calibrated, then link up | H6 | G20 |
+| second button (unused) | H7 | M6 |
+| console, Ethernet, DDR3, PMOD | — identical — | |
+
+`diag_leds0[7:0]` is the Sun-2 front panel on PMOD J10, the PROM's own progress
+code, and is on the same eight balls either way.
 
 ## Staged bring-up
 

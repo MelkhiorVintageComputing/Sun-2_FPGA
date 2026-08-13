@@ -11,7 +11,7 @@
 #   make check             assert the console reached the monitor prompt
 #                          (pass the same MACHINE= as the run it is checking)
 #
-# Board level -- the Sun-2 as it will be on a QMTech Wukong V1:
+# Board level -- the Sun-2 as it will be on a QMTech Wukong:
 #
 #   make board                     behavioural RAM and clocks, boots to prompt
 #   make board BOARD_MEM=ddr3      real MIG plus Micron's DDR3 model
@@ -96,12 +96,16 @@ xsim: rom
 #   make board BOARD_MEM=ddr3      real MIG plus Micron's DDR3 model
 BOARD_MEM ?= fast
 
+# Which Wukong revision.  The board RTL is shared between V1 and V3, so this
+# only selects which MIG IP the ddr3 configuration picks up.
+BOARD ?= v1
+
 board: rom
-	SUN2_DEFINES="$(DEFINES)" BOARD_MEM=$(BOARD_MEM) SUN2_CPU_HZ=$(CPU_HZ) \
+	SUN2_DEFINES="$(DEFINES)" BOARD=$(BOARD) BOARD_MEM=$(BOARD_MEM) SUN2_CPU_HZ=$(CPU_HZ) \
 	SUN2_MACHINE=$(MACHINE) ./run_xsim_board.sh $(PLUSARGS) $(XSIMARGS)
 
 board-check:
-	./check_console.sh $(BUILD)/board-$(BOARD_MEM)-$(MACHINE)/console.log $(MACHINE)
+	./check_console.sh $(BUILD)/board-$(BOARD)-$(BOARD_MEM)-$(MACHINE)/console.log $(MACHINE)
 
 # Boot the board, then type at the monitor prompt and read the PHY status
 # register in device page 0xFE7 -- see "Asking the machine what the PHY did" in
@@ -117,7 +121,7 @@ board-phy:
 
 # --- unit tests for the board layer ---------------------------------------
 clkgen adapter migddr3 dvma phy mbether: rom
-	./run_unit.sh $@
+	BOARD=$(BOARD) ./run_unit.sh $@
 
 iverilog: rom
 	SUN2_DEFINES="$(DEFINES)" ./run_iverilog.sh $(PLUSARGS) $(IVSIMARGS)

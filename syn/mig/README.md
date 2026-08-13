@@ -29,7 +29,7 @@ pin-for-pin with the V1 schematic and with the old LiteX build.
 
 QMTech's demo brings the system signals out to real board pins — the user
 button and the two user LEDs. We drive `sys_rst` from the reset sequencer in
-`wukong_v1_top.sv` and consume `init_calib_complete` in the same logic, so
+`wukong_top.sv` and consume `init_calib_complete` in the same logic, so
 those must not be pins; left as they were, MIG's generated XDC would constrain
 top-level ports that do not exist, and would lay claim to H7/J6/H6 which we
 want for the button and LEDs. `PADName="No connect"` is the syntax MIG accepts,
@@ -54,6 +54,6 @@ unaffected.
   I/O. Note the old LiteX XDC gets this wrong, constraining `ddram_cs_n` to
   E22, a pin connected to nothing; QMTech's `.ucf` and `.prj` both correctly
   omit it.
-* **`PortInterface` = `NATIVE`.** `boards/Wukong_V1/wb_to_mig_ui.sv` adapts Wishbone
+* **`PortInterface` = `NATIVE`.** `boards/Wukong/wb_to_mig_ui.sv` adapts Wishbone
   to it directly. `app_wdf_mask` gives per-byte write masking, so no
   read-modify-write is needed.

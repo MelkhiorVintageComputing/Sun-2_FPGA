@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 
 //
-// Board-level testbench: the Sun-2 as it will be on a QMTech Wukong V1.
+// Board-level testbench: the Sun-2 as it will be on a QMTech Wukong.
 //
 // Unlike tb_sun2, which drives the Sun-2 core directly with ideal clocks, this
 // starts from the board's 50 MHz oscillator and the reset button and goes
@@ -73,7 +73,7 @@ module tb_wukong #(
    wire [3:0]  wb_sel;
    wire        cpu_clk, sys_reset;
 
-   wukong_v1_top #(.CPU_CLK_HZ(CPU_CLK_HZ)) dut (
+   wukong_top #(.CPU_CLK_HZ(CPU_CLK_HZ)) dut (
        .clk50 (clk50), .cpu_reset (cpu_reset),
        .phy_mii_tx_clk (mii_tx_clk),
        .phy_mii_txd    (mii_txd),
@@ -115,7 +115,7 @@ module tb_wukong #(
    wire [0:0]  ddr3_ck_p, ddr3_ck_n, ddr3_cke, ddr3_odt;
    wire [1:0]  ddr3_dm;
 
-   wukong_v1_top #(.CPU_CLK_HZ(CPU_CLK_HZ)) dut (
+   wukong_top #(.CPU_CLK_HZ(CPU_CLK_HZ)) dut (
        .clk50 (clk50), .cpu_reset (cpu_reset),
        .phy_mii_tx_clk (mii_tx_clk),
        .phy_mii_txd    (mii_txd),
@@ -177,7 +177,7 @@ module tb_wukong #(
    // The model wants to know when the station is driving, so it can catch a
    // station that has not let go of the wire during turnaround.  That is not
    // recoverable from the pad, so take it from inside: this testbench already
-   // knows the DUT is a wukong_v1_top.
+   // knows the DUT is a wukong_top.
    wire phy_model_out;
 
    mdio_phy_model #(.PHY_ADDR(5'd1)) phymodel (
@@ -233,7 +233,7 @@ module tb_wukong #(
       $timeformat(-9, 0, " ns", 12);
       void'($value$plusargs("timeout_ms=%f", timeout_ms));
 
-      $display("=== Sun-2 on QMTech Wukong V1 ===");
+      $display("=== Sun-2 on QMTech Wukong ===");
 `ifdef BOARD_MEM_FAST
       $display("memory: behavioural Wishbone RAM (BOARD_MEM_FAST)");
 `else

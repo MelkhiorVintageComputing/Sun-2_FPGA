@@ -4,8 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A replica of a Sun-2 workstation in an FPGA: MC68010, the Sun-2 MMU, an Am9513
 timer, Zilog 8530 SCCs and (on VME machines) an Intel 82586 Ethernet, booting
-the real boot PROMs to the monitor prompt. Target board is a QMTech Wukong V1
-(XC7A100T-2FGG676) with DDR3 main memory.
+the real boot PROMs to the monitor prompt. Target board is a QMTech Wukong,
+V1 or V3 (XC7A100T, FGG676) with DDR3 main memory.
 
 ## Commands
 
@@ -14,8 +14,8 @@ make sim                                  # boot the MultiBus 2/120 (= make -C s
 make -C sim xsim MACHINE=vme              # boot the VME 2/50 instead
 make -C sim check MACHINE=vme             # pass/fail on the console log
 make -C sim board [BOARD_MEM=ddr3]        # the machine as it will be on the Wukong
-make -C syn ip                            # generate the MIG DDR3 controller (once)
-make -C syn bitstream [MACHINE=vme] [CPU_HZ=40000000]
+make -C syn ip [BOARD=v3]                 # generate the MIG DDR3 controller (once per board)
+make -C syn bitstream [MACHINE=vme] [CPU_HZ=40000000] [BOARD=v3]
 ```
 
 Simulation knobs that matter, all on `make -C sim xsim`:

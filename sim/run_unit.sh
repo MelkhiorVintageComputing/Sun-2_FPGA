@@ -19,6 +19,8 @@ if [ -z "${LIBRARY_PATH:-}" ] && [ -e /usr/lib/x86_64-linux-gnu/crt1.o ]; then
 	export LIBRARY_PATH=/usr/lib/x86_64-linux-gnu
 fi
 
+: "${BOARD:=v1}"
+
 what=${1:-}
 rundir="$top/build/sim/unit-$what"
 mkdir -p "$rundir"
@@ -27,7 +29,7 @@ cd "$rundir"
 case "$what" in
 clkgen)
 	# The MMCM primitives come from unisims, and they need glbl for GSR.
-	xvlog --sv "$top/boards/Wukong_V1/wukong_clkgen.sv" "$top/tb/tb_clkgen.sv" >/dev/null
+	xvlog --sv "$top/boards/Wukong/wukong_clkgen.sv" "$top/tb/tb_clkgen.sv" >/dev/null
 	xvlog "$XILINX_VIVADO/data/verilog/src/glbl.v" >/dev/null
 	for hz in ${CPU_HZ_LIST:-12500000 40000000}; do
 		echo "---- CPU_CLK_HZ=$hz ----"
@@ -40,7 +42,7 @@ clkgen)
 phy)
 	"$top/tools/patch_inputs.sh" Wish82586
 	W="$top/build/inputs/Wish82586/src"
-	if xvlog --sv "$W/wb_mdio.sv" "$top/boards/Wukong_V1/phy_rtl8211_init.sv" \
+	if xvlog --sv "$W/wb_mdio.sv" "$top/boards/Wukong/phy_rtl8211_init.sv" \
 		"$top/tb/mdio_phy_model.sv" "$top/tb/tb_phy_init.sv" \
 		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	if xelab -debug off --timescale 1ns/1ps work.tb_phy_init -s phy_sim | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
@@ -78,7 +80,7 @@ dvma)
 
 adapter)
 	xvlog --sv \
-		"$top/boards/Wukong_V1/wb_to_mig_ui.sv" \
+		"$top/boards/Wukong/wb_to_mig_ui.sv" \
 		"$top/tb/mig_ui_model.sv" \
 		"$top/tb/wb_ram_model.sv" \
 		"$top/tb/tb_wb_to_mig_ui.sv" >/dev/null
@@ -91,8 +93,8 @@ migddr3)
 	# MIG's interface, and tb_wukong's ddr3 mode only gets as far as showing
 	# MIG calibrate -- the boot PROM does not touch main memory until L_M_MAP,
 	# far beyond what is simulable with a full DDR3 model.
-	mig="$top/build/ip/sun2_mig/sun2_mig/user_design/rtl"
-	ex="$top/build/ip/sun2_mig/sun2_mig/example_design/sim"
+	mig="$top/build/ip/$BOARD/sun2_mig/sun2_mig/user_design/rtl"
+	ex="$top/build/ip/$BOARD/sun2_mig/sun2_mig/example_design/sim"
 	if [ ! -d "$mig" ]; then
 		echo "MIG has not been generated; run: make -C syn ip" >&2
 		exit 1
@@ -100,8 +102,8 @@ migddr3)
 	mapfile -t mig_src < <(find "$mig" -name '*.v' -o -name '*.sv' \
 	                       | grep -v '/sun2_mig_mig\.v$' | sort)
 	xvlog --sv -i "$ex" -i "$mig" \
-		"$top/boards/Wukong_V1/wukong_clkgen.sv" \
-		"$top/boards/Wukong_V1/wb_to_mig_ui.sv" \
+		"$top/boards/Wukong/wukong_clkgen.sv" \
+		"$top/boards/Wukong/wb_to_mig_ui.sv" \
 		"${mig_src[@]}" \
 		"$ex/ddr3_model.sv" \
 		"$top/tb/tb_mig_ddr3.sv" >/dev/null

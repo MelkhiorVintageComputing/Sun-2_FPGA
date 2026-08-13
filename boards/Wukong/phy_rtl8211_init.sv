@@ -27,7 +27,7 @@
 //
 //   * Nothing may touch the management interface until the part is ready:
 //     PHYRSTB low for at least 10 ms and then at least 30 ms of settling
-//     (datasheet section 7.16).  That timing lives in wukong_v1_top, which owns
+//     (datasheet section 7.16).  That timing lives in wukong_top, which owns
 //     the reset pin; `enable` here is its statement that the wait is over.
 //
 // Ordering is not free choice.  Writes to registers 0, 4 and 9 take effect only

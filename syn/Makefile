@@ -1,10 +1,11 @@
-# FPGA build for the QMTech Wukong V1.
+# FPGA build for the QMTech Wukong, V1 or V3.
 #
 #   make ip                 generate the MIG DDR3 controller from mig/sun2_mig.prj
 #   make bitstream          build at the default 12.5 MHz CPU clock
 #   make bitstream CPU_HZ=40000000
 #   make bitstream MACHINE=vme
 #   make bitstream MB_ETHER=1     with the MultiBus Ethernet card
+#   make bitstream BOARD=v3       for a Wukong V3 instead of a V1
 #   make both               both CPU clocks
 #
 # Nothing here is committed; everything lands in ../build.  Vivado is run from
@@ -28,10 +29,16 @@ MACHINE ?= multibus
 # Fit the Sun-2 Ethernet card in the MultiBus cage.  MultiBus only.
 MB_ETHER ?= 0
 
-IPDIR   = $(TOP)/build/ip/sun2_mig
+# Which QMTech Wukong revision: v1 or v3.  They share all their RTL and differ
+# in the FPGA speed grade and four pins -- see syn/boards.tcl.  The default
+# stays v1 so every result verified against it keeps its meaning; a V3 is what
+# you can actually buy.
+BOARD ?= v1
+
+IPDIR   = $(TOP)/build/ip/$(BOARD)/sun2_mig
 TAG     = $(if $(filter 1,$(MB_ETHER)),-mbether,)
-OUTDIR  = $(TOP)/build/syn/$(MACHINE)$(TAG)-cpu$(shell expr $(CPU_HZ) / 1000000)
-WORKDIR = $(TOP)/build/syn/work
+OUTDIR  = $(TOP)/build/syn/$(BOARD)-$(MACHINE)$(TAG)-cpu$(shell expr $(CPU_HZ) / 1000000)
+WORKDIR = $(TOP)/build/syn/work-$(BOARD)
 
 all: bitstream
 
@@ -40,7 +47,7 @@ $(WORKDIR):
 
 $(IPDIR)/sun2_mig.xci: mig/sun2_mig.prj generate_ip.tcl | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
-		-source $(HERE)/generate_ip.tcl
+		-source $(HERE)/generate_ip.tcl -tclargs $(BOARD)
 
 ip: $(IPDIR)/sun2_mig.xci
 
@@ -54,8 +61,8 @@ inputs:
 
 bitstream: ip rom inputs | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
-		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER)
-	@echo "bitstream: $(OUTDIR)/sun2_wukong_v1.bit"
+		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD)
+	@echo "bitstream: $(OUTDIR)/sun2_wukong_$(BOARD).bit"
 
 both:
 	$(MAKE) bitstream CPU_HZ=12500000

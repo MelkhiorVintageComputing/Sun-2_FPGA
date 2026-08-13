@@ -17,7 +17,7 @@ It also builds into a timing-clean bitstream for a QMTech Wukong V1
 | `rtl/sun2-common/` | the Sun-2 gateware shared by both machines: bus, MMU, PROM, timer, registers, Wishbone bridge |
 | `rtl/sun2-multibus/` | what only a 2/120 has — the MultiBus Ethernet card |
 | `rtl/sun2-vme/` | what only a 2/50 has — on-board Ethernet, its DVMA bridge, the PHY status register |
-| `boards/Wukong_V1/` | the board layer for one board: clock generation, reset, Wishbone-to-DDR3, PHY bring-up |
+| `boards/Wukong/` | the board layer, shared by the Wukong V1 and V3: clock generation, reset, Wishbone-to-DDR3, PHY bring-up |
 | `tb/` | testbenches and simulation models |
 | `sim/` | simulation flows |
 | `syn/` | FPGA build: constraints, MIG configuration, Vivado scripts |
@@ -341,13 +341,13 @@ between a working controller and a dead one.
 
 On the board the MII goes to the RTL8211EG in bank 34, whose pins, clock
 constraints and MII I/O delays are in `syn/wukong_v1.xdc`, with a reset
-sequencer in `boards/Wukong_V1/wukong_v1_top.sv` holding PHYRSTB low for 20 ms and
+sequencer in `boards/Wukong/wukong_top.sv` holding PHYRSTB low for 20 ms and
 waiting 50 ms more before MDIO is allowed — the datasheet asks for 10 and 30.
 Seven of those balls are also PHY configuration straps, latched when its reset
 releases; they are inputs and must stay inputs, with no pull property, or the
 PHY comes up at the wrong address or in RGMII mode.
 
-`boards/Wukong_V1/phy_rtl8211_init.sv` brings it down to something a Sun-2 can talk
+`boards/Wukong/phy_rtl8211_init.sv` brings it down to something a Sun-2 can talk
 to, over `wb_mdio` at 125 kHz. Read the identifier as a smoke test, write
 GBCR = 0 to withdraw the gigabit advertisement the straps make, advertise
 10BASE-T only in ANAR, clear PHYCR bit 11 — "Assert CRS on Transmit", which
@@ -517,7 +517,7 @@ one MIG's).
 
 ### Clocks
 
-Two MMCMs in `boards/Wukong_V1/wukong_clkgen.sv`, instantiated directly rather than
+Two MMCMs in `boards/Wukong/wukong_clkgen.sv`, instantiated directly rather than
 through the clocking wizard, so the file reads and simulates like any other
 source.
 
@@ -540,7 +540,7 @@ arithmetic — which is how the step-1 baud rate bug would have been caught.
 
 ### Memory
 
-`boards/Wukong_V1/wb_to_mig_ui.sv` adapts the Sun-2's Wishbone master to MIG's native
+`boards/Wukong/wb_to_mig_ui.sv` adapts the Sun-2's Wishbone master to MIG's native
 user interface: 32-bit words in the CPU clock domain to 128-bit beats in MIG's
 83.33 MHz `ui_clk`, with a two-phase handshake across the domains and one
 transaction in flight. `app_wdf_mask` masks per byte, so sub-word writes need

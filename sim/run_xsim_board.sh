@@ -1,8 +1,10 @@
 #!/bin/bash
 #
-# Board-level simulation: the Sun-2 as it will be on a QMTech Wukong V1.
+# Board-level simulation: the Sun-2 as it will be on a QMTech Wukong.
 #
 # Environment:
+#   BOARD           v1 (default) | v3 -- which Wukong revision's MIG to use.
+#                   The board RTL is shared, so this only matters for ddr3.
 #   BOARD_MEM       fast (default) | ddr3
 #                     fast - behavioural Wishbone RAM, boots to the prompt
 #                     ddr3 - real MIG plus Micron's DDR3 model
@@ -19,6 +21,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 top=$(cd "$here/.." && pwd)
 
 : "${XILINX_VIVADO:=/opt/Xilinx/2025.2/Vivado}"
+: "${BOARD:=v1}"
 : "${BOARD_MEM:=fast}"
 : "${SUN2_CPU_HZ:=12500000}"
 
@@ -39,7 +42,7 @@ fi
 # Per machine as well as per memory mode: two runs sharing a snapshot
 # directory clobber each other and xsim dies with a kernel fatal that looks
 # like a design fault.
-rundir="$top/build/sim/board-$BOARD_MEM${SUN2_MACHINE:+-$SUN2_MACHINE}"
+rundir="$top/build/sim/board-$BOARD-$BOARD_MEM${SUN2_MACHINE:+-$SUN2_MACHINE}"
 mkdir -p "$rundir"
 
 make -s -C "$top/tools"
@@ -49,7 +52,7 @@ for d in ${SUN2_DEFINES:-}; do
 	defargs+=(-d "$d")
 done
 
-mig="$top/build/ip/sun2_mig/sun2_mig/user_design/rtl"
+mig="$top/build/ip/$BOARD/sun2_mig/sun2_mig/user_design/rtl"
 migsim="$XILINX_VIVADO/data/ip/xilinx/mig_7series_v4_2/data/dlib/7series/ddr3_sdram/sim"
 
 if [ "$BOARD_MEM" = "ddr3" ]; then
@@ -73,7 +76,7 @@ fi
 if [ "$BOARD_CLKGEN" = "behavioural" ]; then
 	defargs+=(-d "CLKGEN_BEHAVIOURAL")
 fi
-echo "== BOARD_MEM=$BOARD_MEM, clock generation: $BOARD_CLKGEN =="
+echo "== BOARD=$BOARD, BOARD_MEM=$BOARD_MEM, clock generation: $BOARD_CLKGEN =="
 
 cd "$rundir"
 
@@ -113,12 +116,12 @@ xvlog --work sun2 "${defargs[@]}" \
 	"$top/rtl/sun2-common/tolog.v"
 
 echo "== compiling the board layer and testbench (SystemVerilog) =="
-board_src=("$top/boards/Wukong_V1/wukong_clkgen.sv" "$top/boards/Wukong_V1/reset_sync.sv" "$top/boards/Wukong_V1/wukong_v1_top.sv")
+board_src=("$top/boards/Wukong/wukong_clkgen.sv" "$top/boards/Wukong/reset_sync.sv" "$top/boards/Wukong/wukong_top.sv")
 tb_src=("$top/tb/wb_ram_model.sv" "$top/tb/uart_monitor.sv" "$top/tb/uart_console.sv" \
         "$top/tb/mii_peer.sv" "$top/tb/mdio_phy_model.sv" "$top/tb/tb_wukong.sv")
 
 if [ "$BOARD_MEM" = "ddr3" ]; then
-	board_src+=("$top/boards/Wukong_V1/wb_to_mig_ui.sv")
+	board_src+=("$top/boards/Wukong/wb_to_mig_ui.sv")
 
 	# MIG's own RTL.  Two files define module sun2_mig_mig: the synthesis one
 	# and a simulation one with SIM_BYPASS_INIT_CAL="FAST", which is what
@@ -132,7 +135,7 @@ if [ "$BOARD_MEM" = "ddr3" ]; then
 	# copy in the Vivado install -- that one is an unsubstituted template, full
 	# of %MEM_DENSITY placeholders.  This one is filled in for our part
 	# (x2Gb, sg15E, x16).  Not committed: it is Micron's AS-IS licence.
-	ex="$top/build/ip/sun2_mig/sun2_mig/example_design/sim"
+	ex="$top/build/ip/$BOARD/sun2_mig/sun2_mig/example_design/sim"
 	tb_src+=("$ex/ddr3_model.sv")
 	incargs=(-i "$ex" -i "$mig")
 else
@@ -155,7 +158,7 @@ xvlog --sv --work sun2 "${defargs[@]}" "${incargs[@]}" \
 	"$top/build/inputs/Wish82586/src/ie_ru.sv" \
 	"$top/build/inputs/Wish82586/src/wish82586.sv" \
 	"$top/build/inputs/Wish82586/src/wb_mdio.sv" \
-	"$top/boards/Wukong_V1/phy_rtl8211_init.sv" \
+	"$top/boards/Wukong/phy_rtl8211_init.sv" \
 	"$top/rtl/sun2-vme/sun2_ethernet.sv" \
 	"$top/rtl/sun2-multibus/sun2_mb_ether.sv" \
 	"$top/Inputs/z8530_scc/z8530_scc.sv" \

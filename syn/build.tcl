@@ -1,9 +1,10 @@
 # Non-project Vivado build for the Sun-2 on a QMTech Wukong V1.
 #
-#   vivado -mode batch -source syn/build.tcl [-tclargs CPU_HZ MACHINE MB_ETHER]
+#   vivado -mode batch -source syn/build.tcl [-tclargs CPU_HZ MACHINE MB_ETHER BOARD]
 #
 # MACHINE is multibus (default) or vme; see "Which machine" in the README.
 # MB_ETHER=1 fits the Sun-2 Ethernet card in the MultiBus cage.
+# BOARD is v1 (default) or v3, the QMTech Wukong revision; see syn/boards.tcl.
 #
 # Nothing generated is committed: the MIG IP comes from syn/mig/sun2_mig.prj
 # via syn/generate_ip.tcl, and everything lands in build/.
@@ -14,12 +15,17 @@
 set here [file normalize [file dirname [info script]]]
 set top  [file normalize $here/..]
 
+source $here/boards.tcl
+
 set cpu_hz   12500000
 set machine  multibus
 set mb_ether 0
+set board    v1
 if {[llength $argv] > 0} { set cpu_hz   [lindex $argv 0] }
 if {[llength $argv] > 1} { set machine  [lindex $argv 1] }
 if {[llength $argv] > 2} { set mb_ether [lindex $argv 2] }
+if {[llength $argv] > 3} { set board    [lindex $argv 3] }
+board_check $board
 
 switch -- $machine {
     multibus { set defines [list SUN2_MULTIBUS] }
@@ -35,9 +41,9 @@ if {$mb_ether == 1} {
     lappend defines SUN2_MB_ETHER
 }
 
-set part    xc7a100tfgg676-2
-set ipdir   $top/build/ip
-set outdir  $top/build/syn/$machine[expr {$mb_ether == 1 ? "-mbether" : ""}]-cpu[expr {$cpu_hz / 1000000}]
+set part    [board_part $board]
+set ipdir   $top/build/ip/$board
+set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}]-cpu[expr {$cpu_hz / 1000000}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir
@@ -48,7 +54,7 @@ if {![file isdirectory $migrtl]} {
     exit 1
 }
 
-puts "== Sun-2 for Wukong V1, $machine, CPU clock $cpu_hz Hz =="
+puts "== Sun-2 for Wukong $board ($part), $machine, CPU clock $cpu_hz Hz =="
 
 # Set the part before reading anything.  read_ip validates the IP against the
 # current part, and in non-project mode that defaults to a Kintex device until
@@ -114,12 +120,12 @@ read_verilog -sv [list \
     $top/build/inputs/Wish82586/src/wb_mdio.sv \
     $top/rtl/sun2-vme/sun2_ethernet.sv \
     $top/rtl/sun2-multibus/sun2_mb_ether.sv \
-    $top/boards/Wukong_V1/phy_rtl8211_init.sv \
+    $top/boards/Wukong/phy_rtl8211_init.sv \
     $top/Inputs/z8530_scc/z8530_scc.sv \
-    $top/boards/Wukong_V1/wukong_clkgen.sv \
-    $top/boards/Wukong_V1/reset_sync.sv \
-    $top/boards/Wukong_V1/wb_to_mig_ui.sv \
-    $top/boards/Wukong_V1/wukong_v1_top.sv \
+    $top/boards/Wukong/wukong_clkgen.sv \
+    $top/boards/Wukong/reset_sync.sv \
+    $top/boards/Wukong/wb_to_mig_ui.sv \
+    $top/boards/Wukong/wukong_top.sv \
 ]
 
 # MIG, as generated.  In a non-project flow read_ip only registers the core --
@@ -132,12 +138,16 @@ if {[llength [get_ips sun2_mig]] == 0} {
 }
 synth_ip [get_ips sun2_mig]
 
-read_xdc $here/wukong_v1.xdc
+# Revision file first, then the shared one: common creates the MII clocks and
+# then groups them, and a get_clocks for a clock that does not exist yet
+# returns nothing and drops the group silently.
+read_xdc $here/wukong_$board.xdc
+read_xdc $here/wukong_common.xdc
 
 # ---------------------------------------------------------------------------
 # Synthesis and implementation
 # ---------------------------------------------------------------------------
-synth_design -top wukong_v1_top -part $part \
+synth_design -top wukong_top -part $part \
     -include_dirs [list $top/rtl/sun2-common $top/build/rom] \
     -verilog_define $defines \
     -generic CPU_CLK_HZ=$cpu_hz \
@@ -169,5 +179,5 @@ if {$wns < 0 || $whs < 0} {
     exit 1
 }
 
-write_bitstream -force $outdir/sun2_wukong_v1.bit
-puts "== wrote $outdir/sun2_wukong_v1.bit =="
+write_bitstream -force $outdir/sun2_wukong_$board.bit
+puts "== wrote $outdir/sun2_wukong_$board.bit =="

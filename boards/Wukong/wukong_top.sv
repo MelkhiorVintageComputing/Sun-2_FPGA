@@ -1,7 +1,15 @@
 `timescale 1ns / 1ps
 
 //
-// Sun-2 on a QMTech Wukong V1 (XC7A100T-2FGG676).
+// Sun-2 on a QMTech Wukong, V1 or V3.
+//
+// One file serves both revisions, because for this design they differ in
+// nothing but pin assignment: DDR3, Ethernet, the serial console and the PMOD
+// are on identical balls, and both boards run from a 50 MHz oscillator.  What
+// does differ -- the oscillator pin, the reset button, the two on-board LEDs,
+// and the FPGA speed grade -- lives in syn/wukong_v1.xdc and syn/wukong_v3.xdc
+// beside syn/wukong_common.xdc, which is where pins belong.  See the table in
+// BRINGUP.md.
 //
 // The synthesis top: board pins in, Sun-2 out.  This is what the LiteX SoC
 // wrapper used to do -- clocks, DDR3 controller, Wishbone clock crossing, DRAM
@@ -23,11 +31,11 @@
 // into a working bitstream.
 //
 
-module wukong_v1_top #(
+module wukong_top #(
     parameter int CPU_CLK_HZ = 12_500_000
 ) (
     input  wire        clk50,
-    input  wire        cpu_reset,     // board button, active low (J8)
+    input  wire        cpu_reset,     // board button, active low
 
     output wire        serial_tx,
     input  wire        serial_rx,
@@ -51,6 +59,7 @@ module wukong_v1_top #(
     // RGMII mode, where nothing would ever work in a way that looked like a
     // MAC fault.
     //
+    // The Ethernet balls below are the same on V1 and V3.
     input  wire        phy_mii_tx_clk,   // M2, PHY-sourced, 2.5 MHz at 10 Mb/s
     output wire [3:0]  phy_mii_txd,      // R2 P1 N2 N1
     output wire        phy_mii_tx_en,    // T2
