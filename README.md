@@ -434,6 +434,12 @@ make -C syn bitstream MACHINE=vme   # a 2/50 instead of a 2/120
 make -C syn both
 ```
 
+Nothing in this repository has run on a board yet. `BRINGUP.md` is the staged
+procedure for the first time it does — what to check, in what order, and what
+each failure looks like given that almost all of them are silent at the
+console. It is also where the deferred debugging tooling lives, the ILA
+included.
+
 Each combination gets its own output directory, `build/syn/<machine>-cpu<MHz>/`.
 Nothing generated is committed. `syn/mig/sun2_mig.prj` is the source of truth
 for the memory controller (see `syn/mig/README.md` for its provenance and the

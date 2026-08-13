@@ -1,0 +1,156 @@
+# Bringing this up on real hardware
+
+Everything here has only ever run in simulation. This is the list of what to do
+on a QMTech Wukong V1 with the board in front of you, and of the tooling that
+was deliberately deferred until something actually misbehaves.
+
+The rule that shapes the order: **each step has an unambiguous pass/fail, and
+nothing is switched on until the thing under it has passed.** The failure modes
+in this design are almost all silent — a PHY at the wrong speed, a stuck
+carrier and a dead controller are the same thing at the console — so a step
+that "seems to work" is not a pass.
+
+```sh
+make -C syn ip                        # once
+make -C syn bitstream MACHINE=vme     # -> build/syn/vme-cpu12/sun2_wukong_v1.bit
+```
+
+Console is 9600 8N1 on `serial_tx` E3 / `serial_rx` F3. Reset is the button on
+J8. Both on-board LEDs are active low.
+
+| LED | lit means |
+|---|---|
+| `user_led[0]` J6 | out of reset |
+| `user_led[1]` H6 | DRAM calibrated, until the PHY bring-up finishes; link up after it |
+| `diag_leds0[7:0]` | the Sun-2 front panel, on the PMOD — the PROM's own progress code |
+
+## Staged bring-up
+
+### 1. The machine, without touching Ethernet
+
+Boot to `>`. This is the whole design minus the PHY, and it is the step most
+likely to fail for a reason that has nothing to do with Ethernet.
+
+* **Pass:** the self-test banner, `Sun Workstation, Model Sun-2/50 or
+  Sun-2/160`, and the prompt.
+* **Nothing at all on the console:** check `user_led[0]`. If it never lights,
+  the reset chain is stuck — MMCM lock or `init_calib_complete`. DDR3 is the
+  usual suspect and the diag LEDs will still be at their reset value.
+* **Garbage on the console:** the SCC's 4.9152 MHz clock is wrong. `make -C sim
+  clkgen` measures what the MMCMs actually generate.
+
+### 2. MDIO alone: is there a PHY, and is it the one we think?
+
+No MAC traffic. Read the identifier through the status register:
+
+```
+>pee0800 fe400fe7
+>eee0800
+EE0800: 001C?
+```
+
+* **Pass:** `001C`, the Realtek OUI.
+* **`FFFF`:** the management interface never answered. Wiring (MDC H2, MDIO
+  H1), the 1.5k pull-up, or the reset timing. `phy_reset_n` R1 has no external
+  circuit at all, so if the bitstream is not driving it the part may never have
+  come out of reset.
+* **`0000`:** something is holding MDIO low.
+* **Anything else:** you are talking to a different part, or to PHY address 0,
+  which is a broadcast — that is exactly why this checks the identifier rather
+  than merely that something replied.
+
+A bus error here instead of a value means the page map entry did not take;
+re-read it with `pee0800` on its own.
+
+### 3. Did it negotiate 10 Mb/s?
+
+The decisive one. Continue the same command with a bare return:
+
+```
+EE0802: F000?
+```
+
+Bits, most significant first: configured, identifier matched, link, full
+duplex, speed `00`, carrier stuck now, carrier stuck ever.
+
+* **Pass:** `F000`. Anything with bits 11:10 not `00` means the PHY and the MAC
+  disagree about how wide the interface is and no frame will ever cross it —
+  the failure that looks exactly like a dead controller.
+* **Bit 15 clear:** the bring-up sequence never finished. It is a straight-line
+  state machine, so this means MDIO stalled part way.
+* **Bit 13 clear:** no link. Cable, or the partner will not do 10BASE-T.
+* **Bit 9 or 8 set:** carrier sense is or has been stuck. Every transmit will
+  defer; the MAC's deferral timeout turns that into `ie: Ethernet cable
+  problem` rather than a hang, which is why bit 8 is sticky — the condition
+  clears faster than you can read the register.
+
+**Also confirm TXCLK (M2) and RXCLK (P4) are 2.5 MHz**, with a scope or the ILA
+below. This is the one assumption the datasheet answers and the board has never
+demonstrated: that a part strapped for GMII presents a 4-bit MII at 10 Mb/s.
+
+### 4. Let it boot and try to net-boot
+
+Expect, as in simulation:
+
+```
+Probing I/O bus: ie
+Auto-boot in progress...
+Boot: ie(0,0,0)vmunix
+???nd: no file server, giving up.
+>
+```
+
+Each `?` is one ND read request that went out on the wire and got no answer.
+Three of them and the prompt means the 82586 initialised, configured itself and
+transmitted — all of it by DVMA through the MMU. Put a packet capture on the
+other end of the cable and the frames should be there.
+
+* **`ie: cannot initialize`:** the controller never cleared the ISCP busy flag.
+  The DVMA path, not the PHY.
+* **`ie: Ethernet cable problem`:** transmit deferred until it gave up. Check
+  bit 8 of the status register.
+* **No `?` at all:** it never got as far as transmitting.
+
+## Deferred until something misbehaves
+
+### The ILA
+
+An ILA on the MII pins, MDC/MDIO, CRS/COL and the DVMA handshake (`P_BR_n`,
+`P_BG_n`, `dvma_active`, `P_DTACK_n`, `P_BERR_n`). It was in the original plan
+as the primary diagnostic, and it is worth building the moment a step above
+fails in a way the console cannot explain.
+
+It is *not* the first thing to reach for any more. The status register in
+device page 0xFE7 answers most of what the ILA was for and answers it from the
+monitor prompt, without a JTAG cable, a Vivado session or a rebuild. What the
+ILA adds that the register cannot is the *timing*: whether MDC is actually
+toggling at 125 kHz, whether TXCLK is 2.5 MHz, and what the DVMA arbitration
+handshake looks like cycle by cycle.
+
+Practical notes for when it is built: it needs a generated `ila` IP core, so it
+touches `syn/generate_ip.tcl` and `syn/build.tcl`; sample it on `cpu_clk` for
+the DVMA group and on `mii_rx_clk` for the receive group rather than trying to
+put both in one core; and remember that adding it changes placement, so re-read
+the timing report rather than assuming the previous clean run still holds.
+
+### Known limits, not bugs
+
+* **Gigabit** is out of reach on this board: the PHY's CLK125 is not routed to
+  the FPGA, and the MAC would want a 125 MHz Wishbone clock.
+* **100 Mb/s** does not work at a 12.5 MHz CPU clock — the receive unit cannot
+  sustain it even with an infinitely fast bus. The bring-up advertises 10BASE-T
+  only, deliberately.
+* **Link-change interrupts** are unavailable: INTB is not routed. The status
+  register polls, and the boot PROM polls anyway.
+* **Actually net-booting** needs an ND server, not more hardware.
+
+### Bandwidth, still only half measured
+
+`make -C sim migddr3` measured the real path: a Wishbone read is 7 CPU clocks
+through MIG, and the VME machine boots identically at `MEM_LATENCY=7`. But the
+boot PROM only ever transmits one frame at a time, so nothing has exercised the
+receive-side cliff — a stream of minimum-size frames at 10 Mb/s needs one
+memory access every 2.43 µs, and a 32-bit DVMA word is two 68010 cycles. When
+that is exceeded the symptom is not clean: bytes vanish from the *middle* of a
+frame, and the receiver then ignores the whole of the next one. Real traffic on
+the wire is the first thing that will test this.

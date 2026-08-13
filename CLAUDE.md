@@ -53,6 +53,10 @@ cannot reach the prompt — it is only good for showing MIG calibrate.
 Vivado is expected at `/opt/Xilinx/2025.2/Vivado`; override `XILINX_VIVADO`.
 Neither `make` in `sim/` nor `syn/` needs `settings64.sh` sourced.
 
+Nothing here has run on a board. `BRINGUP.md` holds the staged hardware
+procedure and the debugging tooling deferred until something misbehaves — the
+ILA among it. Add to that list rather than building diagnostics speculatively.
+
 ## Architecture
 
 **One define picks the machine.** `rtl/sun2_config.vh` derives everything

@@ -47,8 +47,9 @@ set_property -dict {PACKAGE_PIN F3 IOSTANDARD LVCMOS33} [get_ports serial_rx]
 # ---------------------------------------------------------------------------
 # LEDs and button
 # ---------------------------------------------------------------------------
-# On-board LEDs, active low: user_led[0] lit = out of reset,
-#                            user_led[1] lit = DRAM calibrated
+# On-board LEDs, active low: user_led[0] lit = out of reset.
+# user_led[1] answers whichever question is still open -- lit = DRAM
+# calibrated until the PHY bring-up finishes, and lit = link up after it.
 set_property -dict {PACKAGE_PIN J6 IOSTANDARD LVCMOS33} [get_ports {user_led[0]}]
 set_property -dict {PACKAGE_PIN H6 IOSTANDARD LVCMOS33} [get_ports {user_led[1]}]
 
