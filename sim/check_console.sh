@@ -46,8 +46,12 @@ vme)      banner='Sun Workstation, Model Sun-2/50';  model='Sun-2/50'  ;;
 *)        echo "usage: $0 [console.log] [multibus|vme]"; exit 2 ;;
 esac
 
-if [ ! -s "$log" ]; then
-	echo "FAIL: $log is missing or empty -- nothing came out of the serial port"
+if [ ! -f "$log" ]; then
+	echo "FAIL: $log is missing"
+	exit 1
+fi
+if [ ! -s "$log" ] && [ "$fitted" != fb ]; then
+	echo "FAIL: $log is empty -- nothing came out of the serial port"
 	exit 1
 fi
 
@@ -56,7 +60,9 @@ cat "$log"
 echo
 echo "---------------"
 
-if grep -q 'Self Test found a problem' "$log"; then
+if [ "$fitted" = fb ]; then
+	: # nothing comes out of the serial port at all -- see below
+elif grep -q 'Self Test found a problem' "$log"; then
 	echo "FAIL: the PROM self test reported a problem"
 	rc=1
 elif grep -q 'Self Test completed successfully' "$log"; then
@@ -66,14 +72,27 @@ else
 	rc=1
 fi
 
-if grep -q "$banner" "$log"; then
+if [ "$fitted" = fb ]; then
+	: # the banner goes to the screen
+elif grep -q "$banner" "$log"; then
 	echo "PASS: identified itself as a $model"
 else
 	echo "FAIL: no machine banner"
 	rc=1
 fi
 
-if grep -q '>' "$log"; then
+# With a frame buffer the machine is *supposed* to say nothing here: the boot
+# PROM moves the console to the screen and the serial port goes quiet.  Silence
+# is the evidence that s2fbthere() passed; what actually reached the display is
+# checked in tb_sun2, which looks for the Sun logo in the frame buffer.
+if [ "$fitted" = fb ]; then
+	if [ -s "$log" ]; then
+		echo "FAIL: the frame buffer build still printed to the serial console"
+		rc=1
+	else
+		echo "PASS: serial console silent, as it is with a display attached"
+	fi
+elif grep -q '>' "$log"; then
 	echo "PASS: monitor prompt seen"
 elif [ "$fitted" = mbether ]; then
 	# Not a failure here, and not reachable either: see the note below.
@@ -93,14 +112,16 @@ fi
 #             0, a write to the ID PROM, and a read back that must not return
 #             what was written -- so reaching this point also proves the
 #             MultiBus memory space decode and the card's probe contract.
-if [ "$machine" = vme ] || [ "$fitted" = mbether ]; then
+if [ "$fitted" != fb ] && { [ "$machine" = vme ] || [ "$fitted" = mbether ]; }; then
 	if grep -q 'ie: cannot initialize' "$log"; then
 		echo "FAIL: the Ethernet controller did not initialise"
 		rc=1
 	fi
 fi
 
-if [ "$machine" = vme ]; then
+# With a frame buffer this all happens on the screen instead; tb_sun2 counts the
+# DVMA cycles and the frames on the wire, which is the same evidence.
+if [ "$machine" = vme ] && [ "$fitted" != fb ]; then
 	if grep -q 'no file server' "$log"; then
 		echo "PASS: Ethernet initialised, transmitted, and found no server"
 	elif ! grep -q 'ie: cannot initialize' "$log"; then

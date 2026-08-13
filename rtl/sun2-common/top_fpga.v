@@ -20,6 +20,9 @@ module top(input         cpu_clk,
 	    one failure the machine cannot otherwise report. */
 	   output 	 eth_crs_stuck,
 
+	   /* The 2/50 frame buffer's display enable, for the board's scan-out */
+	   output 	 fb_video_en,
+
 	   /* What the board's PHY management found out, on its way to the
 	    status register in device page 0xFE7.  A Sun-2 has no PHY, so
 	    nothing below this level generates these; a testbench with no board
@@ -152,6 +155,7 @@ module top(input         cpu_clk,
 		  .phy_fd(phy_fd),
 		  .phy_speed(phy_speed),
 		  .phy_crs_stuck(eth_crs_stuck),
+		  .fb_video_en_o(fb_video_en),
 		  .mb_sel(mb_sel),
 		  .mb_addr(mb_addr),
 		  .mb_we(mb_we),

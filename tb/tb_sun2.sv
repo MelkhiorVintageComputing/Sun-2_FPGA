@@ -1,5 +1,9 @@
 `timescale 1ns / 1ps
 
+// For FB_WB_BASE: the frame buffer check below has to look where the design
+// put it, not where it guesses.
+`include "sun2_config.vh"
+
 //
 // Testbench for the Sun-2 replica -- whichever machine sun2_config.vh selects.
 // It is machine-agnostic: the design announces what it was built as at time 0.
@@ -187,6 +191,82 @@ module tb_sun2 #(
                                        .wb_ack_o(wb_ack)
                                        );
 
+`ifdef SUN2_FB
+   // ------------------------------------------------------------------
+   // Did anything reach the screen?
+   // ------------------------------------------------------------------
+   // With a frame buffer the boot PROM moves the console to the display and
+   // the serial port goes quiet, so the usual "did it print the banner"
+   // assertions have nothing to look at.  What it draws instead is the Sun
+   // logo, and that is a 128-word constant in
+   // Inputs/sunos-34-src/.../rsun/mon/dpy/sunlogo.c -- so look for it.
+   //
+   // Finding it proves rather a lot at once: that s2fbthere() passed, that the
+   // aperture decodes, that the address remap into DDR3 is right, that the
+   // byte lanes are right, and that the PROM's own drawing code ran.
+   //
+   // The byte order is the thing to be careful about, and it is worth writing
+   // down because fb_scanout will need exactly the same unscrambling.  The
+   // Wishbone bridge puts the CPU word at A1=0 in the *low* half of the 32-bit
+   // word, so for the 32-bit word at aperture offset 4W:
+   //
+   //     byte 4W+0 = wb[15:8]     byte 4W+2 = wb[31:24]
+   //     byte 4W+1 = wb[7:0]      byte 4W+3 = wb[23:16]
+   //
+   // i.e. the two 16-bit halves are swapped relative to a plain big-endian
+   // bitmap.  That falls out of a convention chosen for main memory, where it
+   // is invisible because it is self-consistent; here it is visible.
+   localparam int unsigned FB_WORDS = 32768;   // 128 KiB / 4
+
+   function automatic logic [7:0] fb_byte(input int unsigned off);
+      logic [31:0] w;
+      begin
+         w = ram.fetch(`FB_WB_BASE + (off >> 2));
+         case (off[1:0])
+           2'd0: fb_byte = w[15:8];
+           2'd1: fb_byte = w[7:0];
+           2'd2: fb_byte = w[31:24];
+           default: fb_byte = w[23:16];
+         endcase
+      end
+   endfunction
+
+   // One distinctive row from the middle of the logo, where it is widest:
+   // logo_data[56..57] = 0x7FBFBFE7, 0x9FEFEFFE.
+   localparam logic [7:0] LOGO [0:7] = '{8'h7F, 8'hBF, 8'hBF, 8'hE7,
+                                         8'h9F, 8'hEF, 8'hEF, 8'hFE};
+
+   function automatic int find_logo();
+      int unsigned off;
+      int          k;
+      bit          hit;
+      begin
+         for (off = 0; off < FB_WORDS*4 - 8; off++) begin
+            hit = 1'b1;
+            for (k = 0; k < 8; k++)
+              if (fb_byte(off + k) !== LOGO[k]) begin
+                 hit = 1'b0;
+                 break;
+              end
+            if (hit) return int'(off);
+         end
+         return -1;
+      end
+   endfunction
+
+   task automatic fb_report();
+      int where;
+      begin
+         where = find_logo();
+         if (where >= 0)
+           $display("PASS: the Sun logo is in the frame buffer, at offset 0x%05x (row %0d)",
+                    where, where / 144);
+         else
+           $display("FAIL: no Sun logo in the frame buffer -- nothing reached the screen");
+      end
+   endtask
+`endif
+
    // ------------------------------------------------------------------
    // Serial console
    // ------------------------------------------------------------------
@@ -351,6 +431,9 @@ module tb_sun2 #(
       if (n_dvma > 0) $display("%0d DVMA cycles in total", n_dvma);
       console_mon.report();
       ram.report();
+`ifdef SUN2_FB
+      fb_report();
+`endif
       $finish;
    endtask
 

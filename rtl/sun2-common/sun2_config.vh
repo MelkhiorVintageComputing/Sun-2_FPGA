@@ -187,6 +187,35 @@
  `define MB_ETHER_MEM_KIB 256
 `endif
 
+//---------------------------------------------------------------------
+// The frame buffer
+//---------------------------------------------------------------------
+// The 2/50's on-board monochrome frame buffer: 1152x900, one bit per pixel,
+// in a 128 KiB aperture at page-map TYPE 1 pages 0..63, with a video control
+// register at page 0x40.  See rtl/sun2-vme/sun2_fb_ctl.v.
+//
+// Optional, and off by default, because it changes what the machine *is* from
+// the outside: when s2fbthere() succeeds the boot PROM moves the console to
+// the screen and the serial port goes quiet.  That is correct -- it is what a
+// 2/50 with a display does -- but it is not what you want during bring-up, and
+// every console regression so far assumes the serial console.
+//
+//`define SUN2_FB
+
+// Where the pixels live in DDR3, as a Wishbone *word* address.
+//
+// 0x03E00000 words = byte 0x0F800000 = 248 MiB, the start of the top 8 MiB of
+// the board's 256 MiB.  The CPU's own memory master can only ever generate
+// byte addresses below 8 MiB -- the Sun-2 has nowhere to put a bigger number --
+// so the two cannot collide by construction.
+//
+// 8 MiB for a 128 KiB frame buffer is deliberate room to grow: a colour or
+// higher-resolution buffer would still fit.
+//
+`ifndef FB_WB_BASE
+ `define FB_WB_BASE 30'h03E00000
+`endif
+
 //=====================================================================
 // Independent of which machine
 //=====================================================================

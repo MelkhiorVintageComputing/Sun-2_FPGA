@@ -57,6 +57,8 @@ module sun2_fpga(input         cpu_clk,
 		 input 	       phy_fd,
 		 input [1:0]   phy_speed,
 		 input 	       phy_crs_stuck,
+		 /* The 2/50 frame buffer's display enable, for the scan-out */
+		 output        fb_video_en_o,
 		 /* The MultiBus system bus, page-map TYPE 2.  A space, not a
 		  device: this says a cycle is aimed at it and gives the bus
 		  address, and whatever is plugged in answers.  With nothing
@@ -445,7 +447,27 @@ module sun2_fpga(input         cpu_clk,
    assign MATCH_TIMER    = MATCH_DEV & (ma_pmap2devices[2:0] == 3'h5);
    assign MATCH_ROPS     = MATCH_DEV & (ma_pmap2devices[2:0] == 3'h6); // not in prime
    assign MATCH_RTC      = MATCH_DEV & (ma_pmap2devices[2:0] == 3'h7); // not in prime
-   
+
+   // The 2/50's frame buffer, which is TYPE 1 like the devices above but
+   // nowhere near them: pages 0..63 for the 128 KiB of pixels and page 0x40
+   // for the video control register, at the bottom of I/O space rather than in
+   // the eight-page window at DEV_PAGE_BASE.  That is why MATCH_DEV cannot
+   // reach them and why s2fbthere() fails without this.
+   //
+   // The pixels do not answer here -- they are in DDR3, and the Wishbone
+   // bridge fields MATCH_FB.  Only the control register is local.
+   wire 			 MATCH_FB, MATCH_FBCTL;
+`ifdef SUN2_FB
+   assign MATCH_FB       = (FC_GENERAL) & (TYPE == 3'h1) & C_S6 &
+                           (ma_pmap2devices[11:6] == 6'h0);
+   assign MATCH_FBCTL    = (FC_GENERAL) & (TYPE == 3'h1) & C_S6 &
+                           (ma_pmap2devices == 12'h040);
+`else
+   assign MATCH_FB       = 1'b0;
+   assign MATCH_FBCTL    = 1'b0;
+`endif
+
+
 `ifdef MEM_SIM_ONLY
    assign MATCH_MEM      = (FC_GENERAL) & (TYPE == 3'h0) & (ma_pmap2devices[11:8] == 4'h0) & C_S6; // "physically" installed (simulation => reduced)
 `else
@@ -541,7 +563,7 @@ module sun2_fpga(input         cpu_clk,
    wire 				 L_M_MAP_SEEN;
    assign L_M_MAP_SEEN = (leds == 8'h8F); 
    
-   sun2_wishbone_bridge wbridge(.CLK(C100),
+   sun2_wishbone_bridge #(.FB_WB_BASE(`FB_WB_BASE)) wbridge(.CLK(C100),
 				.RESET_n(~sys_reset), // don't reset on CPU-only reset, don't want to loose memory access then
 				.SET_ENABLE(L_M_MAP_SEEN),
 				.P_ADR_IN({1'h0, ma_pmap2devices[11:0], P_A[10:1]}), // full physical (4 MiB)
@@ -550,7 +572,9 @@ module sun2_fpga(input         cpu_clk,
 				.P_RW_n(P_RW_n),
 				.EN_LBYTE(~P_LDS_n),
 				.EN_UBYTE(~P_UDS_n),
+				.FB_PAGE(ma_pmap2devices[5:0]),
 				.MATCH_MEM(MATCH_MEM & ~MATCH_PROM_BOOT),
+				.MATCH_FB(MATCH_FB),
 				.W_ACK(w_ack),
      
 				// wishbone
@@ -753,6 +777,27 @@ module sun2_fpga(input         cpu_clk,
    assign ether_int_en       = 1'b0;
 `endif
 
+   /* Video control register -- VME machines only, and only with SUN2_FB */
+   wire [15:0] 			 fbctl_out;
+   wire 			 fb_video_en, fb_int;
+`ifdef SUN2_FB
+   sun2_fb_ctl fbctl(.CLK(CLK),
+		     .RESET(sys_reset),
+		     .din(P_DIN),
+		     .WR(WR & MATCH_FBCTL & C_S8),
+		     .UDS_n(P_UDS_n),
+		     .LDS_n(P_LDS_n),
+		     .dout(fbctl_out),
+		     .video_en(fb_video_en),
+		     .fb_int(fb_int)
+		     );
+`else
+   assign fbctl_out   = 16'h0000;
+   assign fb_video_en = 1'b0;
+   assign fb_int      = 1'b0;
+`endif
+   assign fb_video_en_o = fb_video_en;
+
    /* PHY status register -- VME machines only, and not a Sun-2 device at all */
    //
    // Device page 7, which is unused on a VME machine (0xFE7) and a real-time
@@ -804,6 +849,8 @@ module sun2_fpga(input         cpu_clk,
 		   MATCH_KBM       ? {kbm_out, 8'h0} :
 		   MATCH_ETHER     ? {ether_out, 8'h0} :
 		   MATCH_PHY       ? phy_status_out :
+		   MATCH_FBCTL     ? fbctl_out :
+		   MATCH_FB        ? wishbone_out :
 		   mb_hit          ? mb_din :
 		   16'hDEAD;
 
@@ -814,7 +861,8 @@ module sun2_fpga(input         cpu_clk,
 			( P_RW_n & C_S4 & (MATCH_CTX | MATCH_IDPROM | MATCH_SYSEN | MATCH_BERR | MATCH_PROM_BOOT)) | // entering S4, quick devices
 			( P_RW_n & C_S4 & (MATCH_SMAP)) |  // entering S4, quick devices (CTX is 1 clock but went valid after being written, not affected by P_A)
 			( P_RW_n & C_S6 & (MATCH_PMAP_PS | MATCH_PMAP_MA)) |  // entering S6, physical map needed an extra cycle
-			( P_RW_n & C_S8 & (MATCH_TIMER | MATCH_PROM | MATCH_SERIAL | MATCH_KBM | MATCH_ETHER | MATCH_PHY)) | // entering S8, devices going through the MMU
+			( P_RW_n & C_S8 & (MATCH_TIMER | MATCH_PROM | MATCH_SERIAL | MATCH_KBM | MATCH_ETHER | MATCH_PHY | MATCH_FBCTL)) | // entering S8, devices going through the MMU
+			( P_RW_n & w_ack & (MATCH_FB)) | // the frame buffer is in DDR3
 `ifdef MEM_SIM_ONLY
 		        ( P_RW_n & C_S8 & (MATCH_MEMX)) | // entering S8, memory going through the MMU
 `else
@@ -829,7 +877,8 @@ module sun2_fpga(input         cpu_clk,
 			(~P_RW_n & C_S4 & (MATCH_CTX | MATCH_SYSEN | MATCH_DIAG | MATCH_BERR)) | // entering S4, quick devices
 			(~P_RW_n & C_S4 & (MATCH_SMAP)) |  // entering S4, quick devices (CTX is 1 clock but went valid after being written, not affected by P_A)
 			(~P_RW_n & C_S6 & (MATCH_PMAP_PS | MATCH_PMAP_MA)) |  // entering S6, physical map needed an extra cycle
-			(~P_RW_n & C_S8 & (MATCH_TIMER |              MATCH_SERIAL | MATCH_KBM | MATCH_ETHER)) | // entering S8, devices going through the MMU
+			(~P_RW_n & C_S8 & (MATCH_TIMER |              MATCH_SERIAL | MATCH_KBM | MATCH_ETHER | MATCH_FBCTL)) | // entering S8, devices going through the MMU
+			(~P_RW_n & w_ack & (MATCH_FB)) | // the frame buffer is in DDR3
 `ifdef MEM_SIM_ONLY
 		        (~P_RW_n & C_S8 & (MATCH_MEMX)) | // entering S8, memory going through the MMU
 `else

@@ -45,6 +45,7 @@ fi
 # both get run.
 case " $SUN2_DEFINES " in
 	*" SUN2_MB_ETHER "*) rundir_tag="-mbether" ;;
+	*" SUN2_FB "*)       rundir_tag="-fb" ;;
 	*)                   rundir_tag="" ;;
 esac
 rundir="$top/build/sim/xsim${SUN2_MACHINE:+-$SUN2_MACHINE}$rundir_tag"
@@ -95,6 +96,7 @@ xvlog --work sun2 \
 	"$top/rtl/sun2-common/gen8bit_reg.v" \
 	"$top/rtl/sun2-vme/sun2_ether_ctl.v" \
 	"$top/rtl/sun2-vme/sun2_phy_status.v" \
+	"$top/rtl/sun2-vme/sun2_fb_ctl.v" \
 	"$top/rtl/sun2-vme/sun2_dvma.v" \
 	"$top/rtl/sun2-common/ttl_am9513.v" \
 	"$top/rtl/sun2-common/ttl_74F151.v" \

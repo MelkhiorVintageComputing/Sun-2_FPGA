@@ -1,4 +1,22 @@
-module sun2_wishbone_bridge (input SET_ENABLE,
+//
+// The Sun-2's memory master: 68010 bus cycles out, Wishbone in.
+//
+// Two apertures share it, because a CPU cycle is one or the other and never
+// both:
+//
+//   MATCH_MEM  main memory, physical byte address straight through, based at 0
+//   MATCH_FB   the 2/50's frame buffer -- 128 KiB of page-map TYPE 1 pages
+//              0..63, relocated to FB_WB_BASE in DDR3.  See sun2_fb_ctl.v.
+//
+// Everything else -- the byte lanes, the read return, the acknowledge that
+// becomes DTACK -- is identical for both, which is the whole reason the frame
+// buffer comes through here rather than through a master of its own.
+//
+module sun2_wishbone_bridge #(
+    // Word address of the frame buffer in DDR3.  Only meaningful with
+    // MATCH_FB; see FB_WB_BASE in sun2_config.vh.
+    parameter [29:0] FB_WB_BASE = 30'h03E00000
+) (input SET_ENABLE,
 			     input 	       RESET_n,
 			     input 	       CLK,
 			     // some CPU bus signals
@@ -9,9 +27,14 @@ module sun2_wishbone_bridge (input SET_ENABLE,
 			     input 	       EN_LBYTE,
 			     input 	       EN_UBYTE,
 			     
+			     // Physical page from the MMU, for the frame buffer
+			     // aperture: pages 0..63 of TYPE 1, 2 KiB each.
+			     input [5:0]       FB_PAGE,
+
 			     // match : response
 			     input 	       MATCH_MEM,
-			     output 	       W_ACK, 
+			     input 	       MATCH_FB,
+			     output 	       W_ACK,
 			     
 			     // wishbone
 			     output 	       wb_cyc_o,
@@ -30,10 +53,19 @@ module sun2_wishbone_bridge (input SET_ENABLE,
    reg 					   ENABLE;
    
    
-   assign wb_cyc_o = ~ENABLE ? 1'b0 : (MATCH_MEM) & ~wb_ack_i_prev;
-   assign wb_stb_o = ~ENABLE ? 1'b0 : (MATCH_MEM) & ~wb_ack_i_prev;
-   assign wb_adr_o = ~ENABLE ? 30'h00000000 : (MATCH_MEM ? {8'h0, P_ADR_IN[23:2]} : // wishbone word-addressed, memory is based at 0
-						30'h0C0FFEEE);
+   wire 				   MATCH_ANY = MATCH_MEM | MATCH_FB;
+
+   // The frame buffer's word address within its 128 KiB aperture: the physical
+   // page picks the 2 KiB, P_ADR_IN the word inside it.  FB_WB_BASE is 128 KiB
+   // aligned, so this is an OR rather than an add.
+   wire [29:0] 				   fb_adr = FB_WB_BASE | {15'h0, FB_PAGE, P_ADR_IN[10:2]};
+
+   assign wb_cyc_o = ~ENABLE ? 1'b0 : (MATCH_ANY) & ~wb_ack_i_prev;
+   assign wb_stb_o = ~ENABLE ? 1'b0 : (MATCH_ANY) & ~wb_ack_i_prev;
+   assign wb_adr_o = ~ENABLE ? 30'h00000000 :
+		     MATCH_FB  ? fb_adr :
+		     MATCH_MEM ? {8'h0, P_ADR_IN[23:2]} : // wishbone word-addressed, memory is based at 0
+				 30'h0C0FFEEE;
 `ifdef WB_LITTLE_ENDIAN
    assign wb_dat_o = ~ENABLE ? 32'h00000000 : {P_DATA_IN[ 7: 0], // wishbone little-endian
 					       P_DATA_IN[15: 8],

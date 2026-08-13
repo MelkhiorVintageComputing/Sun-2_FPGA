@@ -7,6 +7,7 @@
 #   make xsim MEM_LATENCY=7  memory as slow as the real DDR3 path
 #   make xsim MACHINE=vme  be a Sun 2/50 (VME) instead of a 2/120 (MultiBus)
 #   make xsim MB_ETHER=1   fit the MultiBus Ethernet board (MultiBus only)
+#   make xsim FB=1         fit the frame buffer (VME only)
 #   make iverilog          the open-source flow (GHDL-converted CPU), best effort
 #   make check             assert the console reached the monitor prompt
 #                          (pass the same MACHINE= as the run it is checking)
@@ -62,6 +63,12 @@ endif
 # 23,629-bus-error fingerprint describes.
 ifeq ($(MB_ETHER),1)
 DEFINES += SUN2_MB_ETHER
+endif
+# Fit the 2/50's frame buffer.  VME only, and note it changes what the machine
+# looks like from outside: with a display the boot PROM puts the console on the
+# screen and the serial port goes quiet.
+ifeq ($(FB),1)
+DEFINES += SUN2_FB
 endif
 
 # Simulated milliseconds before giving up, and the console string that means
@@ -130,6 +137,9 @@ iverilog: rom
 ifeq ($(MB_ETHER),1)
 RUNTAG  = -mbether
 FITTED  = mbether
+else ifeq ($(FB),1)
+RUNTAG  = -fb
+FITTED  = fb
 else
 RUNTAG  =
 FITTED  =
