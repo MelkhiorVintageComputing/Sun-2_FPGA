@@ -262,6 +262,7 @@ Two device pages differ from MultiBus and are instantiated only for VME
 |---|---|---|
 | 0xFE1 | Intel 82586 Ethernet — control register (`rtl/sun2_ether_ctl.v`) plus the controller itself (`rtl/sun2_ethernet.sv`) | 80287 socket, not implemented |
 | 0xFE3 | keyboard/mouse Z8530, a second instance of the serial SCC | parallel port, not implemented |
+| 0xFE7 | Ethernet PHY status (`rtl/sun2_phy_status.v`) — not a Sun-2 device at all, see below | National 58167 real-time clock, not implemented |
 
 Nothing is attached to the keyboard SCC, so the monitor's keyboard hunt times
 out and the console stays on serial A — which is what we want. The frame
@@ -344,8 +345,57 @@ Seven of those balls are also PHY configuration straps, latched when its reset
 releases; they are inputs and must stay inputs, with no pull property, or the
 PHY comes up at the wrong address or in RGMII mode.
 
-MDIO itself is not wired up yet, so the PHY would negotiate gigabit and the
-4-bit MII build would see nonsense. That is the next piece of work.
+`rtl/board/phy_rtl8211_init.sv` brings it down to something a Sun-2 can talk
+to, over `wb_mdio` at 125 kHz. Read the identifier as a smoke test, write
+GBCR = 0 to withdraw the gigabit advertisement the straps make, advertise
+10BASE-T only in ANAR, clear PHYCR bit 11 — "Assert CRS on Transmit", which
+comes up **set** in GMII mode and would make the MAC defer on its own frames —
+and only then restart negotiation. That order is forced: writes to registers 0,
+4 and 9 latch on a reset or a restart and nothing else, and there is no
+software reset in the sequence because it would undo them.
+
+Advertising 10 rather than *forcing* it is deliberate. A forced link sends no
+advertisement, so the partner parallel-detects and falls back to half duplex,
+giving a duplex mismatch that looks exactly like a MAC bug.
+
+### Asking the machine what the PHY did
+
+The board cannot be probed interactively, and the three ways this fails
+silently — MDIO never answered, the link came up at gigabit, or carrier sense
+is stuck — are indistinguishable from a dead controller at the console. So all
+of it is readable from the monitor prompt, in device page **0xFE7**, which a
+real 2/50 leaves unused (`s2map.h` comments 0xFE6 and 0xFE7 as such and the
+PROM never maps either). Read-only; a write takes the bus-error timeout, as
+writing the ID PROM does.
+
+| | |
+|---|---|
+| +0 | PHYID1 as read back over MDIO — `001C` is the Realtek OUI |
+| +2 bit 15 | the bring-up sequence finished |
+| +2 bit 14 | ... and the identifier matched (address 0 is a broadcast, so an answer alone proves nothing) |
+| +2 bit 13 | link |
+| +2 bit 12 | full duplex |
+| +2 bits 11:10 | speed: 00 = 10, 01 = 100, 10 = 1000 Mb/s |
+| +2 bit 9 | carrier sense stuck now |
+| +2 bit 8 | ... or at any point since reset (sticky) |
+
+The PROM does not map the page, so point one at it first. `0xEE0800` is
+`ROP_BASE`, the RasterOp processor a VME machine does not have, which
+`sunmon.c` maps valid-but-inaccessible precisely because nothing uses it:
+
+```
+>pee0800 fe400fe7             valid, all permissions, type 1, page 0xFE7
+>eee0800
+EE0800: 001C?                 a Realtek part answered MDIO
+EE0802: F000?                 configured, matched, link up, full duplex, 10 Mb/s
+q
+```
+
+`make -C sim board-phy` does exactly that in simulation and
+`sim/check_console.sh` asserts both answers — `tb/uart_console.sv` types at the
+prompt and `tb/mdio_phy_model.sv` is the PHY. It boots the whole machine first,
+so it costs an hour of wall clock; the bring-up sequencer on its own is
+`make -C sim phy`, which takes seconds.
 
 In simulation the MII side goes to `tb/mii_peer.sv`, which supplies clocks and a
 quiet line.
@@ -460,6 +510,7 @@ make -C sim migddr3    # wb_to_mig_ui + real MIG + Micron model, ~3 minutes
 make -C sim adapter    # wb_to_mig_ui vs the reference, randomised, seconds
 make -C sim dvma       # sun2_dvma: Wishbone master -> 68010 bus cycles
 make -C sim clkgen     # measure the generated clocks
+make -C sim phy        # phy_rtl8211_init vs an independent clause-22 PHY model
 ```
 
 Micron's DDR3 model comes from the *generated* example design, not the copy in

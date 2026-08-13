@@ -104,6 +104,7 @@ xvlog --work sun2 "${defargs[@]}" \
 	"$top/rtl/idprom.v" \
 	"$top/rtl/gen8bit_reg.v" \
 	"$top/rtl/sun2_ether_ctl.v" \
+	"$top/rtl/sun2_phy_status.v" \
 	"$top/rtl/sun2_dvma.v" \
 	"$top/rtl/ttl_am9513.v" \
 	"$top/rtl/ttl_74F151.v" \
@@ -113,7 +114,8 @@ xvlog --work sun2 "${defargs[@]}" \
 
 echo "== compiling the board layer and testbench (SystemVerilog) =="
 board_src=("$top/rtl/board/wukong_clkgen.sv" "$top/rtl/board/reset_sync.sv" "$top/rtl/board/wukong_v1_top.sv")
-tb_src=("$top/tb/wb_ram_model.sv" "$top/tb/uart_monitor.sv" "$top/tb/mii_peer.sv" "$top/tb/tb_wukong.sv")
+tb_src=("$top/tb/wb_ram_model.sv" "$top/tb/uart_monitor.sv" "$top/tb/uart_console.sv" \
+        "$top/tb/mii_peer.sv" "$top/tb/mdio_phy_model.sv" "$top/tb/tb_wukong.sv")
 
 if [ "$BOARD_MEM" = "ddr3" ]; then
 	board_src+=("$top/rtl/board/wb_to_mig_ui.sv")

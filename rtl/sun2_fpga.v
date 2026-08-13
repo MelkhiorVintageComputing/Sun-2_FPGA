@@ -46,6 +46,17 @@ module sun2_fpga(input         cpu_clk,
 		 output        ether_int_en,
 		 input 	       ether_int,
 		 input 	       ether_bus_err,
+		 /* The board's Ethernet PHY, surfaced read-only in device page
+		  0xFE7 so a machine at the monitor prompt can be asked what it
+		  did.  See rtl/sun2_phy_status.v.  A Sun-2 has no PHY: these
+		  come from the board layer and are tied off everywhere else. */
+		 input [15:0]  phy_id,
+		 input 	       phy_present,
+		 input 	       phy_cfg_done,
+		 input 	       phy_link,
+		 input 	       phy_fd,
+		 input [1:0]   phy_speed,
+		 input 	       phy_crs_stuck,
 		 /* debug */
 		 output [7:0]  diag_leds,
 		 output        en_boot,
@@ -691,6 +702,33 @@ module sun2_fpga(input         cpu_clk,
    assign ether_out   = 8'h00;
 `endif
 
+   /* PHY status register -- VME machines only, and not a Sun-2 device at all */
+   //
+   // Device page 7, which is unused on a VME machine (0xFE7) and a real-time
+   // clock we do not implement on a MultiBus one.  Read-only: no write DTACK
+   // term, so a write times out into a bus error, as writing the ID PROM does.
+   wire [15:0] 			 phy_status_out;
+   wire 			 MATCH_PHY;
+`ifdef SUN2_VME
+   assign MATCH_PHY = MATCH_RTC;
+
+   sun2_phy_status phystat(.CLK(CLK),
+			   .RESET(sys_reset),
+			   .P_A1(P_A[1]),
+			   .dout(phy_status_out),
+			   .phy_id(phy_id),
+			   .phy_present(phy_present),
+			   .phy_cfg_done(phy_cfg_done),
+			   .phy_link(phy_link),
+			   .phy_fd(phy_fd),
+			   .phy_speed(phy_speed),
+			   .crs_stuck(phy_crs_stuck)
+			   );
+`else
+   assign MATCH_PHY       = 1'b0;
+   assign phy_status_out  = 16'h0000;
+`endif
+
 
 
    // Answering the CPU
@@ -714,6 +752,7 @@ module sun2_fpga(input         cpu_clk,
 		   MATCH_SERIAL    ? {serial_out, 8'h0} :
 		   MATCH_KBM       ? {kbm_out, 8'h0} :
 		   MATCH_ETHER     ? {ether_out, 8'h0} :
+		   MATCH_PHY       ? phy_status_out :
 		   16'hDEAD;
 
    // DTACK generator. has knowledge of timings for all devices
@@ -723,7 +762,7 @@ module sun2_fpga(input         cpu_clk,
 			( P_RW_n & C_S4 & (MATCH_CTX | MATCH_IDPROM | MATCH_SYSEN | MATCH_BERR | MATCH_PROM_BOOT)) | // entering S4, quick devices
 			( P_RW_n & C_S4 & (MATCH_SMAP)) |  // entering S4, quick devices (CTX is 1 clock but went valid after being written, not affected by P_A)
 			( P_RW_n & C_S6 & (MATCH_PMAP_PS | MATCH_PMAP_MA)) |  // entering S6, physical map needed an extra cycle
-			( P_RW_n & C_S8 & (MATCH_TIMER | MATCH_PROM | MATCH_SERIAL | MATCH_KBM | MATCH_ETHER)) | // entering S8, devices going through the MMU
+			( P_RW_n & C_S8 & (MATCH_TIMER | MATCH_PROM | MATCH_SERIAL | MATCH_KBM | MATCH_ETHER | MATCH_PHY)) | // entering S8, devices going through the MMU
 `ifdef MEM_SIM_ONLY
 		        ( P_RW_n & C_S8 & (MATCH_MEMX)) | // entering S8, memory going through the MMU
 `else

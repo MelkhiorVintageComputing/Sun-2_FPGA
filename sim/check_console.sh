@@ -91,4 +91,33 @@ if [ "$machine" = vme ]; then
 	fi
 fi
 
+# The PHY probe, if this run did one.  The board testbench types at the monitor
+# prompt: it maps device page 0xFE7 over the RasterOp page the VME PROM leaves
+# dead, then reads the two words of the status register.  Against
+# tb/mdio_phy_model that is
+#
+#   EE0800: 001C?           the Realtek OUI, read back over MDIO
+#   EE0802: F000?           configured, identifier matched, link up, full
+#                           duplex, 10 Mb/s, carrier sense never stuck
+#
+# Anything else here is a real failure and a specific one: 0000 or FFFF at +0
+# means the management interface never answered, and a speed field other than
+# 00 in bits 11:10 means the PHY and the MAC disagree about how wide the
+# interface is, which is the failure that looks exactly like a dead controller.
+if grep -q 'PageMap' "$log"; then
+	if grep -qi 'EE0800: 001C' "$log"; then
+		echo "PASS: the PHY identifier reads back as Realtek through device page 0xFE7"
+	else
+		echo "FAIL: no Realtek identifier in the PHY status register"
+		rc=1
+	fi
+
+	if grep -qi 'EE0802: F000' "$log"; then
+		echo "PASS: PHY configured, link up, full duplex, 10 Mb/s, carrier sense clean"
+	else
+		echo "FAIL: the PHY status word is not a configured 10 Mb/s link"
+		rc=1
+	fi
+fi
+
 exit $rc

@@ -20,6 +20,17 @@ module top(input         cpu_clk,
 	    one failure the machine cannot otherwise report. */
 	   output 	 eth_crs_stuck,
 
+	   /* What the board's PHY management found out, on its way to the
+	    status register in device page 0xFE7.  A Sun-2 has no PHY, so
+	    nothing below this level generates these; a testbench with no board
+	    layer ties them off. */
+	   input [15:0]  phy_id,
+	   input 	 phy_present,
+	   input 	 phy_cfg_done,
+	   input 	 phy_link,
+	   input 	 phy_fd,
+	   input [1:0] 	 phy_speed,
+
 	   /* MII, for the on-board Ethernet of a VME machine.  Nothing on the
 	    Wukong drives these yet; in simulation they go to tb/mii_peer.sv. */
 	   input 	 mii_tx_clk,
@@ -127,6 +138,13 @@ module top(input         cpu_clk,
 		  .ether_int_en(ether_int_en),
 		  .ether_int(ether_int),
 		  .ether_bus_err(ether_bus_err),
+		  .phy_id(phy_id),
+		  .phy_present(phy_present),
+		  .phy_cfg_done(phy_cfg_done),
+		  .phy_link(phy_link),
+		  .phy_fd(phy_fd),
+		  .phy_speed(phy_speed),
+		  .phy_crs_stuck(eth_crs_stuck),
 
 		  .diag_leds(diag_leds),
 		  .en_boot(en_boot),

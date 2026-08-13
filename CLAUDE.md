@@ -35,6 +35,15 @@ make -C sim dvma       # sun2_dvma: Wishbone master -> 68010 bus cycles
 make -C sim adapter    # wb_to_mig_ui against a reference model
 make -C sim migddr3    # the adapter against the real MIG + Micron DDR3, reports bus latency
 make -C sim clkgen     # measures what the MMCMs actually generate
+make -C sim phy        # phy_rtl8211_init against an independent clause-22 PHY model
+```
+
+The board testbench can also type at the monitor prompt (`tb/uart_console.sv`),
+which is how the PHY status register in device page 0xFE7 is checked
+end-to-end — a full boot first, so it is an hour of wall clock, not minutes:
+
+```sh
+make -C sim board-phy   # boot, then map 0xFE7 and read it from the prompt
 ```
 
 Expect a full boot to take roughly 0.5 s of wall clock per simulated

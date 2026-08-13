@@ -142,6 +142,16 @@ module tb_sun2 #(
 
            .eth_crs_stuck(eth_crs_stuck),
 
+           // There is no board layer here and so no PHY at all -- mii_peer is
+           // the wire, not a transceiver.  The status register in device page
+           // 0xFE7 correctly reports a bring-up that never happened.
+           .phy_id(16'h0000),
+           .phy_present(1'b0),
+           .phy_cfg_done(1'b0),
+           .phy_link(1'b0),
+           .phy_fd(1'b0),
+           .phy_speed(2'b00),
+
            .mii_tx_clk(mii_tx_clk),
            .mii_txd(mii_txd),
            .mii_tx_en(mii_tx_en),

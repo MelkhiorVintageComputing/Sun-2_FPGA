@@ -77,6 +77,7 @@ read_verilog [list \
     $top/rtl/idprom.v \
     $top/rtl/gen8bit_reg.v \
     $top/rtl/sun2_ether_ctl.v \
+    $top/rtl/sun2_phy_status.v \
     $top/rtl/sun2_dvma.v \
     $top/rtl/sun2_ethernet.sv \
     $top/rtl/ttl_am9513.v \

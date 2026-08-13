@@ -85,6 +85,7 @@ xvlog --work sun2 \
 	"$top/rtl/idprom.v" \
 	"$top/rtl/gen8bit_reg.v" \
 	"$top/rtl/sun2_ether_ctl.v" \
+	"$top/rtl/sun2_phy_status.v" \
 	"$top/rtl/sun2_dvma.v" \
 	"$top/rtl/ttl_am9513.v" \
 	"$top/rtl/ttl_74F151.v" \

@@ -34,6 +34,11 @@ module uart_monitor #(
    string       stop_on = "";
    bit          stop_seen = 0;
 
+   // A second, longer tail that wait_for() searches.  Kept separate from
+   // `tail' above, which is trimmed to exactly stop_on's length.
+   localparam int RECENT_LEN = 256;
+   string       recent = "";
+
    initial begin
       logfd = $fopen(LOGFILE, "w");
       if (logfd == 0)
@@ -72,6 +77,10 @@ module uart_monitor #(
          $write("%c", c);
          $fflush();
 
+         recent = {recent, string'(c)};
+         if (recent.len() > RECENT_LEN)
+           recent = recent.substr(recent.len() - RECENT_LEN, recent.len() - 1);
+
          if (stop_on.len() > 0) begin
             tail = {tail, string'(c)};
             if (tail.len() > stop_on.len())
@@ -80,6 +89,41 @@ module uart_monitor #(
          end
       end
    end
+
+   //
+   // Block until `what' has come out of the console, or give up after
+   // `limit_ns'.  Returns 1 if it appeared.
+   //
+   // The search window is cleared first, so waiting twice for the same prompt
+   // does not match the previous one -- which is exactly what a sequence of
+   // monitor commands does, every one of them ending in "? ".
+   //
+   function automatic bit contains(input string hay, input string needle);
+      begin
+         contains = 0;
+         if (needle.len() == 0 || hay.len() < needle.len()) return 0;
+         for (int i = 0; i <= hay.len() - needle.len(); i++)
+           if (hay.substr(i, i + needle.len() - 1) == needle) return 1;
+      end
+   endfunction
+
+   task automatic wait_for(input string what, input realtime limit_ns, output bit ok);
+      realtime deadline;
+      begin
+         recent   = "";
+         deadline = $realtime + limit_ns;
+         ok       = 0;
+         while ($realtime < deadline) begin
+            if (contains(recent, what)) begin
+               ok = 1;
+               return;
+            end
+            #(BIT_TIME);
+         end
+         $display("[uart] TIMEOUT waiting for \"%s\" at %t; last saw \"%s\"",
+                  what, $realtime, recent);
+      end
+   endtask
 
    task automatic report();
       $display("");

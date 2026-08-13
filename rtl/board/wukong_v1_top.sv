@@ -282,6 +282,15 @@ module wukong_v1_top #(
 
        .eth_crs_stuck (eth_crs_stuck),
 
+       // ... and back down again, into the status register in device page
+       // 0xFE7, so the running machine can report what the PHY negotiated.
+       .phy_id      (phy_id),
+       .phy_present (phy_present),
+       .phy_cfg_done(phy_cfg_done),
+       .phy_link    (phy_link),
+       .phy_fd      (phy_fd),
+       .phy_speed   (phy_speed),
+
        .mii_tx_clk (phy_mii_tx_clk),
        .mii_txd    (phy_mii_txd),
        .mii_tx_en  (phy_mii_tx_en),

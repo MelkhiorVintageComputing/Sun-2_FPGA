@@ -15,6 +15,8 @@
 #   make board                     behavioural RAM and clocks, boots to prompt
 #   make board BOARD_MEM=ddr3      real MIG plus Micron's DDR3 model
 #   make board-check               assert that boot reached the prompt
+#   make board-phy                 ... then type at the prompt and read the
+#                                  PHY status register in device page 0xFE7
 #   make clkgen                    measure what the clock generator produces
 #   make adapter                   check the Wishbone-to-MIG adapter
 #   make dvma                      check the Wishbone-to-68010 DVMA bridge
@@ -93,6 +95,18 @@ board: rom
 board-check:
 	./check_console.sh $(BUILD)/board-$(BOARD_MEM)-$(MACHINE)/console.log $(MACHINE)
 
+# Boot the board, then type at the monitor prompt and read the PHY status
+# register in device page 0xFE7 -- see "Asking the machine what the PHY did" in
+# the README.  VME only; the register does not exist on a MultiBus machine.
+#
+# The stop string has to be off or the run ends at the first prompt with
+# nothing typed, and 1 MiB is not optional either: at the full 7 MiB the PROM's
+# RAM pass alone does not leave enough simulated time to reach the prompt.
+board-phy:
+	$(MAKE) board MACHINE=vme MEM_MIB=1 STOP_ON= TIMEOUT_MS=8000 \
+		XSIMARGS="-testplusarg phy_probe $(XSIMARGS)"
+	$(MAKE) board-check MACHINE=vme
+
 # --- unit tests for the board layer ---------------------------------------
 clkgen adapter migddr3 dvma phy: rom
 	./run_unit.sh $@
@@ -106,4 +120,4 @@ check:
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all rom xsim iverilog check clean
+.PHONY: all rom xsim board board-check board-phy iverilog check clean
