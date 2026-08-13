@@ -345,7 +345,7 @@ module top(input         cpu_clk,
 
  `ifdef SUN2_MB_ETHER
    //
-   // The Sun-2 Ethernet board in the card cage.  See rtl/sun2_mb_ether.sv:
+   // The Sun-2 Ethernet board in the card cage.  See rtl/sun2-multibus/sun2_mb_ether.sv:
    // an 82586 with its own dual-ported memory and its own page map, reached
    // through two windows in MultiBus memory space.
    //

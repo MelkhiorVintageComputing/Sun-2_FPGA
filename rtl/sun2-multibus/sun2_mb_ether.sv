@@ -5,7 +5,7 @@
 //
 // Nothing about this resembles the VME machine's on-board Ethernet.  There the
 // 82586 becomes a bus master on the 68010 bus and its virtual DMA addresses are
-// translated by the machine's own MMU (rtl/sun2_dvma.v).  Here the chip never
+// translated by the machine's own MMU (rtl/sun2-vme/sun2_dvma.v).  Here the chip never
 // leaves the card: it DMAs into the board's own dual-ported memory through the
 // board's own page map, and the CPU reaches the same memory as an ordinary
 // MultiBus slave.  On the real card P1.BPRN is passed straight to P1.BPRO --
@@ -213,7 +213,7 @@ module sun2_mb_ether #(
    // Nothing ever reads the contents for meaning: on a MultiBus machine the
    // Ethernet address comes from the *CPU* board's ID PROM, via ndinit() and
    // localetheraddr(), not from here.  The bytes below are the same identity
-   // rtl/idprom.v serves, so a curious reader sees something sensible, and no
+   // rtl/sun2-common/idprom.v serves, so a curious reader sees something sensible, and no
    // word of it can read back as 0x6789.
    reg [7:0] ie_prom [0:31];
    integer   i;

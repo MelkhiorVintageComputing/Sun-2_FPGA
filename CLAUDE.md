@@ -61,7 +61,7 @@ ILA among it. Add to that list rather than building diagnostics speculatively.
 
 ## Architecture
 
-**One define picks the machine.** `rtl/sun2_config.vh` derives everything
+**One define picks the machine.** `rtl/sun2-common/sun2_config.vh` derives everything
 machine-dependent from `SUN2_MULTIBUS` (default) or `SUN2_VME`: device-space
 base page, size of memory space, the ID PROM's machine type, and which boot
 PROM is compiled in. `sun2_fpga` prints the resolved configuration at time 0
@@ -75,8 +75,8 @@ on-board I/O (1) or the system bus (2/3). Device decode, the protection check,
 the `C_S3..C_S24` bus timing chain, DTACK and the bus error register all key off
 those same wires. **Consequence:** anything that becomes a bus master is
 invisible to all of that if it drives the same pins. That is exactly how DVMA
-works — `rtl/sun2_dvma.v` arbitrates for the bus and drives supervisor-data
-cycles, and `rtl/top_fpga.v` muxes CPU versus DVMA onto those wires. Nothing
+works — `rtl/sun2-vme/sun2_dvma.v` arbitrates for the bus and drives supervisor-data
+cycles, and `rtl/sun2-common/top_fpga.v` muxes CPU versus DVMA onto those wires. Nothing
 downstream knows DVMA exists.
 
 **Adding a device** means four things, and missing the last one gives a silent
@@ -85,9 +85,9 @@ arm to the `P_DOUT` read mux before the `16'hDEAD` fall-through, **and** add it
 to the read and/or write DTACK terms.
 
 **Two Ethernets, sharing only the 82586.** The VME machine's is on board and
-reaches main memory by DVMA through the MMU (`rtl/sun2_dvma.v`). The MultiBus
+reaches main memory by DVMA through the MMU (`rtl/sun2-vme/sun2_dvma.v`). The MultiBus
 machine's is a card with its own memory and its own page map
-(`rtl/sun2_mb_ether.sv`), a slave that never masters anything. They share no
+(`rtl/sun2-multibus/sun2_mb_ether.sv`), a slave that never masters anything. They share no
 registers, no addressing and no byte-order convention — do not try to unify
 them. The card hangs off page-map TYPE 2, which `sun2_fpga` decodes as a
 *space*: it emits a bus address and a select, and the card supplies DTACK.
@@ -97,7 +97,7 @@ machine hallucinate a 3Com at `0xE0000`.
 
 **Mixed language, and the distinctions are load-bearing.** The MC68010
 (`Inputs/Suska_Configware/68K10`) is VHDL and needs `-2008`. The Sun-2 gateware
-in `rtl/*.v` must be compiled as **Verilog-2001, not SystemVerilog**. The SCC,
+in `rtl/sun2-common/*.v` must be compiled as **Verilog-2001, not SystemVerilog**. The SCC,
 the 82586 and the testbenches are SystemVerilog. `sim/run_xsim.sh` and
 `syn/build.tcl` keep these in separate lists; put new files in the right one.
 

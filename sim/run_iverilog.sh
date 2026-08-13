@@ -53,27 +53,27 @@ ghdl --synth --std=08 -fsynopsys --workdir=. --out=verilog wf68k10_top > wf68k10
 echo "== compiling everything (Icarus) =="
 iverilog -g2012 -o sun2_sim \
 	"${defargs[@]}" \
-	-I "$top/rtl" -I "$top/build/rom" \
+	-I "$top/rtl/sun2-common" -I "$top/build/rom" \
 	-s tb_sun2 \
 	wf68k10_top.v \
-	"$top/rtl/top_fpga.v" \
-	"$top/rtl/sun2_fpga.v" \
-	"$top/rtl/sun2_mmu.v" \
-	"$top/rtl/ctx_reg.v" \
-	"$top/rtl/pmap.v" \
-	"$top/rtl/smap.v" \
-	"$top/rtl/sram_sync.v" \
-	"$top/rtl/sram_sync_16bits_bytewritable.v" \
-	"$top/rtl/bootrom.v" \
-	"$top/rtl/idprom.v" \
-	"$top/rtl/gen8bit_reg.v" \
-	"$top/rtl/sun2_ether_ctl.v" \
-	"$top/rtl/sun2_dvma.v" \
-	"$top/rtl/ttl_am9513.v" \
-	"$top/rtl/ttl_74F151.v" \
-	"$top/rtl/ttl_74LS148.v" \
-	"$top/rtl/sun2_wishbone_bridge.v" \
-	"$top/rtl/tolog.v" \
+	"$top/rtl/sun2-common/top_fpga.v" \
+	"$top/rtl/sun2-common/sun2_fpga.v" \
+	"$top/rtl/sun2-common/sun2_mmu.v" \
+	"$top/rtl/sun2-common/ctx_reg.v" \
+	"$top/rtl/sun2-common/pmap.v" \
+	"$top/rtl/sun2-common/smap.v" \
+	"$top/rtl/sun2-common/sram_sync.v" \
+	"$top/rtl/sun2-common/sram_sync_16bits_bytewritable.v" \
+	"$top/rtl/sun2-common/bootrom.v" \
+	"$top/rtl/sun2-common/idprom.v" \
+	"$top/rtl/sun2-common/gen8bit_reg.v" \
+	"$top/rtl/sun2-vme/sun2_ether_ctl.v" \
+	"$top/rtl/sun2-vme/sun2_dvma.v" \
+	"$top/rtl/sun2-common/ttl_am9513.v" \
+	"$top/rtl/sun2-common/ttl_74F151.v" \
+	"$top/rtl/sun2-common/ttl_74LS148.v" \
+	"$top/rtl/sun2-common/sun2_wishbone_bridge.v" \
+	"$top/rtl/sun2-common/tolog.v" \
 	"$top/Inputs/z8530_scc/z8530_scc.sv" \
 	"$top/tb/wb_ram_model.sv" \
 	"$top/tb/uart_monitor.sv" \

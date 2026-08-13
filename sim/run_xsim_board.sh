@@ -91,34 +91,34 @@ xvhdl -2008 --work sun2 \
 
 echo "== compiling the Sun-2 gateware (Verilog) =="
 xvlog --work sun2 "${defargs[@]}" \
-	-i "$top/rtl" -i "$top/build/rom" \
-	"$top/rtl/top_fpga.v" \
-	"$top/rtl/sun2_fpga.v" \
-	"$top/rtl/sun2_mmu.v" \
-	"$top/rtl/ctx_reg.v" \
-	"$top/rtl/pmap.v" \
-	"$top/rtl/smap.v" \
-	"$top/rtl/sram_sync.v" \
-	"$top/rtl/sram_sync_16bits_bytewritable.v" \
-	"$top/rtl/bootrom.v" \
-	"$top/rtl/idprom.v" \
-	"$top/rtl/gen8bit_reg.v" \
-	"$top/rtl/sun2_ether_ctl.v" \
-	"$top/rtl/sun2_phy_status.v" \
-	"$top/rtl/sun2_dvma.v" \
-	"$top/rtl/ttl_am9513.v" \
-	"$top/rtl/ttl_74F151.v" \
-	"$top/rtl/ttl_74LS148.v" \
-	"$top/rtl/sun2_wishbone_bridge.v" \
-	"$top/rtl/tolog.v"
+	-i "$top/rtl/sun2-common" -i "$top/build/rom" \
+	"$top/rtl/sun2-common/top_fpga.v" \
+	"$top/rtl/sun2-common/sun2_fpga.v" \
+	"$top/rtl/sun2-common/sun2_mmu.v" \
+	"$top/rtl/sun2-common/ctx_reg.v" \
+	"$top/rtl/sun2-common/pmap.v" \
+	"$top/rtl/sun2-common/smap.v" \
+	"$top/rtl/sun2-common/sram_sync.v" \
+	"$top/rtl/sun2-common/sram_sync_16bits_bytewritable.v" \
+	"$top/rtl/sun2-common/bootrom.v" \
+	"$top/rtl/sun2-common/idprom.v" \
+	"$top/rtl/sun2-common/gen8bit_reg.v" \
+	"$top/rtl/sun2-vme/sun2_ether_ctl.v" \
+	"$top/rtl/sun2-vme/sun2_phy_status.v" \
+	"$top/rtl/sun2-vme/sun2_dvma.v" \
+	"$top/rtl/sun2-common/ttl_am9513.v" \
+	"$top/rtl/sun2-common/ttl_74F151.v" \
+	"$top/rtl/sun2-common/ttl_74LS148.v" \
+	"$top/rtl/sun2-common/sun2_wishbone_bridge.v" \
+	"$top/rtl/sun2-common/tolog.v"
 
 echo "== compiling the board layer and testbench (SystemVerilog) =="
-board_src=("$top/rtl/board/wukong_clkgen.sv" "$top/rtl/board/reset_sync.sv" "$top/rtl/board/wukong_v1_top.sv")
+board_src=("$top/boards/Wukong_V1/wukong_clkgen.sv" "$top/boards/Wukong_V1/reset_sync.sv" "$top/boards/Wukong_V1/wukong_v1_top.sv")
 tb_src=("$top/tb/wb_ram_model.sv" "$top/tb/uart_monitor.sv" "$top/tb/uart_console.sv" \
         "$top/tb/mii_peer.sv" "$top/tb/mdio_phy_model.sv" "$top/tb/tb_wukong.sv")
 
 if [ "$BOARD_MEM" = "ddr3" ]; then
-	board_src+=("$top/rtl/board/wb_to_mig_ui.sv")
+	board_src+=("$top/boards/Wukong_V1/wb_to_mig_ui.sv")
 
 	# MIG's own RTL.  Two files define module sun2_mig_mig: the synthesis one
 	# and a simulation one with SIM_BYPASS_INIT_CAL="FAST", which is what
@@ -140,7 +140,7 @@ else
 fi
 
 xvlog --sv --work sun2 "${defargs[@]}" "${incargs[@]}" \
-	-i "$top/rtl" -i "$top/build/rom" \
+	-i "$top/rtl/sun2-common" -i "$top/build/rom" \
 	"$top/build/inputs/Wish82586/src/wish82586_pkg.sv" \
 	"$top/build/inputs/Wish82586/src/async_fifo.sv" \
 	"$top/build/inputs/Wish82586/src/sync_fifo.sv" \
@@ -155,9 +155,9 @@ xvlog --sv --work sun2 "${defargs[@]}" "${incargs[@]}" \
 	"$top/build/inputs/Wish82586/src/ie_ru.sv" \
 	"$top/build/inputs/Wish82586/src/wish82586.sv" \
 	"$top/build/inputs/Wish82586/src/wb_mdio.sv" \
-	"$top/rtl/board/phy_rtl8211_init.sv" \
-	"$top/rtl/sun2_ethernet.sv" \
-	"$top/rtl/sun2_mb_ether.sv" \
+	"$top/boards/Wukong_V1/phy_rtl8211_init.sv" \
+	"$top/rtl/sun2-vme/sun2_ethernet.sv" \
+	"$top/rtl/sun2-multibus/sun2_mb_ether.sv" \
 	"$top/Inputs/z8530_scc/z8530_scc.sv" \
 	"${board_src[@]}" \
 	"${tb_src[@]}"

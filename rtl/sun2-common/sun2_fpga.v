@@ -48,7 +48,7 @@ module sun2_fpga(input         cpu_clk,
 		 input 	       ether_bus_err,
 		 /* The board's Ethernet PHY, surfaced read-only in device page
 		  0xFE7 so a machine at the monitor prompt can be asked what it
-		  did.  See rtl/sun2_phy_status.v.  A Sun-2 has no PHY: these
+		  did.  See rtl/sun2-vme/sun2_phy_status.v.  A Sun-2 has no PHY: these
 		  come from the board layer and are tied off everywhere else. */
 		 input [15:0]  phy_id,
 		 input 	       phy_present,
@@ -719,7 +719,7 @@ module sun2_fpga(input         cpu_clk,
 
    /* Ethernet control register -- VME machines only */
    //
-   // Device page 1.  See rtl/sun2_ether_ctl.v for the bit assignment and for
+   // Device page 1.  See rtl/sun2-vme/sun2_ether_ctl.v for the bit assignment and for
    // why this has to answer even though there is no 82586 behind it: the boot
    // PROM decides Ethernet is present from the ID PROM alone, so auto-boot
    // reaches iereset() regardless.  On MultiBus page 1 is an 80287 socket,

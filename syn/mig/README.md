@@ -54,6 +54,6 @@ unaffected.
   I/O. Note the old LiteX XDC gets this wrong, constraining `ddram_cs_n` to
   E22, a pin connected to nothing; QMTech's `.ucf` and `.prj` both correctly
   omit it.
-* **`PortInterface` = `NATIVE`.** `rtl/board/wb_to_mig_ui.sv` adapts Wishbone
+* **`PortInterface` = `NATIVE`.** `boards/Wukong_V1/wb_to_mig_ui.sv` adapts Wishbone
   to it directly. `app_wdf_mask` gives per-byte write masking, so no
   read-modify-write is needed.

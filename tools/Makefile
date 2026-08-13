@@ -13,7 +13,7 @@
 #                (see sim_fastboot.txt).  For runs where memory is not what is
 #                being tested.
 #
-# The output is a Verilog `case` body included by rtl/bootrom.v.
+# The output is a Verilog `case` body included by rtl/sun2-common/bootrom.v.
 
 TOP     = ..
 ROMDIR  = $(TOP)/build/rom

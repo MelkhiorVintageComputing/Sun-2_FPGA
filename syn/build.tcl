@@ -76,25 +76,25 @@ read_vhdl -vhdl2008 [list \
 # The Sun-2 gateware is Verilog-2001 and must not be read as SystemVerilog:
 # it relies on a couple of constructs SV rejects.
 read_verilog [list \
-    $top/rtl/top_fpga.v \
-    $top/rtl/sun2_fpga.v \
-    $top/rtl/sun2_mmu.v \
-    $top/rtl/ctx_reg.v \
-    $top/rtl/pmap.v \
-    $top/rtl/smap.v \
-    $top/rtl/sram_sync.v \
-    $top/rtl/sram_sync_16bits_bytewritable.v \
-    $top/rtl/bootrom.v \
-    $top/rtl/idprom.v \
-    $top/rtl/gen8bit_reg.v \
-    $top/rtl/sun2_ether_ctl.v \
-    $top/rtl/sun2_phy_status.v \
-    $top/rtl/sun2_dvma.v \
-    $top/rtl/ttl_am9513.v \
-    $top/rtl/ttl_74F151.v \
-    $top/rtl/ttl_74LS148.v \
-    $top/rtl/sun2_wishbone_bridge.v \
-    $top/rtl/tolog.v \
+    $top/rtl/sun2-common/top_fpga.v \
+    $top/rtl/sun2-common/sun2_fpga.v \
+    $top/rtl/sun2-common/sun2_mmu.v \
+    $top/rtl/sun2-common/ctx_reg.v \
+    $top/rtl/sun2-common/pmap.v \
+    $top/rtl/sun2-common/smap.v \
+    $top/rtl/sun2-common/sram_sync.v \
+    $top/rtl/sun2-common/sram_sync_16bits_bytewritable.v \
+    $top/rtl/sun2-common/bootrom.v \
+    $top/rtl/sun2-common/idprom.v \
+    $top/rtl/sun2-common/gen8bit_reg.v \
+    $top/rtl/sun2-vme/sun2_ether_ctl.v \
+    $top/rtl/sun2-vme/sun2_phy_status.v \
+    $top/rtl/sun2-vme/sun2_dvma.v \
+    $top/rtl/sun2-common/ttl_am9513.v \
+    $top/rtl/sun2-common/ttl_74F151.v \
+    $top/rtl/sun2-common/ttl_74LS148.v \
+    $top/rtl/sun2-common/sun2_wishbone_bridge.v \
+    $top/rtl/sun2-common/tolog.v \
 ]
 
 read_verilog -sv [list \
@@ -112,14 +112,14 @@ read_verilog -sv [list \
     $top/build/inputs/Wish82586/src/ie_ru.sv \
     $top/build/inputs/Wish82586/src/wish82586.sv \
     $top/build/inputs/Wish82586/src/wb_mdio.sv \
-    $top/rtl/sun2_ethernet.sv \
-    $top/rtl/sun2_mb_ether.sv \
-    $top/rtl/board/phy_rtl8211_init.sv \
+    $top/rtl/sun2-vme/sun2_ethernet.sv \
+    $top/rtl/sun2-multibus/sun2_mb_ether.sv \
+    $top/boards/Wukong_V1/phy_rtl8211_init.sv \
     $top/Inputs/z8530_scc/z8530_scc.sv \
-    $top/rtl/board/wukong_clkgen.sv \
-    $top/rtl/board/reset_sync.sv \
-    $top/rtl/board/wb_to_mig_ui.sv \
-    $top/rtl/board/wukong_v1_top.sv \
+    $top/boards/Wukong_V1/wukong_clkgen.sv \
+    $top/boards/Wukong_V1/reset_sync.sv \
+    $top/boards/Wukong_V1/wb_to_mig_ui.sv \
+    $top/boards/Wukong_V1/wukong_v1_top.sv \
 ]
 
 # MIG, as generated.  In a non-project flow read_ip only registers the core --
@@ -138,7 +138,7 @@ read_xdc $here/wukong_v1.xdc
 # Synthesis and implementation
 # ---------------------------------------------------------------------------
 synth_design -top wukong_v1_top -part $part \
-    -include_dirs [list $top/rtl $top/build/rom] \
+    -include_dirs [list $top/rtl/sun2-common $top/build/rom] \
     -verilog_define $defines \
     -generic CPU_CLK_HZ=$cpu_hz \
     -directive Default

@@ -4,7 +4,7 @@
 // Wishbone B4 classic slave  ->  MIG 7 Series native user interface.
 //
 // Replaces LiteX's WishboneDomainCrossingMaster plus LiteDRAM's Wishbone port.
-// The Sun-2's memory master (rtl/sun2_wishbone_bridge.v) lives in the CPU clock
+// The Sun-2's memory master (rtl/sun2-common/sun2_wishbone_bridge.v) lives in the CPU clock
 // domain and issues one 32-bit access at a time, stalling the 68010 on DTACK
 // until it is answered, so this is deliberately a single-transaction-in-flight
 // design: there is nothing to gain from pipelining and a great deal to lose in

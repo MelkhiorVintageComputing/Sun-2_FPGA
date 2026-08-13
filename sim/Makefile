@@ -36,7 +36,7 @@ BUILD   = $(TOP)/build/sim
 MEM_MIB ?= 7
 
 # Which machine to be: multibus (a 2/120, the default) or vme (a 2/50).  This
-# is the only knob needed -- rtl/sun2_config.vh derives the device space base,
+# is the only knob needed -- rtl/sun2-common/sun2_config.vh derives the device space base,
 # the size of memory space, the ID PROM's machine type and which boot PROM is
 # compiled in from it.
 MACHINE ?= multibus

@@ -93,7 +93,7 @@
 // ID PROM machine type
 //---------------------------------------------------------------------
 // 1 = MultiBus, 2 = VME.  A boot PROM prints "ID PROM INVALID" for anything
-// it does not recognise.  rtl/idprom.v recomputes the checksum from this, so
+// it does not recognise.  rtl/sun2-common/idprom.v recomputes the checksum from this, so
 // the two cannot fall out of step.
 //
 `ifndef IDPROM_MACHINE_TYPE
@@ -145,7 +145,7 @@
 // A Sun-2 Ethernet card in the MultiBus card cage: an 82586 with its own
 // dual-ported memory and its own page map, reached as a MultiBus memory slave.
 // Nothing like the VME machine's on-board Ethernet, which DMAs into main
-// memory through the CPU's MMU -- see rtl/sun2_mb_ether.sv.
+// memory through the CPU's MMU -- see rtl/sun2-multibus/sun2_mb_ether.sv.
 //
 // Optional, because a 2/120 with no Ethernet card is equally a real machine,
 // and it is the one the 23,629-bus-error regression fingerprint describes.

@@ -14,8 +14,10 @@ It also builds into a timing-clean bitstream for a QMTech Wukong V1
 
 | Path | What |
 |---|---|
-| `rtl/` | the Sun-2 gateware: bus, MMU, PROM, timer, registers, Wishbone bridge |
-| `rtl/board/` | the board layer: clock generation, reset, Wishbone-to-DDR3 |
+| `rtl/sun2-common/` | the Sun-2 gateware shared by both machines: bus, MMU, PROM, timer, registers, Wishbone bridge |
+| `rtl/sun2-multibus/` | what only a 2/120 has — the MultiBus Ethernet card |
+| `rtl/sun2-vme/` | what only a 2/50 has — on-board Ethernet, its DVMA bridge, the PHY status register |
+| `boards/Wukong_V1/` | the board layer for one board: clock generation, reset, Wishbone-to-DDR3, PHY bring-up |
 | `tb/` | testbenches and simulation models |
 | `sim/` | simulation flows |
 | `syn/` | FPGA build: constraints, MIG configuration, Vivado scripts |
@@ -48,7 +50,7 @@ The sources under `Inputs/`:
   9600 baud console.
 * `Wish82586` — the Intel 82586 Ethernet controller, used as the VME machine's
   on-board Ethernet. Its `src/wb_csr_sun2.sv` is the same control register
-  `rtl/sun2_ether_ctl.v` implements natively; we use ours, because it sits in
+  `rtl/sun2-vme/sun2_ether_ctl.v` implements natively; we use ours, because it sits in
   device space with the rest of the decode, and the two should be kept
   reconcilable.
 * `sunos-34-src` — [calmsacibis995/sunos-34-src](https://github.com/calmsacibis995/sunos-34-src).
@@ -91,7 +93,7 @@ No default boot devices
 >
 ```
 
-The serial number and Ethernet address come from `rtl/idprom.v`, and the memory
+The serial number and Ethernet address come from `rtl/sun2-common/idprom.v`, and the memory
 size is whatever `MEM_MIB` was set to — the PROM finds it by probing. There are
 no boot devices yet, so auto-boot fails and drops to the monitor prompt; the
 run stops there on its own, because `STOP_ON` defaults to `>`.
@@ -155,7 +157,7 @@ seconds at `MEM_MIB=1 ROM=fast`, and about 4.5 at the 7 MiB default.
 
 ### Boot PROM variants
 
-`tools/` turns the PROM images into the Verilog `case` body that `rtl/bootrom.v`
+`tools/` turns the PROM images into the Verilog `case` body that `rtl/sun2-common/bootrom.v`
 includes. For the MultiBus `sun2-multi-rev-R.bin`, in three flavours:
 
 * **patched** (default) — three words changed, per `tools/sim_speedup.txt`: a
@@ -208,7 +210,7 @@ comment at the top of `sim/run_iverilog.sh`.
 
 ## Configuration
 
-`rtl/sun2_config.vh` holds the compile-time options; each is `ifndef`-guarded
+`rtl/sun2-common/sun2_config.vh` holds the compile-time options; each is `ifndef`-guarded
 so it can be forced from the command line.
 
 ### Which machine
@@ -260,9 +262,9 @@ Two device pages differ from MultiBus and are instantiated only for VME
 
 | Page | VME | MultiBus |
 |---|---|---|
-| 0xFE1 | Intel 82586 Ethernet — control register (`rtl/sun2_ether_ctl.v`) plus the controller itself (`rtl/sun2_ethernet.sv`) | 80287 socket, not implemented |
+| 0xFE1 | Intel 82586 Ethernet — control register (`rtl/sun2-vme/sun2_ether_ctl.v`) plus the controller itself (`rtl/sun2-vme/sun2_ethernet.sv`) | 80287 socket, not implemented |
 | 0xFE3 | keyboard/mouse Z8530, a second instance of the serial SCC | parallel port, not implemented |
-| 0xFE7 | Ethernet PHY status (`rtl/sun2_phy_status.v`) — not a Sun-2 device at all, see below | National 58167 real-time clock, not implemented |
+| 0xFE7 | Ethernet PHY status (`rtl/sun2-vme/sun2_phy_status.v`) — not a Sun-2 device at all, see below | National 58167 real-time clock, not implemented |
 
 Nothing is attached to the keyboard SCC, so the monitor's keyboard hunt times
 out and the console stays on serial A — which is what we want. The frame
@@ -300,11 +302,11 @@ Architecture Manual §7 is explicit that it exists to avoid *"the dual mapping
 problems of DMA in a virtual memory environment"*.
 
 So the controller is a bus master on the 68010 bus, not a client of the
-physical-memory Wishbone that main memory uses. `rtl/sun2_dvma.v` is that
+physical-memory Wishbone that main memory uses. `rtl/sun2-vme/sun2_dvma.v` is that
 bridge: Wishbone slave in, 68010 cycles out. What makes it small is that a DVMA
 cycle is byte-for-byte a supervisor-data CPU cycle at the pins (schematic sheet
 A03) — so the MMU, the protection check, the bus timing chain, DTACK and the
-bus error register are all reused unchanged, and `rtl/top_fpga.v` only has to
+bus error register are all reused unchanged, and `rtl/sun2-common/top_fpga.v` only has to
 mux who drives the address, function code, strobes and write data.
 
 Three details are worth knowing before touching it:
@@ -339,13 +341,13 @@ between a working controller and a dead one.
 
 On the board the MII goes to the RTL8211EG in bank 34, whose pins, clock
 constraints and MII I/O delays are in `syn/wukong_v1.xdc`, with a reset
-sequencer in `rtl/board/wukong_v1_top.sv` holding PHYRSTB low for 20 ms and
+sequencer in `boards/Wukong_V1/wukong_v1_top.sv` holding PHYRSTB low for 20 ms and
 waiting 50 ms more before MDIO is allowed — the datasheet asks for 10 and 30.
 Seven of those balls are also PHY configuration straps, latched when its reset
 releases; they are inputs and must stay inputs, with no pull property, or the
 PHY comes up at the wrong address or in RGMII mode.
 
-`rtl/board/phy_rtl8211_init.sv` brings it down to something a Sun-2 can talk
+`boards/Wukong_V1/phy_rtl8211_init.sv` brings it down to something a Sun-2 can talk
 to, over `wb_mdio` at 125 kHz. Read the identifier as a smoke test, write
 GBCR = 0 to withdraw the gigabit advertisement the straps make, advertise
 10BASE-T only in ANAR, clear PHYCR bit 11 — "Assert CRS on Transmit", which
@@ -412,7 +414,7 @@ bus master on the CPU bus at all. There is no DVMA, no MMU involvement, no
 arbitration — on the schematic the card passes `P1.BPRN` straight to
 `P1.BPRO`. It is a MultiBus slave and nothing more.
 
-`rtl/sun2_mb_ether.sv` is the card; `make -C sim xsim MB_ETHER=1` fits it. It
+`rtl/sun2-multibus/sun2_mb_ether.sv` is the card; `make -C sim xsim MB_ETHER=1` fits it. It
 is optional because a 2/120 with an empty cage is equally a real machine, and
 it is the one the 23,629-bus-error fingerprint describes.
 
@@ -471,7 +473,7 @@ the only check that pins the byte order down.
 `ttl_am9513` additionally takes a `TRACE` parameter (default 0) that turns on a
 per-access register trace. It is off because it prints on every timer access
 and dominates run time; instantiate the timer as `ttl_am9513 #(.TRACE(1))` in
-`rtl/sun2_fpga.v` to get it back.
+`rtl/sun2-common/sun2_fpga.v` to get it back.
 
 ## Building for hardware
 
@@ -515,7 +517,7 @@ one MIG's).
 
 ### Clocks
 
-Two MMCMs in `rtl/board/wukong_clkgen.sv`, instantiated directly rather than
+Two MMCMs in `boards/Wukong_V1/wukong_clkgen.sv`, instantiated directly rather than
 through the clocking wizard, so the file reads and simulates like any other
 source.
 
@@ -538,7 +540,7 @@ arithmetic — which is how the step-1 baud rate bug would have been caught.
 
 ### Memory
 
-`rtl/board/wb_to_mig_ui.sv` adapts the Sun-2's Wishbone master to MIG's native
+`boards/Wukong_V1/wb_to_mig_ui.sv` adapts the Sun-2's Wishbone master to MIG's native
 user interface: 32-bit words in the CPU clock domain to 128-bit beats in MIG's
 83.33 MHz `ui_clk`, with a two-phase handshake across the domains and one
 transaction in flight. `app_wdf_mask` masks per byte, so sub-word writes need

@@ -81,31 +81,31 @@ xvhdl -2008 --work sun2 \
 echo "== compiling the Sun-2 gateware (Verilog) =="
 xvlog --work sun2 \
 	"${defargs[@]}" \
-	-i "$top/rtl" -i "$top/build/rom" \
-	"$top/rtl/top_fpga.v" \
-	"$top/rtl/sun2_fpga.v" \
-	"$top/rtl/sun2_mmu.v" \
-	"$top/rtl/ctx_reg.v" \
-	"$top/rtl/pmap.v" \
-	"$top/rtl/smap.v" \
-	"$top/rtl/sram_sync.v" \
-	"$top/rtl/sram_sync_16bits_bytewritable.v" \
-	"$top/rtl/bootrom.v" \
-	"$top/rtl/idprom.v" \
-	"$top/rtl/gen8bit_reg.v" \
-	"$top/rtl/sun2_ether_ctl.v" \
-	"$top/rtl/sun2_phy_status.v" \
-	"$top/rtl/sun2_dvma.v" \
-	"$top/rtl/ttl_am9513.v" \
-	"$top/rtl/ttl_74F151.v" \
-	"$top/rtl/ttl_74LS148.v" \
-	"$top/rtl/sun2_wishbone_bridge.v" \
-	"$top/rtl/tolog.v"
+	-i "$top/rtl/sun2-common" -i "$top/build/rom" \
+	"$top/rtl/sun2-common/top_fpga.v" \
+	"$top/rtl/sun2-common/sun2_fpga.v" \
+	"$top/rtl/sun2-common/sun2_mmu.v" \
+	"$top/rtl/sun2-common/ctx_reg.v" \
+	"$top/rtl/sun2-common/pmap.v" \
+	"$top/rtl/sun2-common/smap.v" \
+	"$top/rtl/sun2-common/sram_sync.v" \
+	"$top/rtl/sun2-common/sram_sync_16bits_bytewritable.v" \
+	"$top/rtl/sun2-common/bootrom.v" \
+	"$top/rtl/sun2-common/idprom.v" \
+	"$top/rtl/sun2-common/gen8bit_reg.v" \
+	"$top/rtl/sun2-vme/sun2_ether_ctl.v" \
+	"$top/rtl/sun2-vme/sun2_phy_status.v" \
+	"$top/rtl/sun2-vme/sun2_dvma.v" \
+	"$top/rtl/sun2-common/ttl_am9513.v" \
+	"$top/rtl/sun2-common/ttl_74F151.v" \
+	"$top/rtl/sun2-common/ttl_74LS148.v" \
+	"$top/rtl/sun2-common/sun2_wishbone_bridge.v" \
+	"$top/rtl/sun2-common/tolog.v"
 
 echo "== compiling the SCC and testbench (SystemVerilog) =="
 xvlog --sv --work sun2 \
 	"${defargs[@]}" \
-	-i "$top/rtl" -i "$top/build/rom" \
+	-i "$top/rtl/sun2-common" -i "$top/build/rom" \
 	"$top/build/inputs/Wish82586/src/wish82586_pkg.sv" \
 	"$top/build/inputs/Wish82586/src/async_fifo.sv" \
 	"$top/build/inputs/Wish82586/src/sync_fifo.sv" \
@@ -119,8 +119,8 @@ xvlog --sv --work sun2 \
 	"$top/build/inputs/Wish82586/src/ie_cu.sv" \
 	"$top/build/inputs/Wish82586/src/ie_ru.sv" \
 	"$top/build/inputs/Wish82586/src/wish82586.sv" \
-	"$top/rtl/sun2_ethernet.sv" \
-	"$top/rtl/sun2_mb_ether.sv" \
+	"$top/rtl/sun2-vme/sun2_ethernet.sv" \
+	"$top/rtl/sun2-multibus/sun2_mb_ether.sv" \
 	"$top/Inputs/z8530_scc/z8530_scc.sv" \
 	"$top/tb/wb_ram_model.sv" \
 	"$top/tb/mii_peer.sv" \

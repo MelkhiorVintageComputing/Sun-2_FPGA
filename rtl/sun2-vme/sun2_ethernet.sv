@@ -30,7 +30,7 @@ module sun2_ethernet #(
     input  wire        CLK,          // the CPU bus clock; the MAC lives here too,
     input  wire        RESET,        // so there is no clock crossing on the bus side
 
-    // From the control register in sun2_fpga (rtl/sun2_ether_ctl.v)
+    // From the control register in sun2_fpga (rtl/sun2-vme/sun2_ether_ctl.v)
     input  wire        core_reset_n, // 0 => hold the MAC in reset
     input  wire        loopback_n,   // 0 => transceiver isolated
     input  wire        ca,           // channel attention, a level
