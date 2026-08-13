@@ -139,6 +139,54 @@
  `endif
 `endif
 
+//---------------------------------------------------------------------
+// The MultiBus Ethernet board
+//---------------------------------------------------------------------
+// A Sun-2 Ethernet card in the MultiBus card cage: an 82586 with its own
+// dual-ported memory and its own page map, reached as a MultiBus memory slave.
+// Nothing like the VME machine's on-board Ethernet, which DMAs into main
+// memory through the CPU's MMU -- see rtl/sun2_mb_ether.sv.
+//
+// Optional, because a 2/120 with no Ethernet card is equally a real machine,
+// and it is the one the 23,629-bus-error regression fingerprint describes.
+//
+// Two windows in the 1 MiB of MultiBus memory space, both jumpered on the real
+// card.  The register base is the one the boot PROM knows: ieprobe() only ever
+// looks at iestd[0], and that is 0x88000.  The memory window base is ours to
+// pick, because the driver reads it back out of the status register rather
+// than assuming it -- but it has to avoid everything else the PROM probes, or
+// the machine hallucinates hardware:
+//
+//   0x80000            SCSI
+//   0x88000, 0x8C000   this card, controllers 0 and 1
+//   0xE0000, 0xE2000   3Com `ec' -- and ecprobe() is just "did it answer?"
+//
+// The window is naturally aligned, as it is on the card -- F7 compares A19:A16
+// with F13 masking A16 and A17 out to choose 64, 128 or 256 KiB -- so a 256 KiB
+// window can only start at 0x00000, 0x40000, 0x80000 or 0xC0000.  0x80000
+// holds the SCSI and this card's own registers, 0xC0000 reaches up into the
+// 3Com, and low memory is where other cards conventionally sit.  That leaves
+// 0x40000.
+//
+//`define SUN2_MB_ETHER
+
+`ifndef MB_ETHER_REG_BASE
+ `define MB_ETHER_REG_BASE 20'h88000
+`endif
+
+`ifndef MB_ETHER_MEM_BASE
+ `define MB_ETHER_MEM_BASE 20'h40000
+`endif
+
+// Local memory actually implemented, in KiB, and the size of the MultiBus
+// window onto it.  The boot PROM touches only the first 8 KiB (IEPHYMEMSIZ in
+// if_ie.c); SunOS uses the full 256 KiB (IEPMEMSIZ in if_mie.h).  Page-map
+// entries pointing above what is implemented alias back down.
+//
+`ifndef MB_ETHER_MEM_KIB
+ `define MB_ETHER_MEM_KIB 256
+`endif
+
 //=====================================================================
 // Independent of which machine
 //=====================================================================

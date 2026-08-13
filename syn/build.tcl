@@ -1,8 +1,9 @@
 # Non-project Vivado build for the Sun-2 on a QMTech Wukong V1.
 #
-#   vivado -mode batch -source syn/build.tcl [-tclargs CPU_HZ MACHINE]
+#   vivado -mode batch -source syn/build.tcl [-tclargs CPU_HZ MACHINE MB_ETHER]
 #
 # MACHINE is multibus (default) or vme; see "Which machine" in the README.
+# MB_ETHER=1 fits the Sun-2 Ethernet card in the MultiBus cage.
 #
 # Nothing generated is committed: the MIG IP comes from syn/mig/sun2_mig.prj
 # via syn/generate_ip.tcl, and everything lands in build/.
@@ -13,20 +14,30 @@
 set here [file normalize [file dirname [info script]]]
 set top  [file normalize $here/..]
 
-set cpu_hz  12500000
-set machine multibus
-if {[llength $argv] > 0} { set cpu_hz  [lindex $argv 0] }
-if {[llength $argv] > 1} { set machine [lindex $argv 1] }
+set cpu_hz   12500000
+set machine  multibus
+set mb_ether 0
+if {[llength $argv] > 0} { set cpu_hz   [lindex $argv 0] }
+if {[llength $argv] > 1} { set machine  [lindex $argv 1] }
+if {[llength $argv] > 2} { set mb_ether [lindex $argv 2] }
 
 switch -- $machine {
-    multibus { set machine_define SUN2_MULTIBUS }
-    vme      { set machine_define SUN2_VME }
+    multibus { set defines [list SUN2_MULTIBUS] }
+    vme      { set defines [list SUN2_VME] }
     default  { puts "ERROR: MACHINE must be multibus or vme, not '$machine'"; exit 1 }
+}
+
+if {$mb_ether == 1} {
+    if {$machine ne "multibus"} {
+        puts "ERROR: MB_ETHER is MultiBus only: a 2/50 has its Ethernet on board"
+        exit 1
+    }
+    lappend defines SUN2_MB_ETHER
 }
 
 set part    xc7a100tfgg676-2
 set ipdir   $top/build/ip
-set outdir  $top/build/syn/$machine-cpu[expr {$cpu_hz / 1000000}]
+set outdir  $top/build/syn/$machine[expr {$mb_ether == 1 ? "-mbether" : ""}]-cpu[expr {$cpu_hz / 1000000}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir
@@ -79,7 +90,6 @@ read_verilog [list \
     $top/rtl/sun2_ether_ctl.v \
     $top/rtl/sun2_phy_status.v \
     $top/rtl/sun2_dvma.v \
-    $top/rtl/sun2_ethernet.sv \
     $top/rtl/ttl_am9513.v \
     $top/rtl/ttl_74F151.v \
     $top/rtl/ttl_74LS148.v \
@@ -102,6 +112,8 @@ read_verilog -sv [list \
     $top/build/inputs/Wish82586/src/ie_ru.sv \
     $top/build/inputs/Wish82586/src/wish82586.sv \
     $top/build/inputs/Wish82586/src/wb_mdio.sv \
+    $top/rtl/sun2_ethernet.sv \
+    $top/rtl/sun2_mb_ether.sv \
     $top/rtl/board/phy_rtl8211_init.sv \
     $top/Inputs/z8530_scc/z8530_scc.sv \
     $top/rtl/board/wukong_clkgen.sv \
@@ -127,7 +139,7 @@ read_xdc $here/wukong_v1.xdc
 # ---------------------------------------------------------------------------
 synth_design -top wukong_v1_top -part $part \
     -include_dirs [list $top/rtl $top/build/rom] \
-    -verilog_define $machine_define \
+    -verilog_define $defines \
     -generic CPU_CLK_HZ=$cpu_hz \
     -directive Default
 

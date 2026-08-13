@@ -57,6 +57,21 @@ module sun2_fpga(input         cpu_clk,
 		 input 	       phy_fd,
 		 input [1:0]   phy_speed,
 		 input 	       phy_crs_stuck,
+		 /* The MultiBus system bus, page-map TYPE 2.  A space, not a
+		  device: this says a cycle is aimed at it and gives the bus
+		  address, and whatever is plugged in answers.  With nothing
+		  plugged in mb_hit stays low and the cycle takes the usual
+		  timeout, which is how every one of the PROM's probes
+		  discovers there is no card. */
+		 output        mb_sel,
+		 output [19:0] mb_addr,
+		 output        mb_we,
+		 output        mb_uds_n,
+		 output        mb_lds_n,
+		 output [15:0] mb_dout,   // CPU -> card
+		 input [15:0]  mb_din,    // card -> CPU
+		 input 	       mb_hit,
+		 input 	       mb_ack,
 		 /* debug */
 		 output [7:0]  diag_leds,
 		 output        en_boot,
@@ -95,6 +110,13 @@ module sun2_fpga(input         cpu_clk,
  `ifdef ROM_FASTBOOT
       $fatal(1, "ROM_FASTBOOT is MultiBus only: there is no fastboot image for the 2/50 PROM");
  `endif
+ `ifdef SUN2_MB_ETHER
+      $fatal(1, "SUN2_MB_ETHER is MultiBus only: a 2/50 has its Ethernet on board, in device page 1");
+ `endif
+`endif
+`ifdef SUN2_MB_ETHER
+      $display("   MultiBus Ethernet: registers at 0x%05x, %0d KiB of memory at 0x%05x",
+               `MB_ETHER_REG_BASE, `MB_ETHER_MEM_KIB, `MB_ETHER_MEM_BASE);
 `endif
       if (`MEM_PAGES > `MEM_SPACE_PAGES)
         $fatal(1, "MEM_PAGES (%0d) exceeds MEM_SPACE_PAGES (%0d): memory is installed where nothing answers",
@@ -435,6 +457,28 @@ module sun2_fpga(input         cpu_clk,
    // probes has to answer.  See MEM_SPACE_PAGES in sun2_config.vh.
    assign MATCH_MEMX     = (FC_GENERAL) & (TYPE == 3'h0) & (ma_pmap2devices < `MEM_SPACE_PAGES) & C_S6;
 
+   // System bus space -- TYPE 2, MPM_BUSMEM on a MultiBus machine, VPM_VME0 on
+   // a VME one.  1 MiB of it on MultiBus (512 pages of 2 KiB), so only nine of
+   // the twelve physical-page bits are live and the top three must be zero.
+   //
+   // This is a *space*, not a device.  It says "the cycle is aimed at the
+   // system bus and here is the bus address"; whether anything answers is up to
+   // what is plugged in, and DTACK comes from the card, not from here.  With no
+   // card the timing chain runs to C_S24 and takes the usual bus-error timeout,
+   // which is load-bearing: it is how ieprobe(), ecprobe() and the disk probes
+   // all discover they have nothing to talk to.  Decoding this space *blindly*
+   // would make ecprobe() -- which is nothing but "did it answer?" -- report a
+   // 3Com card that is not there.
+   wire 			 MATCH_MBMEM;
+   assign MATCH_MBMEM    = (FC_GENERAL) & (TYPE == 3'h2) & C_S6 &
+                           (ma_pmap2devices[11:9] == 3'h0);
+   assign mb_sel         = MATCH_MBMEM;
+   assign mb_addr        = {ma_pmap2devices[8:0], P_A[10:1], 1'b0};
+   assign mb_we          = ~P_RW_n;
+   assign mb_uds_n       = P_UDS_n;
+   assign mb_lds_n       = P_LDS_n;
+   assign mb_dout        = P_DIN;
+
    wire [15:0] 			 timer_out;
    wire 			 FOUT, timer_int[5:1]; /* FOUT for completeness, not et implemented in the TTL code */
    // X1/X2 is the 4.9152 MHz crystal oscillator (schematic sheet A05: the
@@ -700,6 +744,13 @@ module sun2_fpga(input         cpu_clk,
 `else
    assign MATCH_ETHER = 1'b0;
    assign ether_out   = 8'h00;
+   // Driven even though no MultiBus machine has this register, because they
+   // are module outputs: leaving them to the `ifdef made them floating nets in
+   // synthesis and X in simulation, and one of them was being consumed.
+   assign ether_core_reset_n = 1'b0;
+   assign ether_loopback_n   = 1'b0;
+   assign ether_ca           = 1'b0;
+   assign ether_int_en       = 1'b0;
 `endif
 
    /* PHY status register -- VME machines only, and not a Sun-2 device at all */
@@ -753,6 +804,7 @@ module sun2_fpga(input         cpu_clk,
 		   MATCH_KBM       ? {kbm_out, 8'h0} :
 		   MATCH_ETHER     ? {ether_out, 8'h0} :
 		   MATCH_PHY       ? phy_status_out :
+		   mb_hit          ? mb_din :
 		   16'hDEAD;
 
    // DTACK generator. has knowledge of timings for all devices
@@ -784,7 +836,12 @@ module sun2_fpga(input         cpu_clk,
 		        (~P_RW_n & w_ack & (MATCH_MEMX)) | // entering S8, memory going through the MMU
 		        (~P_RW_n & C_S8 & (MATCH_MEMX & ~MATCH_MEM)) | // entering S8, memory going through the MMU
 `endif
-			
+			/* the system bus, either direction.  A card answers when
+			 it is ready rather than on a fixed count, which is what
+			 MultiBus XACK is; with no card mb_hit never rises and
+			 the cycle times out. */
+			(mb_hit & mb_ack) |
+
 			1'b0);
    
    

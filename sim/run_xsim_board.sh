@@ -157,6 +157,7 @@ xvlog --sv --work sun2 "${defargs[@]}" "${incargs[@]}" \
 	"$top/build/inputs/Wish82586/src/wb_mdio.sv" \
 	"$top/rtl/board/phy_rtl8211_init.sv" \
 	"$top/rtl/sun2_ethernet.sv" \
+	"$top/rtl/sun2_mb_ether.sv" \
 	"$top/Inputs/z8530_scc/z8530_scc.sv" \
 	"${board_src[@]}" \
 	"${tb_src[@]}"

@@ -25,6 +25,7 @@ Simulation knobs that matter, all on `make -C sim xsim`:
 | `MEM_MIB=1` | the first one to reach for — the PROM writes every installed byte, so 7 MiB costs seconds of simulated time and 1 MiB costs under half of one |
 | `ROM=fast` | shortens the PROM's RAM-init pass 64-fold (MultiBus only) |
 | `MEM_LATENCY=7` | memory as slow as the real DDR3 path; 0 (the default) is a one-cycle memory |
+| `MB_ETHER=1` | MultiBus only: fit the Sun-2 Ethernet card in the cage. Off by default, because the 23,629 fingerprint is the machine *without* it |
 | `TIMEOUT_MS=` | simulated milliseconds before giving up |
 | `XSIMARGS="-testplusarg trace_dvma=16"` | also `trace_irq`, `heartbeat_ms`, `crs_stuck`, `vcd_full` |
 
@@ -36,6 +37,7 @@ make -C sim adapter    # wb_to_mig_ui against a reference model
 make -C sim migddr3    # the adapter against the real MIG + Micron DDR3, reports bus latency
 make -C sim clkgen     # measures what the MMCMs actually generate
 make -C sim phy        # phy_rtl8211_init against an independent clause-22 PHY model
+make -C sim mbether    # the MultiBus Ethernet card, driven as the boot PROM drives it
 ```
 
 The board testbench can also type at the monitor prompt (`tb/uart_console.sv`),
@@ -81,6 +83,17 @@ downstream knows DVMA exists.
 12-clock timeout and a bus error: instantiate it, add a `MATCH_*` term, add an
 arm to the `P_DOUT` read mux before the `16'hDEAD` fall-through, **and** add it
 to the read and/or write DTACK terms.
+
+**Two Ethernets, sharing only the 82586.** The VME machine's is on board and
+reaches main memory by DVMA through the MMU (`rtl/sun2_dvma.v`). The MultiBus
+machine's is a card with its own memory and its own page map
+(`rtl/sun2_mb_ether.sv`), a slave that never masters anything. They share no
+registers, no addressing and no byte-order convention — do not try to unify
+them. The card hangs off page-map TYPE 2, which `sun2_fpga` decodes as a
+*space*: it emits a bus address and a select, and the card supplies DTACK.
+With nothing plugged in the timeout must still fire, because that is how the
+PROM's probes discover empty addresses — a blanket TYPE 2 decode makes the
+machine hallucinate a 3Com at `0xE0000`.
 
 **Mixed language, and the distinctions are load-bearing.** The MC68010
 (`Inputs/Suska_Configware/68K10`) is VHDL and needs `-2008`. The Sun-2 gateware

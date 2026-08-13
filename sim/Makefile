@@ -6,6 +6,7 @@
 #   make xsim MEM_MIB=1    pretend only 1 MiB is installed (much faster boot)
 #   make xsim MEM_LATENCY=7  memory as slow as the real DDR3 path
 #   make xsim MACHINE=vme  be a Sun 2/50 (VME) instead of a 2/120 (MultiBus)
+#   make xsim MB_ETHER=1   fit the MultiBus Ethernet board (MultiBus only)
 #   make iverilog          the open-source flow (GHDL-converted CPU), best effort
 #   make check             assert the console reached the monitor prompt
 #                          (pass the same MACHINE= as the run it is checking)
@@ -21,6 +22,7 @@
 #   make adapter                   check the Wishbone-to-MIG adapter
 #   make dvma                      check the Wishbone-to-68010 DVMA bridge
 #   make phy                       check the RTL8211EG bring-up sequence
+#   make mbether                   check the MultiBus Ethernet board
 #
 # Extra plusargs go through XSIMARGS, e.g.
 #   make xsim XSIMARGS="-testplusarg vcd_full"
@@ -54,6 +56,12 @@ DEFINES += ROM_PRISTINE
 endif
 ifeq ($(ROM),fast)
 DEFINES += ROM_FASTBOOT
+endif
+# Fit a Sun-2 Ethernet board in the MultiBus card cage.  Off by default: a
+# 2/120 with no card is equally a real machine, and it is the one the
+# 23,629-bus-error fingerprint describes.
+ifeq ($(MB_ETHER),1)
+DEFINES += SUN2_MB_ETHER
 endif
 
 # Simulated milliseconds before giving up, and the console string that means
@@ -108,16 +116,26 @@ board-phy:
 	$(MAKE) board-check MACHINE=vme
 
 # --- unit tests for the board layer ---------------------------------------
-clkgen adapter migddr3 dvma phy: rom
+clkgen adapter migddr3 dvma phy mbether: rom
 	./run_unit.sh $@
 
 iverilog: rom
 	SUN2_DEFINES="$(DEFINES)" ./run_iverilog.sh $(PLUSARGS) $(IVSIMARGS)
 
+# Must match the run directory run_xsim.sh chooses.
+ifeq ($(MB_ETHER),1)
+RUNTAG  = -mbether
+FITTED  = mbether
+else
+RUNTAG  =
+FITTED  =
+endif
+
 check:
-	./check_console.sh $(BUILD)/xsim-$(MACHINE)/console.log $(MACHINE)
+	./check_console.sh $(BUILD)/xsim-$(MACHINE)$(RUNTAG)/console.log $(MACHINE) $(FITTED)
 
 clean:
 	rm -rf $(BUILD)
 
 .PHONY: all rom xsim board board-check board-phy iverilog check clean
+.PHONY: clkgen adapter migddr3 dvma phy mbether

@@ -6,6 +6,7 @@
 #   ./run_unit.sh adapter   wb_to_mig_ui against wb_ram_model, randomised
 #   ./run_unit.sh dvma      sun2_dvma: Wishbone master -> 68010 bus cycles
 #   ./run_unit.sh phy       phy_rtl8211_init + wb_mdio against a PHY model
+#   ./run_unit.sh mbether   sun2_mb_ether against the boot PROM's own sequences
 #
 set -e -o pipefail
 
@@ -44,6 +45,24 @@ phy)
 		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	if xelab -debug off --timescale 1ns/1ps work.tb_phy_init -s phy_sim | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	xsim phy_sim -R | grep -E '===|PASS|FAIL|checks|PHY id|link '
+	;;
+
+mbether)
+	# The whole MAC comes along, because the test that matters is whether the
+	# chip finds its SCP through the board's page map.
+	"$top/tools/patch_inputs.sh" Wish82586
+	W="$top/build/inputs/Wish82586/src"
+	if xvlog --sv \
+		"$W/wish82586_pkg.sv" "$W/dp_ram.sv" "$W/sync_fifo.sv" \
+		"$W/async_fifo.sv" "$W/crc32_eth.sv" "$W/mii_rx.sv" "$W/mii_tx.sv" \
+		"$W/wb_arb.sv" "$W/wb_master.sv" "$W/ie_ru.sv" "$W/ie_cu.sv" \
+		"$W/ie_core.sv" "$W/wish82586.sv" \
+		"$top/rtl/sun2_mb_ether.sv" \
+		"$top/tb/mii_peer.sv" "$top/tb/tb_mb_ether.sv" \
+		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug off --timescale 1ns/1ps work.tb_mb_ether -s mbether_sim \
+		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	xsim mbether_sim -R | grep -E '===|PASS|FAIL|checks|ISCP'
 	;;
 
 dvma)

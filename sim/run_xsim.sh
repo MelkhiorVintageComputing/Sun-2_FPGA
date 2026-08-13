@@ -38,7 +38,16 @@ fi
 # each other -- the second recompiles it while the first is executing, and xsim
 # dies with a kernel fatal that looks like a design fault rather than a race.
 # That cost a wrong diagnosis once.
-rundir="$top/build/sim/xsim${SUN2_MACHINE:+-$SUN2_MACHINE}"
+# One directory per configuration, not per machine: two runs sharing a
+# directory recompile the snapshot underneath each other and the second dies
+# with a kernel fatal that looks like a design fault.  The MultiBus machine
+# with and without its Ethernet card are two configurations of one machine, and
+# both get run.
+case " $SUN2_DEFINES " in
+	*" SUN2_MB_ETHER "*) rundir_tag="-mbether" ;;
+	*)                   rundir_tag="" ;;
+esac
+rundir="$top/build/sim/xsim${SUN2_MACHINE:+-$SUN2_MACHINE}$rundir_tag"
 mkdir -p "$rundir"
 
 # The boot PROM include lives in build/rom; generate it if it isn't there yet.
@@ -111,6 +120,7 @@ xvlog --sv --work sun2 \
 	"$top/build/inputs/Wish82586/src/ie_ru.sv" \
 	"$top/build/inputs/Wish82586/src/wish82586.sv" \
 	"$top/rtl/sun2_ethernet.sv" \
+	"$top/rtl/sun2_mb_ether.sv" \
 	"$top/Inputs/z8530_scc/z8530_scc.sv" \
 	"$top/tb/wb_ram_model.sv" \
 	"$top/tb/mii_peer.sv" \

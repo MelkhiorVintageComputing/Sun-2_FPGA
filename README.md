@@ -290,7 +290,7 @@ error and no interrupt had ever occurred on the way to the MultiBus prompt:
   unconnected input pin. Counter 1 is the NMI clock the monitor measures wall
   time with, and the 2/50 waits on it with no way around.
 
-### Ethernet, and DVMA
+### Ethernet, and DVMA — the VME machine
 
 The VME machine's on-board Ethernet is an Intel 82586 (`Inputs/Wish82586`),
 and the interesting part is not the controller but how it reaches memory. Its
@@ -402,6 +402,61 @@ quiet line.
 That is not optional: the PROM's driver waits on the controller with no timeout
 anywhere, so a transmit that never completes for want of a PHY clock hangs the
 machine solid with nothing printed.
+
+### Ethernet — the MultiBus machine, which shares none of that
+
+A 2/120 has no on-board Ethernet. It has a card in the MultiBus cage, and the
+card is a computer in its own right: the 82586 DMAs into **the board's own
+dual-ported memory** through **the board's own page map**, and never becomes a
+bus master on the CPU bus at all. There is no DVMA, no MMU involvement, no
+arbitration — on the schematic the card passes `P1.BPRN` straight to
+`P1.BPRO`. It is a MultiBus slave and nothing more.
+
+`rtl/sun2_mb_ether.sv` is the card; `make -C sim xsim MB_ETHER=1` fits it. It
+is optional because a 2/120 with an empty cage is equally a real machine, and
+it is the one the 23,629-bus-error fingerprint describes.
+
+Two windows in MultiBus memory space, both jumpered on the real card:
+
+| | |
+|---|---|
+| `0x88000 +0x000..0x7FE` | page map, 1024 entries of 16 bits, 1 KiB pages |
+| `0x88000 +0x800..0x83E` | the board's own ID PROM, low byte of each word |
+| `0x88000 +0x840` | status (read) / control (write) |
+| `0x88000 +0x844..0x847` | parity error address |
+| `0x40000 +0..256K` | the local memory, translated and byte-swapped per page |
+
+The register base is not ours to choose: `iestd[] = { 0x88000, 0x8C000, 0 }` is
+in the shipped Rev R image at `0xEF7D58`, next to the strings `ie: cannot
+initialize` and `ie: Ethernet cable problem`. The memory base *is* ours,
+because the driver reads it back out of `mies_mbmhi` rather than assuming it —
+but it has to dodge the SCSI at `0x80000`, the card's own second controller at
+`0x8C000`, and the 3Com at `0xE0000`, whose probe is nothing but *did it
+answer?*. Naturally aligned at 256 KiB, that leaves `0x40000`.
+
+Which is also why **page-map TYPE 2 is decoded as a space, not a device**.
+Nothing decoded it before — a system-bus cycle simply ran out the twelve-clock
+timeout — and that was load-bearing, because it is how every one of the PROM's
+probes discovers it has nothing to talk to. `sun2_fpga` now emits a bus address
+and a select, and DTACK comes from the card; with an empty cage the timeout
+still fires and the bus-error count does not move.
+
+Two details worth knowing before touching it, both of which cost time:
+
+* **`mp_swab = 1`, "68000 byte order", is the identity mapping** — not the
+  exchanging one, whatever the interface spec's prose suggests. The driver
+  byte-reverses every multi-byte field in software (`to_ieaddr`, `to_ieoff`)
+  and uses the same conversions unchanged on the VME machine, which has no
+  swapper at all. Get it backwards and the chip reads plausible rubbish.
+* **The memory window must be naturally aligned.** The card compares `A19:A18`
+  for a 256 KiB window, so a base that is merely 64 KiB-aligned spreads it over
+  four times its size and swallows whatever else lives there. The module
+  `$fatal`s rather than mis-decode quietly.
+
+`make -C sim mbether` is the unit test. It replays the boot PROM's own
+sequences rather than a paraphrase of them — `ieprobe()`'s three bus cycles,
+`ieinit()`'s page-map programming, and then the chip's SCP handshake, which is
+the only check that pins the byte order down.
 
 ### Everything else
 

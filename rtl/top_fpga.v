@@ -95,6 +95,13 @@ module top(input         cpu_clk,
    wire [15:0] dvma_dout;
    wire        ether_core_reset_n, ether_loopback_n, ether_ca, ether_int_en;
    wire        ether_int, ether_bus_err;
+
+   // The MultiBus system bus, and whatever is plugged into it.
+   wire        mb_sel, mb_we, mb_uds_n, mb_lds_n, mb_hit, mb_ack;
+   wire [19:0] mb_addr;
+   wire [15:0] mb_cpu_dout;    // CPU -> card
+   wire [15:0] mb_card_dout;   // card -> CPU
+   wire        mb_ether_int;
    
    
    sun2_fpga sun2(.cpu_clk(cpu_clk),
@@ -145,6 +152,15 @@ module top(input         cpu_clk,
 		  .phy_fd(phy_fd),
 		  .phy_speed(phy_speed),
 		  .phy_crs_stuck(eth_crs_stuck),
+		  .mb_sel(mb_sel),
+		  .mb_addr(mb_addr),
+		  .mb_we(mb_we),
+		  .mb_uds_n(mb_uds_n),
+		  .mb_lds_n(mb_lds_n),
+		  .mb_dout(mb_cpu_dout),
+		  .mb_din(mb_card_dout),
+		  .mb_hit(mb_hit),
+		  .mb_ack(mb_ack),
 
 		  .diag_leds(diag_leds),
 		  .en_boot(en_boot),
@@ -295,54 +311,88 @@ module top(input         cpu_clk,
 			  .mii_crs(mii_crs),
 			  .mii_col(mii_col)
 			  );
+
+   // A 2/50 has no card cage: nothing is plugged into the system bus, so a
+   // TYPE 2 cycle takes the timeout it always did.
+   assign mb_card_dout  = 16'h0;
+   assign mb_hit        = 1'b0;
+   assign mb_ack        = 1'b0;
+   assign mb_ether_int  = 1'b0;
 `else
    //
-   // MultiBus: no on-board Ethernet.  The 2/120's equivalent I/O page is an
-   // 80287 socket, so there is nothing here to request the bus and the mux
-   // above folds away entirely.
+   // MultiBus: nothing on board.  The 2/120's device page 1 is an 80287
+   // socket, so the on-board Ethernet control register does not exist and
+   // sun2_fpga leaves its outputs undriven -- hence the tie-offs here, which
+   // also keep the CPU/DVMA mux above folded away.  A MultiBus machine has no
+   // DVMA master at all: the Ethernet card, if fitted, is a MultiBus slave
+   // with its own memory and never touches this bus.
    //
-   assign ether_int     = 1'b0;
+   // Level 3, autovectored -- the same level the VME machine's on-board part
+   // uses (SunOS: "ie0 at mbmem ? csr 0x88000 priority 3", no vector clause).
+   // The boot PROM polls throughout and never enables it.
+   assign ether_int     = mb_ether_int;
    assign ether_bus_err = 1'b0;
+
+   assign dvma_active   = 1'b0;
+   assign dvma_a        = 23'h0;
+   assign dvma_fc       = 3'h0;
+   assign dvma_as_n     = 1'b1;
+   assign dvma_rw_n     = 1'b1;
+   assign dvma_uds_n    = 1'b1;
+   assign dvma_lds_n    = 1'b1;
+   assign dvma_dout     = 16'h0;
+   assign P_BR_n        = 1'b1;
+
+ `ifdef SUN2_MB_ETHER
+   //
+   // The Sun-2 Ethernet board in the card cage.  See rtl/sun2_mb_ether.sv:
+   // an 82586 with its own dual-ported memory and its own page map, reached
+   // through two windows in MultiBus memory space.
+   //
+   sun2_mb_ether #(.REG_BASE(`MB_ETHER_REG_BASE),
+		   .MEM_BASE(`MB_ETHER_MEM_BASE),
+		   .MEM_KIB(`MB_ETHER_MEM_KIB),
+		   .PHY_DATA_W(4)) mbether
+     (.CLK(C100),
+      .RESET(sys_reset),
+
+      .mb_sel(mb_sel),
+      .mb_addr(mb_addr),
+      .mb_we(mb_we),
+      .mb_uds_n(mb_uds_n),
+      .mb_lds_n(mb_lds_n),
+      .mb_din(mb_cpu_dout),
+      .mb_dout(mb_card_dout),
+      .mb_hit(mb_hit),
+      .mb_ack(mb_ack),
+
+      .int_o(mb_ether_int),
+
+      .mii_tx_clk(mii_tx_clk),
+      .mii_txd(mii_txd),
+      .mii_tx_en(mii_tx_en),
+      .mii_tx_er(mii_tx_er),
+      .mii_rx_clk(mii_rx_clk),
+      .mii_rxd(mii_rxd),
+      .mii_rx_dv(mii_rx_dv),
+      .mii_rx_er(mii_rx_er),
+      .mii_crs(mii_crs),
+      .mii_col(mii_col)
+      );
+
+   // The card cannot report a stuck carrier -- that flag is part of the VME
+   // side's own diagnostics, and there is no device page here to read it from.
+   assign eth_crs_stuck = 1'b0;
+ `else
    assign eth_crs_stuck = 1'b0;
    assign mii_txd       = 4'h0;
    assign mii_tx_en     = 1'b0;
    assign mii_tx_er     = 1'b0;
-
-   sun2_dvma dvma(.CLK(C100),
-		  .RESET(sys_reset),
-
-		  .wb_cyc_i(1'b0),
-		  .wb_stb_i(1'b0),
-		  .wb_we_i(1'b0),
-		  .wb_sel_i(4'h0),
-		  .wb_adr_i(22'h0),
-		  .wb_dat_i(32'h0),
-		  .wb_dat_o(),
-		  .wb_ack_o(),
-		  .wb_err_o(),
-
-		  .EN_DVMA(EN_DVMA),
-		  .P_BR_n(P_BR_n),
-		  .P_BG_n(P_BG_n),
-		  .BUS_EN(BUS_EN),
-		  .cpu_as_n(cpu_as_n),
-
-		  .dvma_active(dvma_active),
-		  .dvma_a(dvma_a),
-		  .dvma_fc(dvma_fc),
-		  .dvma_as_n(dvma_as_n),
-		  .dvma_rw_n(dvma_rw_n),
-		  .dvma_uds_n(dvma_uds_n),
-		  .dvma_lds_n(dvma_lds_n),
-		  .dvma_dout(dvma_dout),
-
-		  .dvma_din(P_DOUT),
-		  .P_DTACK_n(P_DTACK_n),
-		  .P_BERR_n(P_BERR_n),
-
-		  .ether_reset(~ether_core_reset_n),
-		  .dvma_err()
-		  );
+   assign mb_card_dout  = 16'h0;
+   assign mb_hit        = 1'b0;
+   assign mb_ack        = 1'b0;
+   assign mb_ether_int  = 1'b0;
+ `endif
 `endif
 
    // assign todebug = PC[7:0] ;

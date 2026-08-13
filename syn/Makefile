@@ -4,6 +4,7 @@
 #   make bitstream          build at the default 12.5 MHz CPU clock
 #   make bitstream CPU_HZ=40000000
 #   make bitstream MACHINE=vme
+#   make bitstream MB_ETHER=1     with the MultiBus Ethernet card
 #   make both               both CPU clocks
 #
 # Nothing here is committed; everything lands in ../build.  Vivado is run from
@@ -24,8 +25,12 @@ CPU_HZ  ?= 12500000
 # README: the whole machine-dependent configuration follows from this.
 MACHINE ?= multibus
 
+# Fit the Sun-2 Ethernet card in the MultiBus cage.  MultiBus only.
+MB_ETHER ?= 0
+
 IPDIR   = $(TOP)/build/ip/sun2_mig
-OUTDIR  = $(TOP)/build/syn/$(MACHINE)-cpu$(shell expr $(CPU_HZ) / 1000000)
+TAG     = $(if $(filter 1,$(MB_ETHER)),-mbether,)
+OUTDIR  = $(TOP)/build/syn/$(MACHINE)$(TAG)-cpu$(shell expr $(CPU_HZ) / 1000000)
 WORKDIR = $(TOP)/build/syn/work
 
 all: bitstream
@@ -49,7 +54,7 @@ inputs:
 
 bitstream: ip rom inputs | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
-		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE)
+		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER)
 	@echo "bitstream: $(OUTDIR)/sun2_wukong_v1.bit"
 
 both:
