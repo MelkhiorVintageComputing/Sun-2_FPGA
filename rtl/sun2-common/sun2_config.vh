@@ -190,15 +190,30 @@
 //---------------------------------------------------------------------
 // The frame buffer
 //---------------------------------------------------------------------
-// The 2/50's on-board monochrome frame buffer: 1152x900, one bit per pixel,
-// in a 128 KiB aperture at page-map TYPE 1 pages 0..63, with a video control
-// register at page 0x40.  See rtl/sun2-vme/sun2_fb_ctl.v.
+// The Sun-2 monochrome frame buffer: 1152x900, one bit per pixel, in a 128 KiB
+// aperture, with a video control register.  Both machines have one, and it is
+// the same screen with the same drawing code -- mon/dpy/ has no VME
+// conditionals anywhere -- but they are different hardware in different places:
+//
+//   2/50    on-board.  Page-map TYPE 1, pages 0..63 for the pixels and page
+//           0x40 for the control register.
+//   2/120   a board in the cage, addressed on the P2 bus rather than the
+//           MultiBus.  Page-map TYPE 0, the eighth megabyte: pixels at page
+//           0xE00 (0x700000), the keyboard/mouse SCC on the same board at
+//           0xF00, and the control register at 0xF03 (0x781800).
+//
+// See rtl/sun2-common/sun2_fb_ctl.v, and MATCH_FB in sun2_fpga.v for the decode.
 //
 // Optional, and off by default, because it changes what the machine *is* from
 // the outside: when s2fbthere() succeeds the boot PROM moves the console to
 // the screen and the serial port goes quiet.  That is correct -- it is what a
-// 2/50 with a display does -- but it is not what you want during bring-up, and
+// Sun-2 with a display does -- but it is not what you want during bring-up, and
 // every console regression so far assumes the serial console.
+//
+// On a MultiBus machine it also decides whether the keyboard/mouse SCC exists
+// at all, because that SCC is on the video board: sunmon.c:601 is "On Multibus,
+// keyboard can't be there if there's no frame buffer", and the monitor touches
+// 0xEEC000 without a bus-error catcher as soon as it has found a display.
 //
 //`define SUN2_FB
 

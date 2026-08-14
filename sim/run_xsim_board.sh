@@ -108,7 +108,7 @@ xvlog --work sun2 "${defargs[@]}" \
 	"$top/rtl/sun2-common/gen8bit_reg.v" \
 	"$top/rtl/sun2-vme/sun2_ether_ctl.v" \
 	"$top/rtl/sun2-vme/sun2_phy_status.v" \
-	"$top/rtl/sun2-vme/sun2_fb_ctl.v" \
+	"$top/rtl/sun2-common/sun2_fb_ctl.v" \
 	"$top/rtl/sun2-vme/sun2_dvma.v" \
 	"$top/rtl/sun2-common/ttl_am9513.v" \
 	"$top/rtl/sun2-common/ttl_74F151.v" \

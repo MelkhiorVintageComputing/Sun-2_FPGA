@@ -7,7 +7,7 @@
 #   make xsim MEM_LATENCY=7  memory as slow as the real DDR3 path
 #   make xsim MACHINE=vme  be a Sun 2/50 (VME) instead of a 2/120 (MultiBus)
 #   make xsim MB_ETHER=1   fit the MultiBus Ethernet board (MultiBus only)
-#   make xsim FB=1         fit the frame buffer (VME only)
+#   make xsim FB=1         fit the frame buffer (either machine)
 #   make iverilog          the open-source flow (GHDL-converted CPU), best effort
 #   make check             assert the console reached the monitor prompt
 #                          (pass the same MACHINE= as the run it is checking)
@@ -147,14 +147,14 @@ clkgen adapter migddr3 dvma phy mbether scanout: rom
 # wrong directory -- and $readmemh on a file that is not there is not an error.
 # It leaves the array X, which every structural check below survives; only the
 # white-coverage and logo checks notice.
-FBIMAGE = $(abspath $(BUILD)/xsim-vme-fb/fb.mem)
+FBIMAGE = $(abspath $(BUILD)/xsim-$(MACHINE)$(RUNTAG)/fb.mem)
 SCREEN  = $(BUILD)/unit-scanout/screen.ppm
 
 screenshot:
 	@if [ ! -f $(FBIMAGE) ]; then \
 		echo "no frame buffer capture at $(FBIMAGE)"; \
 		echo "boot the machine with a display first:"; \
-		echo "    make -C sim xsim MACHINE=vme FB=1 MEM_MIB=1"; \
+		echo "    make -C sim xsim MACHINE=$(MACHINE) FB=1 MEM_MIB=1"; \
 		exit 1; \
 	fi
 	$(MAKE) scanout XSIMARGS='-testplusarg fb_image=$(FBIMAGE) \
@@ -164,17 +164,12 @@ screenshot:
 iverilog: rom
 	SUN2_DEFINES="$(DEFINES)" ./run_iverilog.sh $(PLUSARGS) $(IVSIMARGS)
 
-# Must match the run directory run_xsim.sh chooses.
-ifeq ($(MB_ETHER),1)
-RUNTAG  = -mbether
-FITTED  = mbether
-else ifeq ($(FB),1)
-RUNTAG  = -fb
-FITTED  = fb
-else
-RUNTAG  =
-FITTED  =
-endif
+# Must match the run directory run_xsim.sh chooses, which composes the two.
+RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(FB)),-fb,)
+# What check_console.sh should expect.  A display wins: with one fitted the
+# console moves to the screen and there is no serial output left to check,
+# whatever else is in the cage.
+FITTED  = $(if $(filter 1,$(FB)),fb,$(if $(filter 1,$(MB_ETHER)),mbether,))
 
 check:
 	./check_console.sh $(BUILD)/xsim-$(MACHINE)$(RUNTAG)/console.log $(MACHINE) $(FITTED)

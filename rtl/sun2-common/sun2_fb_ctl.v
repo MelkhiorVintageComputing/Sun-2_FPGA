@@ -3,15 +3,22 @@
 //
 // The Sun-2 video control register.
 //
-// One 16-bit register, page-map TYPE 1 page 0x40 -- physical on-board-I/O
-// 0x020000, which the boot PROM maps at virtual 0xEE3800.  The pixels
-// themselves are 128 KiB lower, at TYPE 1 pages 0..63; they are not here,
-// because on this machine they live in DDR3 and get there through the
-// Wishbone bridge.
+// One 16-bit register, the same on both machines and mapped by both boot PROMs
+// at the same *virtual* address, 0xEE3800.  Only the page-map entry behind it
+// differs:
 //
-// Sources: the Architecture Manual section 6.3, struct videoctl in
-// Inputs/sunos-34-src/.../rsun/mon/h/video.h, and struct bw2cr in
-// .../sun/sys/sundev/bw2reg.h, which agree.
+//   2/50   TYPE 1 page 0x40   -- on-board I/O 0x020000
+//   2/120  TYPE 0 page 0xF03  -- 0x781800, on the video board in the eighth
+//                               megabyte, decoded from A19/A12/A11 alone and
+//                               therefore aliased up to 0x7FFFFE
+//
+// The pixels are not here on either machine: they live in DDR3 and get there
+// through the Wishbone bridge.
+//
+// Sources, which agree: the Architecture Manual section 6.3, struct videoctl in
+// Inputs/sunos-34-src/.../mon/h/video.h, struct bw2cr in
+// .../sun/sys/sundev/bw2reg.h, and Table 2-1 of the 2/120 video board manual
+// (Inputs/doc/800-1187-01_2-120_Video_Board_Engr_Sep84.pdf, page 2-3).
 //
 //   15  video_en      R/W  display enable
 //   14  copy_en       R/W  copy mode -- see below
@@ -21,7 +28,16 @@
 //   10  a_jumper      R/O  configuration jumper, 0 = default
 //    9  color_jumper  R/O  1 = use a Sun-2 colour board as the console
 //    8  1024_jumper   R/O  1 = the screen is 1024x1024
-//  7:0  copybase      R/W  copy source, physical A17..A23
+//    7  -             R/O  writable, reads back zero
+//  6:1  copybase      R/W  copy source, physical A17..A22
+//    0  -             R/O  writable, reads back zero
+//
+// The Architecture Manual describes bits 11:8 differently for Machine Type 1 --
+// 10:8 reserved and 11 an audio enable for a sound generator at 0x780800.  That
+// is the device-layer abstraction, not this board: the 2/120 video board's own
+// manual gives 11:8 as the J1600 configuration jumpers, read only, and marks
+// 0x780800 NOT USED.  There is no sound generator on it.  bw2reg.h agrees with
+// the board, and bw2reg.h is the driver that has to work on both machines.
 //
 // Four things about this are load-bearing:
 //
@@ -38,9 +54,15 @@
 //     register is replicated every 2 bytes throughout the control page" -- and
 //     returns "no frame buffer" if they differ.
 //
-//   * **copybase must be writable and read back.**  The same probe writes
-//     0x2A and then 0x54 into bits 7:1 and compares the whole word each time.
-//     Nothing ever uses the value, but the field has to behave like a register.
+//   * **copybase must be writable and read back -- but only bits 6:1.**  The
+//     same probe writes 0x2A and then 0x54 into bits 7:1 and compares the whole
+//     word each time.  Nothing ever uses the value, but the field has to behave
+//     like a register.  Bits 7 and 0 are not part of it: the board manual says
+//     they "can be written to by the processor, but only read back as a zero",
+//     and bw2reg.h warns "vc_copybase & 0x81 == aberrant bits.  Don't depend on
+//     'em!".  Both probe values have those two bits clear, so the distinction
+//     is invisible to every piece of software in the tree -- it is here because
+//     it is what the hardware does.
 //
 //   * **Reset clears it.**  "Initialization: cleared on reset."  The PROM
 //     re-enables video unconditionally after every reset, so the state that
@@ -100,12 +122,14 @@ module sun2_fb_ctl(input 	    CLK,
           r_copybase <= din[7:0];
      end
 
-   assign dout = {r_video_en,     // 15
-                  r_copy_en,      // 14
-                  r_int_en,       // 13
-                  1'b0,           // 12  int, never pending
-                  4'b0000,        // 11:8 jumpers: b, a, colour, 1024
-                  r_copybase};    // 7:0
+   assign dout = {r_video_en,        // 15
+                  r_copy_en,         // 14
+                  r_int_en,          // 13
+                  1'b0,              // 12  int, never pending
+                  4'b0000,           // 11:8 jumpers: b, a, colour, 1024
+                  1'b0,              // 7    aberrant, reads zero
+                  r_copybase[6:1],   // 6:1  copy base A17..A22
+                  1'b0};             // 0    aberrant, reads zero
 
    assign video_en = r_video_en;
    assign fb_int   = 1'b0;

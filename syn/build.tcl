@@ -5,7 +5,8 @@
 # MACHINE is multibus (default) or vme; see "Which machine" in the README.
 # MB_ETHER=1 fits the Sun-2 Ethernet card in the MultiBus cage.
 # BOARD is v1 (default) or v3, the QMTech Wukong revision; see syn/boards.tcl.
-# FB=1 fits the 2/50's frame buffer and its HDMI output.
+# FB=1 fits the frame buffer and its HDMI output -- the 2/50's on-board one, or
+#      the 2/120's video board, which also carries the keyboard/mouse SCC.
 #
 # Nothing generated is committed: the MIG IP comes from syn/mig/sun2_mig.prj
 # via syn/generate_ip.tcl, and everything lands in build/.
@@ -44,11 +45,10 @@ if {$mb_ether == 1} {
     lappend defines SUN2_MB_ETHER
 }
 
+# Both machines have a frame buffer; they differ only in where it decodes.  On
+# a MultiBus machine this also brings in the keyboard/mouse SCC, which lives on
+# the video board.
 if {$fb == 1} {
-    if {$machine ne "vme"} {
-        puts "ERROR: FB is VME only: the 2/120's frame buffer is a different device"
-        exit 1
-    }
     lappend defines SUN2_FB
 }
 
@@ -106,7 +106,7 @@ read_verilog [list \
     $top/rtl/sun2-common/gen8bit_reg.v \
     $top/rtl/sun2-vme/sun2_ether_ctl.v \
     $top/rtl/sun2-vme/sun2_phy_status.v \
-    $top/rtl/sun2-vme/sun2_fb_ctl.v \
+    $top/rtl/sun2-common/sun2_fb_ctl.v \
     $top/rtl/sun2-vme/sun2_dvma.v \
     $top/rtl/sun2-common/ttl_am9513.v \
     $top/rtl/sun2-common/ttl_74F151.v \

@@ -123,6 +123,18 @@ module sun2_fpga(input         cpu_clk,
       if (`MEM_PAGES > `MEM_SPACE_PAGES)
         $fatal(1, "MEM_PAGES (%0d) exceeds MEM_SPACE_PAGES (%0d): memory is installed where nothing answers",
                `MEM_PAGES, `MEM_SPACE_PAGES);
+`ifdef SUN2_FB
+ `ifndef SUN2_VME
+      // The 2/120's video board owns the whole eighth megabyte -- pages 0xE00
+      // and up -- so installed memory has to stop below it.  The boot PROM's
+      // own memory sizing does exactly this (diag.s: "Meg 7 is reserved for
+      // framebuf"); this is here so a MEM_PAGES override cannot quietly put
+      // RAM where MATCH_FB will answer first.
+      if (`MEM_PAGES > 3584)
+        $fatal(1, "MEM_PAGES (%0d) runs into the video board at page 0xE00 (3584)",
+               `MEM_PAGES);
+ `endif
+`endif
    end
 
    reg 	POR_n;
@@ -448,20 +460,52 @@ module sun2_fpga(input         cpu_clk,
    assign MATCH_ROPS     = MATCH_DEV & (ma_pmap2devices[2:0] == 3'h6); // not in prime
    assign MATCH_RTC      = MATCH_DEV & (ma_pmap2devices[2:0] == 3'h7); // not in prime
 
-   // The 2/50's frame buffer, which is TYPE 1 like the devices above but
-   // nowhere near them: pages 0..63 for the 128 KiB of pixels and page 0x40
-   // for the video control register, at the bottom of I/O space rather than in
-   // the eight-page window at DEV_PAGE_BASE.  That is why MATCH_DEV cannot
-   // reach them and why s2fbthere() fails without this.
+   // The frame buffer.  Both machines have the same 1152x900 screen, both boot
+   // PROMs map it at the same *virtual* addresses -- 0xEC0000 for the pixels
+   // and 0xEE3800 for the control register -- and both draw on it with
+   // byte-identical code.  What differs, and all that differs, is the page-map
+   // entry: mon/kernel/sunmon.c:41-51 is VPM_IO/VIOPG_VIDEO against
+   // MPM_MEMORY/MEMPG_VIDEO, and the two tables are in the shipped images as
+   // data words (0xEC400000 against 0xEC00FE00).
    //
-   // The pixels do not answer here -- they are in DDR3, and the Wishbone
-   // bridge fields MATCH_FB.  Only the control register is local.
+   //   2/50    TYPE 1, pages 0..63 for the pixels and page 0x40 for the
+   //           register, at the bottom of on-board I/O space rather than in the
+   //           eight-page window at DEV_PAGE_BASE -- which is why MATCH_DEV
+   //           cannot reach them.
+   //   2/120   TYPE 0, the eighth megabyte: pixels at page 0xE00 (0x700000),
+   //           the keyboard/mouse SCC at 0xF00 and the register at 0xF03
+   //           (0x781800).  Memory space, alongside RAM, because the video
+   //           board is a P2-bus device rather than a MultiBus one -- its own
+   //           manual decodes nothing but P2.* -- and because MEM_SPACE_PAGES
+   //           is 3584 = 0xE00 on this machine, the aperture starts exactly one
+   //           page past the end of memory.  mon/diag/diag.s:607 clamps memory
+   //           sizing there for that reason: "Meg 7 is reserved for framebuf".
+   //
+   // The MultiBus decode is deliberately coarser than the VME one.  Above
+   // 0x700000 the board looks at A19, A12 and A11 and nothing else, so the
+   // 128 KiB aperture repeats every 128 KiB up to 0x77FFFE and the register
+   // repeats up to 0x7FFFFE -- Figure 2-1 of the board manual says so in as
+   // many words ("DO NOT USE, will map to Video Memory").  Matching that costs
+   // nothing and is what a probe of 0x720000 would really find.
+   //
+   // The pixels do not answer here on either machine -- they are in DDR3, and
+   // the Wishbone bridge fields MATCH_FB.  Only the control register is local.
+   // FB_PAGE is ma_pmap2devices[5:0] either way: 0x000 and 0xE00 agree in the
+   // bottom six bits, so the same wires pick the 2 KiB within the aperture.
    wire 			 MATCH_FB, MATCH_FBCTL;
 `ifdef SUN2_FB
+ `ifdef SUN2_VME
    assign MATCH_FB       = (FC_GENERAL) & (TYPE == 3'h1) & C_S6 &
                            (ma_pmap2devices[11:6] == 6'h0);
    assign MATCH_FBCTL    = (FC_GENERAL) & (TYPE == 3'h1) & C_S6 &
                            (ma_pmap2devices == 12'h040);
+ `else
+   assign MATCH_FB       = (FC_GENERAL) & (TYPE == 3'h0) & C_S6 &
+                           (ma_pmap2devices[11:8] == 4'hE);
+   assign MATCH_FBCTL    = (FC_GENERAL) & (TYPE == 3'h0) & C_S6 &
+                           (ma_pmap2devices[11:8] == 4'hF) &
+                           (ma_pmap2devices[1:0] == 2'b11);
+ `endif
 `else
    assign MATCH_FB       = 1'b0;
    assign MATCH_FBCTL    = 1'b0;

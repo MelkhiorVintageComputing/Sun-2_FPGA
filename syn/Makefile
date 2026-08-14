@@ -6,7 +6,7 @@
 #   make bitstream MACHINE=vme
 #   make bitstream MB_ETHER=1     with the MultiBus Ethernet card
 #   make bitstream BOARD=v3       for a Wukong V3 instead of a V1
-#   make bitstream FB=1 MACHINE=vme  with the frame buffer on HDMI
+#   make bitstream FB=1           with the frame buffer on HDMI
 #   make both               both CPU clocks
 #
 # Nothing here is committed; everything lands in ../build.  Vivado is run from
@@ -30,7 +30,7 @@ MACHINE ?= multibus
 # Fit the Sun-2 Ethernet card in the MultiBus cage.  MultiBus only.
 MB_ETHER ?= 0
 
-# Fit the 2/50's frame buffer and its HDMI output.  VME only.
+# Fit the frame buffer and its HDMI output.  Either machine.
 FB ?= 0
 
 # Which QMTech Wukong revision: v1 or v3.  They share all their RTL and differ

@@ -43,11 +43,12 @@ fi
 # with a kernel fatal that looks like a design fault.  The MultiBus machine
 # with and without its Ethernet card are two configurations of one machine, and
 # both get run.
-case " $SUN2_DEFINES " in
-	*" SUN2_MB_ETHER "*) rundir_tag="-mbether" ;;
-	*" SUN2_FB "*)       rundir_tag="-fb" ;;
-	*)                   rundir_tag="" ;;
-esac
+# The tags compose rather than choose: a 2/120 with both an Ethernet card and a
+# video board is a real machine, and if the two options shared a directory the
+# second run would recompile the snapshot under the first.
+rundir_tag=""
+case " $SUN2_DEFINES " in *" SUN2_MB_ETHER "*) rundir_tag="$rundir_tag-mbether" ;; esac
+case " $SUN2_DEFINES " in *" SUN2_FB "*)       rundir_tag="$rundir_tag-fb" ;; esac
 rundir="$top/build/sim/xsim${SUN2_MACHINE:+-$SUN2_MACHINE}$rundir_tag"
 mkdir -p "$rundir"
 
@@ -96,7 +97,7 @@ xvlog --work sun2 \
 	"$top/rtl/sun2-common/gen8bit_reg.v" \
 	"$top/rtl/sun2-vme/sun2_ether_ctl.v" \
 	"$top/rtl/sun2-vme/sun2_phy_status.v" \
-	"$top/rtl/sun2-vme/sun2_fb_ctl.v" \
+	"$top/rtl/sun2-common/sun2_fb_ctl.v" \
 	"$top/rtl/sun2-vme/sun2_dvma.v" \
 	"$top/rtl/sun2-common/ttl_am9513.v" \
 	"$top/rtl/sun2-common/ttl_74F151.v" \
