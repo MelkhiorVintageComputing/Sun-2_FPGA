@@ -126,6 +126,8 @@ read_verilog -sv [list \
     $top/boards/Wukong/wukong_clkgen.sv \
     $top/boards/Wukong/reset_sync.sv \
     $top/boards/Wukong/wb_to_mig_ui.sv \
+    $top/boards/Wukong/mig_arb.sv \
+    $top/boards/Wukong/fb_scanout.sv \
     $top/boards/Wukong/wukong_top.sv \
 ]
 

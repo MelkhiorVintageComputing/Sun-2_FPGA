@@ -350,6 +350,15 @@ module wukong_top #(
    wire [127:0] app_rd_data;
    wire         app_rd_data_valid, app_rd_data_end;
 
+   // The two DDR3 masters and the arbiter between them.  The adapter keeps its
+   // instance name and its place in the hierarchy: syn/wukong_common.xdc names
+   // adapter/req_tgl_reg and three more of its registers by path, and a
+   // get_cells that matches nothing is dropped silently rather than erroring.
+   wire [27:0]  c0_addr, c1_addr;
+   wire         c0_we, c0_req, c0_done, c1_req, c1_done;
+   wire [127:0] c0_wdata, c0_rdata, c1_rdata;
+   wire [15:0]  c0_wmask;
+
    wb_to_mig_ui adapter (
        .clk_wb  (cpu_clk),
        .rst_wb  (sys_reset),
@@ -359,7 +368,19 @@ module wukong_top #(
        .wb_dat_o (wb_dat_s2m), .wb_ack_o (wb_ack),
 
        .ui_clk (ui_clk), .ui_rst (ui_clk_sync_rst),
+
+       .c_addr (c0_addr), .c_we (c0_we), .c_wdata (c0_wdata), .c_wmask (c0_wmask),
+       .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata)
+   );
+
+   mig_arb arbiter (
+       .ui_clk (ui_clk), .ui_rst (ui_clk_sync_rst),
        .init_calib_complete (init_calib_complete),
+
+       .c0_addr (c0_addr), .c0_we (c0_we), .c0_wdata (c0_wdata), .c0_wmask (c0_wmask),
+       .c0_req (c0_req), .c0_done (c0_done), .c0_rdata (c0_rdata),
+
+       .c1_addr (c1_addr), .c1_req (c1_req), .c1_done (c1_done), .c1_rdata (c1_rdata),
 
        .app_addr (app_addr), .app_cmd (app_cmd), .app_en (app_en), .app_rdy (app_rdy),
        .app_wdf_data (app_wdf_data), .app_wdf_mask (app_wdf_mask),
@@ -367,6 +388,11 @@ module wukong_top #(
        .app_wdf_rdy (app_wdf_rdy),
        .app_rd_data (app_rd_data), .app_rd_data_valid (app_rd_data_valid)
    );
+
+   // Nothing scans out yet -- that is the next piece.  Tied off so the arbiter
+   // sees a client that never asks.
+   assign c1_addr = 28'h0;
+   assign c1_req  = 1'b0;
 
    // MIG's sys_rst is active low (SysResetPolarity in the .prj).
    sun2_mig ddr3 (

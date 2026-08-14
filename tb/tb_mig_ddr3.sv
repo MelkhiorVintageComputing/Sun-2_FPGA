@@ -55,18 +55,81 @@ module tb_mig_ddr3;
 
    wire rst_wb = ~mmcm_locked | ~init_calib_complete;
 
+   wire [27:0]  c0_addr, c1_addr;
+   wire         c0_we, c0_req, c0_done, c1_done;
+   wire [127:0] c0_wdata, c0_rdata, c1_rdata;
+   wire [15:0]  c0_wmask;
+   reg          c1_req = 1'b0;
+
    wb_to_mig_ui adapter (
        .clk_wb (cpu_clk), .rst_wb (rst_wb),
        .wb_cyc_i (wb_cyc), .wb_stb_i (wb_stb), .wb_adr_i (wb_adr),
        .wb_dat_i (wb_dat_w), .wb_sel_i (wb_sel), .wb_we_i (wb_we),
        .wb_dat_o (wb_dat_r), .wb_ack_o (wb_ack),
        .ui_clk (ui_clk), .ui_rst (ui_clk_sync_rst),
+       .c_addr (c0_addr), .c_we (c0_we), .c_wdata (c0_wdata), .c_wmask (c0_wmask),
+       .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata)
+   );
+
+   mig_arb arbiter (
+       .ui_clk (ui_clk), .ui_rst (ui_clk_sync_rst),
        .init_calib_complete (init_calib_complete),
+       .c0_addr (c0_addr), .c0_we (c0_we), .c0_wdata (c0_wdata), .c0_wmask (c0_wmask),
+       .c0_req (c0_req), .c0_done (c0_done), .c0_rdata (c0_rdata),
+       .c1_addr (c1_addr), .c1_req (c1_req), .c1_done (c1_done), .c1_rdata (c1_rdata),
        .app_addr (app_addr), .app_cmd (app_cmd), .app_en (app_en), .app_rdy (app_rdy),
        .app_wdf_data (app_wdf_data), .app_wdf_mask (app_wdf_mask),
        .app_wdf_wren (app_wdf_wren), .app_wdf_end (app_wdf_end), .app_wdf_rdy (app_wdf_rdy),
        .app_rd_data (app_rd_data), .app_rd_data_valid (app_rd_data_valid)
    );
+
+   // ------------------------------------------------------------------
+   // A stand-in for the frame buffer scan-out, so the number below is
+   // measured under contention rather than in an empty interface.
+   // ------------------------------------------------------------------
+   // +fb_traffic reproduces what fb_scanout will actually ask for: a
+   // 1152x900 line is 144 bytes = 9 beats of 16, once per HDMI line.  At
+   // 1080p60 a line is 2200 pixel clocks of 148.4375 MHz = 14.82 us, which is
+   // 1235 ui_clk.  +fb_saturate instead keeps the request permanently
+   // asserted, which is far more than the scan-out can ever want and is there
+   // as a hard upper bound.
+   localparam int FB_BEATS_PER_LINE = 9;
+   localparam int FB_LINE_UI_CLK    = 1235;
+
+   bit fb_traffic  = 1'b0;
+   bit fb_saturate = 1'b0;
+   int fb_gap = 0, fb_left = 0, fb_n = 0;
+   reg [27:0] fb_addr = 28'h7C00000;   // the top 8 MiB, where the pixels live
+
+   assign c1_addr = fb_addr;
+
+   always @(posedge ui_clk) begin
+      if (ui_clk_sync_rst) begin
+         c1_req  <= 1'b0;
+         fb_left <= 0;
+         fb_gap  <= 0;
+      end else if (fb_saturate) begin
+         c1_req <= 1'b1;
+         if (c1_done) begin fb_addr <= fb_addr + 28'd8; fb_n <= fb_n + 1; end
+      end else if (fb_traffic) begin
+         if (fb_left > 0) begin
+            c1_req <= 1'b1;
+            if (c1_done) begin
+               fb_addr <= fb_addr + 28'd8;
+               fb_n    <= fb_n + 1;
+               fb_left <= fb_left - 1;
+               if (fb_left == 1) begin
+                  c1_req <= 1'b0;
+                  fb_gap <= FB_LINE_UI_CLK;
+               end
+            end
+         end else if (fb_gap > 0) begin
+            fb_gap <= fb_gap - 1;
+         end else begin
+            fb_left <= FB_BEATS_PER_LINE;
+         end
+      end
+   end
 
    // ------------------------------------------------------------------
    // The real controller and the real DRAM model
@@ -182,6 +245,7 @@ module tb_mig_ddr3;
                      (wb_lat_sum + wb_lat_n/2) / wb_lat_n);
             // A 32-bit DVMA word is two 68010 cycles, each waiting this long
             // plus arbitration; at 10 Mb/s the MAC needs one every 3.2 us.
+            $display("scan-out stand-in: %0d transactions completed", fb_n);
             $display("=> a 32-bit DVMA word costs about %0.1f us; at 10 Mb/s the budget is 3.2 us",
                      2.0 * ((real'(wb_lat_sum)/wb_lat_n) + 5.0) * cpu_ns / 1000.0);
          end
@@ -221,6 +285,12 @@ module tb_mig_ddr3;
    initial begin
       logic [31:0] got, want;
       $timeformat(-9, 0, " ns", 12);
+      fb_traffic  = $test$plusargs("fb_traffic");
+      fb_saturate = $test$plusargs("fb_saturate");
+      if (fb_saturate)     $display("scan-out stand-in: saturated (upper bound)");
+      else if (fb_traffic) $display("scan-out stand-in: %0d beats every %0d ui_clk, as at 1080p60",
+                                    FB_BEATS_PER_LINE, FB_LINE_UI_CLK);
+      else                 $display("scan-out stand-in: idle");
       $display("=== wb_to_mig_ui against the real MIG and DDR3 model ===");
 
       #2000 board_rst = 1'b0;

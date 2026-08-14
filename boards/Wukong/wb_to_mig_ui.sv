@@ -59,28 +59,18 @@ module wb_to_mig_ui #(
     output reg  [31:0]               wb_dat_o,
     output reg                       wb_ack_o,
 
-    // ---- MIG user interface, ui_clk domain ------------------------------
+    // ---- client port on mig_arb, ui_clk domain ---------------------------
     input  wire                      ui_clk,
     input  wire                      ui_rst,          // ui_clk_sync_rst, active high
-    input  wire                      init_calib_complete,
 
-    output reg  [APP_ADDR_WIDTH-1:0] app_addr,
-    output reg  [2:0]                app_cmd,
-    output reg                       app_en,
-    input  wire                      app_rdy,
-
-    output reg  [APP_DATA_WIDTH-1:0] app_wdf_data,
-    output reg  [APP_MASK_WIDTH-1:0] app_wdf_mask,
-    output reg                       app_wdf_wren,
-    output reg                       app_wdf_end,
-    input  wire                      app_wdf_rdy,
-
-    input  wire [APP_DATA_WIDTH-1:0] app_rd_data,
-    input  wire                      app_rd_data_valid
+    output wire [APP_ADDR_WIDTH-1:0] c_addr,
+    output wire                      c_we,
+    output wire [APP_DATA_WIDTH-1:0] c_wdata,
+    output wire [APP_MASK_WIDTH-1:0] c_wmask,
+    output wire                      c_req,           // held until c_done
+    input  wire                      c_done,          // one cycle; rdata valid with it
+    input  wire [APP_DATA_WIDTH-1:0] c_rdata
 );
-
-   localparam logic [2:0] CMD_WRITE = 3'b000;
-   localparam logic [2:0] CMD_READ  = 3'b001;
 
    // ------------------------------------------------------------------
    // Shared state.  req_* are written only in the Wishbone domain and read
@@ -178,86 +168,42 @@ module wb_to_mig_ui #(
       end
    end
 
-   typedef enum logic [1:0] { S_IDLE, S_WRITE, S_READ, S_READ_WAIT } state_t;
-   state_t state;
+   // Ask the arbiter, then wait.  Everything about actually driving MIG -- the
+   // two write handshakes, the read turnaround, one transaction in flight --
+   // now lives in mig_arb, because there are two masters and only one user
+   // port.  What stays here is the clock crossing and the 32-bit lane
+   // extraction, which is all this ever really was.
+   //
+   // The request fields are combinational rather than registered, which looks
+   // careless and is not: req_adr and friends are written in the Wishbone
+   // domain *before* req_tgl flips, and req_pulse arrives three synchroniser
+   // stages later, so they have been stable for several ui_clk by the time the
+   // arbiter can see them.  Registering them again would add a cycle to every
+   // CPU memory access, and measurably does -- it cost a whole cpu_clk of the
+   // seven the 68010 waits, which is not a reasonable price for tidiness.
+   reg waiting;
 
-   // A write is two independent handshakes: MIG takes the command when app_rdy
-   // is high and the data when app_wdf_rdy is, in either order, and either
-   // ready may drop mid-transaction.  Track them separately and leave only when
-   // both are done.
-   reg  cmd_done, dat_done;
-   wire cmd_ok = cmd_done | (app_en       & app_rdy);
-   wire dat_ok = dat_done | (app_wdf_wren & app_wdf_rdy);
+   assign c_req   = req_pulse | waiting;
+   assign c_addr  = {{(APP_ADDR_WIDTH-27){1'b0}}, req_adr[25:2], 3'b000};
+   assign c_we    = req_we;
+   // The same word in all four lanes; the mask decides which copy is actually
+   // written, so no read-modify-write.
+   assign c_wdata = {4{req_dat}};
+   assign c_wmask = mask_for(req_adr[1:0], req_sel);
 
    always @(posedge ui_clk) begin
       if (ui_rst) begin
-         state        <= S_IDLE;
-         app_en       <= 1'b0;
-         app_cmd      <= CMD_WRITE;
-         app_addr     <= '0;
-         app_wdf_wren <= 1'b0;
-         app_wdf_end  <= 1'b0;
-         app_wdf_data <= '0;
-         app_wdf_mask <= '1;
-         cmd_done     <= 1'b0;
-         dat_done     <= 1'b0;
-         ack_tgl      <= 1'b0;
-         rd_lane      <= 32'h0;
+         waiting <= 1'b0;
+         ack_tgl <= 1'b0;
+         rd_lane <= 32'h0;
       end else begin
-         case (state)
-           S_IDLE: begin
-              app_en       <= 1'b0;
-              app_wdf_wren <= 1'b0;
-              app_wdf_end  <= 1'b0;
-              cmd_done     <= 1'b0;
-              dat_done     <= 1'b0;
+         if (req_pulse)   waiting <= 1'b1;
 
-              if (req_pulse && init_calib_complete) begin
-                 app_addr <= {{(APP_ADDR_WIDTH-27){1'b0}}, req_adr[25:2], 3'b000};
-                 app_en   <= 1'b1;
-                 if (req_we) begin
-                    app_cmd      <= CMD_WRITE;
-                    // The same word in all four lanes; the mask decides which
-                    // copy is actually written, so no read-modify-write.
-                    app_wdf_data <= {4{req_dat}};
-                    app_wdf_mask <= mask_for(req_adr[1:0], req_sel);
-                    app_wdf_wren <= 1'b1;
-                    app_wdf_end  <= 1'b1;    // single beat, so also the last
-                    state        <= S_WRITE;
-                 end else begin
-                    app_cmd <= CMD_READ;
-                    state   <= S_READ;
-                 end
-              end
-           end
-
-           S_WRITE: begin
-              if (app_en       && app_rdy)     begin app_en       <= 1'b0; cmd_done <= 1'b1; end
-              if (app_wdf_wren && app_wdf_rdy) begin app_wdf_wren <= 1'b0;
-                                                     app_wdf_end  <= 1'b0; dat_done <= 1'b1; end
-              if (cmd_ok && dat_ok) begin
-                 ack_tgl <= ~ack_tgl;
-                 state   <= S_IDLE;
-              end
-           end
-
-           S_READ: begin
-              if (app_rdy) begin
-                 app_en <= 1'b0;
-                 state  <= S_READ_WAIT;
-              end
-           end
-
-           S_READ_WAIT: begin
-              if (app_rd_data_valid) begin
-                 rd_lane <= app_rd_data[lane*32 +: 32];
-                 ack_tgl <= ~ack_tgl;
-                 state   <= S_IDLE;
-              end
-           end
-
-           default: state <= S_IDLE;
-         endcase
+         if (c_done) begin
+            rd_lane <= c_rdata[lane*32 +: 32];
+            waiting <= 1'b0;
+            ack_tgl <= ~ack_tgl;
+         end
       end
    end
 

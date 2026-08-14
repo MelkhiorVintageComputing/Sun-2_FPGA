@@ -53,12 +53,29 @@ module tb_wb_to_mig_ui;
    wire [127:0] app_rd_data;
    wire         app_rd_data_valid;
 
+   // The adapter no longer drives MIG directly -- mig_arb does, because there
+   // are two masters and one user port.  Putting the arbiter in the path here
+   // means this equivalence test covers both, with the second client idle.
+   wire [27:0]  c0_addr;
+   wire         c0_we, c0_req, c0_done;
+   wire [127:0] c0_wdata, c0_rdata;
+   wire [15:0]  c0_wmask;
+
    wb_to_mig_ui dut (
        .clk_wb (clk_wb), .rst_wb (rst),
        .wb_cyc_i (wb_cyc), .wb_stb_i (wb_stb), .wb_adr_i (wb_adr),
        .wb_dat_i (wb_dat_w), .wb_sel_i (wb_sel), .wb_we_i (wb_we),
        .wb_dat_o (dut_dat_r), .wb_ack_o (dut_ack),
+       .ui_clk (ui_clk), .ui_rst (rst),
+       .c_addr (c0_addr), .c_we (c0_we), .c_wdata (c0_wdata), .c_wmask (c0_wmask),
+       .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata)
+   );
+
+   mig_arb arbiter (
        .ui_clk (ui_clk), .ui_rst (rst), .init_calib_complete (1'b1),
+       .c0_addr (c0_addr), .c0_we (c0_we), .c0_wdata (c0_wdata), .c0_wmask (c0_wmask),
+       .c0_req (c0_req), .c0_done (c0_done), .c0_rdata (c0_rdata),
+       .c1_addr (28'h0), .c1_req (1'b0), .c1_done (), .c1_rdata (),
        .app_addr (app_addr), .app_cmd (app_cmd), .app_en (app_en), .app_rdy (app_rdy),
        .app_wdf_data (app_wdf_data), .app_wdf_mask (app_wdf_mask),
        .app_wdf_wren (app_wdf_wren), .app_wdf_end (app_wdf_end), .app_wdf_rdy (app_wdf_rdy),

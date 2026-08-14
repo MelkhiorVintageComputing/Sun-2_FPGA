@@ -7,6 +7,7 @@
 #   ./run_unit.sh dvma      sun2_dvma: Wishbone master -> 68010 bus cycles
 #   ./run_unit.sh phy       phy_rtl8211_init + wb_mdio against a PHY model
 #   ./run_unit.sh mbether   sun2_mb_ether against the boot PROM's own sequences
+#   ./run_unit.sh scanout   fb_scanout: DDR3 to pixels, a whole frame checked
 #
 set -e -o pipefail
 
@@ -67,6 +68,14 @@ mbether)
 	xsim mbether_sim -R | grep -E '===|PASS|FAIL|checks|ISCP'
 	;;
 
+scanout)
+	if xvlog --sv "$top/boards/Wukong/fb_scanout.sv" "$top/tb/tb_fb_scanout.sv" \
+		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug off --timescale 1ns/1ps work.tb_fb_scanout -s scanout_sim \
+		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	xsim scanout_sim -R | grep -E '===|PASS|FAIL|checked|beats read|line starts'
+	;;
+
 dvma)
 	# Compiler output is filtered, not discarded: a syntax error here used to
 	# make the whole target exit silently with nothing to show for it.
@@ -81,6 +90,7 @@ dvma)
 adapter)
 	xvlog --sv \
 		"$top/boards/Wukong/wb_to_mig_ui.sv" \
+		"$top/boards/Wukong/mig_arb.sv" \
 		"$top/tb/mig_ui_model.sv" \
 		"$top/tb/wb_ram_model.sv" \
 		"$top/tb/tb_wb_to_mig_ui.sv" >/dev/null
@@ -104,14 +114,15 @@ migddr3)
 	xvlog --sv -i "$ex" -i "$mig" \
 		"$top/boards/Wukong/wukong_clkgen.sv" \
 		"$top/boards/Wukong/wb_to_mig_ui.sv" \
+		"$top/boards/Wukong/mig_arb.sv" \
 		"${mig_src[@]}" \
 		"$ex/ddr3_model.sv" \
 		"$top/tb/tb_mig_ddr3.sv" >/dev/null
 	xvlog "$XILINX_VIVADO/data/verilog/src/glbl.v" >/dev/null
 	xelab -debug off -L unisims_ver -L unisim -L secureip \
 		work.tb_mig_ddr3 work.glbl -s migddr3_sim >/dev/null
-	xsim migddr3_sim -R | grep -vE 'ddr3\.(cmd_task|data_task|reset|dqs_)' \
-		| grep -E '===|calibration|written and read|MISMATCH|PASS|FAIL|latency|^MIG read|^Wishbone read|^=>'
+	xsim migddr3_sim -R ${XSIMARGS:-} | grep -vE 'ddr3\.(cmd_task|data_task|reset|dqs_)' \
+		| grep -E '===|calibration|written and read|MISMATCH|PASS|FAIL|latency|^MIG read|^Wishbone read|^=>|scan-out'
 	;;
 *)
 	echo "usage: $0 {clkgen|adapter|migddr3}" >&2

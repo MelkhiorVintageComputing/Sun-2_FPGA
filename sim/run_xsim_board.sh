@@ -122,7 +122,7 @@ tb_src=("$top/tb/wb_ram_model.sv" "$top/tb/uart_monitor.sv" "$top/tb/uart_consol
         "$top/tb/mii_peer.sv" "$top/tb/mdio_phy_model.sv" "$top/tb/tb_wukong.sv")
 
 if [ "$BOARD_MEM" = "ddr3" ]; then
-	board_src+=("$top/boards/Wukong/wb_to_mig_ui.sv")
+	board_src+=("$top/boards/Wukong/wb_to_mig_ui.sv" "$top/boards/Wukong/mig_arb.sv")
 
 	# MIG's own RTL.  Two files define module sun2_mig_mig: the synthesis one
 	# and a simulation one with SIM_BYPASS_INIT_CAL="FAST", which is what
