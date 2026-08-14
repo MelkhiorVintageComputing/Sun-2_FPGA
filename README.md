@@ -477,6 +477,30 @@ decode, the address remap, the byte lanes and the PROM's own drawing code.
 pixel of a full frame against a positional hash, the window edges, the bit
 order, the polarity, and that a line costs exactly nine beats.
 
+And there is a way to actually **look** at what the machine drew:
+
+```sh
+make -C sim xsim MACHINE=vme FB=1 MEM_MIB=1   # boot; writes fb.mem at the end
+make -C sim screenshot                        # render it
+```
+
+The boot writes the 128 KiB aperture to `build/sim/xsim-vme-fb/fb.mem` as raw
+32-bit Wishbone words — what is in DDR3, not an unscrambled bitmap. The second
+step replays that through the **real `fb_scanout`** at 1920×1080 and writes
+`build/sim/unit-scanout/screen.ppm`. That distinction is the point: the logo
+search proves the CPU wrote the right bits, and nothing more, because at
+`sim/xsim` level the scan-out does not exist. The picture is the first thing
+that exercises the line addressing, the bit order inside a beat, the polarity
+and the windowbox against real content rather than a hash — and it comes out
+of the RTL's opinion of all four, not the testbench's.
+
+Two steps rather than one because a boot is three quarters of an hour and a
+render is seconds, so the image can be looked at, the RTL changed and the image
+redrawn without booting again. `screenshot` also asserts what it should not
+need eyes for: the logo's first two pixels, at screen (448, 218), must come out
+white then black — which pins the offset, the beat reassembly, the bit order
+and the polarity down in one line.
+
 ### Ethernet — the MultiBus machine, which shares none of that
 
 A 2/120 has no on-board Ethernet. It has a card in the MultiBus cage, and the
@@ -678,14 +702,19 @@ the Micron model at 125 µs and the reset chain releases the Sun-2 190 ns later,
 but the boot PROM does not touch main memory until `L_M_MAP` around 600 ms,
 which is far past what a full DDR3 model can simulate in reasonable time.
 
-**The board testbench does not build with `FB=1`.** `Inputs/hdmi`'s serialiser
-picks its primitives from `SYNTHESIS` or `MODEL_TECH` and falls through to
-Altera's otherwise, and its behavioural path has two `always_ff` blocks driving
-the same signals, which xsim will not accept. So the frame buffer is simulated
-at `sim/xsim` level, where the scan-out and HDMI are absent and the aperture,
-the control register and the logo in memory are what is checked; `make -C sim
-scanout` covers the display side on its own; and the TMDS output itself is
-covered only by the bitstream and, eventually, a monitor.
+**The board testbench does not build with `FB=1`** — `sim/run_xsim_board.sh`
+compiles `fb_scanout.sv` and `hdmi_clkgen.sv` but none of
+`Inputs/hdmi/src/*.sv`, so `hdmi` is unresolved. Adding them is not quite free:
+without `SYNTHESIS`, `MODEL_TECH` or `ALTERA_RESERVED_QIS`, `serializer.sv`
+takes its generic IP-less branch, and both that branch and the `MODEL_TECH` one
+drive `tmds[i]` from a posedge *and* a negedge `always_ff` — the DDR trick,
+which xsim will not accept. The generic branch also assigns the 3-bit
+`tmds_shift_negedge_temp` to the 1-bit `tmds_clock`, where it means
+`tmds_clock_negedge_temp`. Both are one small `patches/hdmi/` away if the TMDS
+stream is ever worth simulating. As it stands the frame buffer is simulated at
+`sim/xsim` level, the display side by `make -C sim scanout` and `make -C sim
+screenshot`, and the TMDS output itself only by the bitstream and, eventually,
+a monitor.
 
 That leaves one join the two board configurations do not cover — the adapter
 talking to the *actual* controller rather than a model of it — so there is a

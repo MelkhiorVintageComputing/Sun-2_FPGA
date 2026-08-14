@@ -14,6 +14,16 @@
 // a 14.8 us line period, which is roughly six times the time it needs, but
 // "roughly six times" is an argument and this is a measurement.
 //
+// Two plusargs turn the same run into a screenshot of a real machine:
+//
+//   +fb_image=<file>   scan out a frame buffer captured from a boot instead of
+//                      the pattern.  tb_sun2 writes one at the end of every
+//                      SUN2_FB run.
+//   +fb_ppm=<file>     write the frame that was checked as a binary PPM.
+//
+// Neither is required and neither changes anything when absent, so the
+// regression is the same test it always was.  See "make -C sim screenshot".
+//
 module tb_fb_scanout;
 
    localparam int FB_W = 1152, FB_H = 900;
@@ -62,6 +72,25 @@ module tb_fb_scanout;
    endfunction
 
    // ------------------------------------------------------------------
+   // Or a real frame buffer, captured from a boot
+   // ------------------------------------------------------------------
+   // tb_sun2 writes the 128 KiB aperture as 32-bit Wishbone words, exactly as
+   // they sit in DDR3.  Reassembling a beat is then the one line below,
+   // because that is all wb_to_mig_ui does: the word at adr[3:2] == L goes to
+   // bits [32L+31:32L].  Nothing here knows or needs to know which bit is the
+   // leftmost pixel -- that is fb_scanout's opinion, and rendering through it
+   // is the whole point.
+   localparam int FB_IMAGE_WORDS = 32768;         // 128 KiB / 4
+
+   logic [31:0] img [0:FB_IMAGE_WORDS-1];
+   string       image_file, ppm_file;
+   bit          replay = 1'b0;
+
+   function automatic logic [127:0] img_beat(input int b);
+      img_beat = {img[4*b+3], img[4*b+2], img[4*b+1], img[4*b]};
+   endfunction
+
+   // ------------------------------------------------------------------
    // A stand-in for mig_arb plus DDR3: answers a read after a realistic wait
    // ------------------------------------------------------------------
    wire [27:0]  c_addr;
@@ -90,7 +119,8 @@ module tb_fb_scanout;
       end else begin
          if (lat == READ_LATENCY) begin
             automatic int off = int'(c_addr - FB_APP_BASE) / 8;   // beat index
-            c_rdata <= pat_beat(off / BEATS_PER_LINE, off % BEATS_PER_LINE);
+            c_rdata <= replay ? img_beat(off)
+                              : pat_beat(off / BEATS_PER_LINE, off % BEATS_PER_LINE);
             c_done  <= 1'b1;
             busy    <= 1'b0;
             n_reads <= n_reads + 1;
@@ -131,20 +161,36 @@ module tb_fb_scanout;
    // ------------------------------------------------------------------
    // Checks
    // ------------------------------------------------------------------
-   int  bad_pixel = 0, bad_border = 0, checked = 0, border = 0;
+   int  bad_pixel = 0, bad_border = 0, checked = 0, border = 0, white = 0;
    int  first_bad_x = -1, first_bad_y = -1;
+
+   // The frame as it goes out, for +fb_ppm.  Captured in the same block and on
+   // the same edge as the comparison, so the picture written is byte-for-byte
+   // the one the checks were made against.  rgb is only ever all-ones or
+   // all-zeros (fb_scanout is 1 bpp), so one byte a pixel loses nothing.
+   logic [7:0] frame [0:SCREEN_H-1][0:SCREEN_W-1];
+   bit         capture = 1'b0;      // only during the frame being checked
+   bit         want_ppm = 1'b0;
 
    always @(posedge clk_pixel) begin
       if (!pix_rst && cy < SCREEN_H && cx < SCREEN_W) begin
+         if (capture) frame[cy][cx] <= rgb[7:0];
          if (cx >= X0 && cx < X0+FB_W && cy >= Y0 && cy < Y0+FB_H) begin
-            automatic logic want = ~pat_pixel(int'(cx) - X0, int'(cy) - Y0);
             checked++;
-            if (rgb !== {24{want}}) begin
-               if (bad_pixel == 0) begin
-                  first_bad_x = int'(cx) - X0;
-                  first_bad_y = int'(cy) - Y0;
+            if (rgb[0]) white++;
+            // Against the pattern every pixel is predictable.  Replaying a
+            // captured frame buffer there is nothing to predict -- what is
+            // still checked is the border, the beat count and the picture
+            // itself, by eye.
+            if (!replay) begin
+               automatic logic want = ~pat_pixel(int'(cx) - X0, int'(cy) - Y0);
+               if (rgb !== {24{want}}) begin
+                  if (bad_pixel == 0) begin
+                     first_bad_x = int'(cx) - X0;
+                     first_bad_y = int'(cy) - Y0;
+                  end
+                  bad_pixel++;
                end
-               bad_pixel++;
             end
          end else begin
             border++;
@@ -152,6 +198,26 @@ module tb_fb_scanout;
          end
       end
    end
+
+   // ------------------------------------------------------------------
+   // The picture, as a binary PPM
+   // ------------------------------------------------------------------
+   task automatic write_ppm(input string path);
+      int fd;
+      begin
+         fd = $fopen(path, "wb");
+         if (fd == 0) begin
+            $display("FAIL: could not write %s", path);
+            return;
+         end
+         $fwrite(fd, "P6\n%0d %0d\n255\n", SCREEN_W, SCREEN_H);
+         for (int y = 0; y < SCREEN_H; y++)
+           for (int x = 0; x < SCREEN_W; x++)
+             $fwrite(fd, "%c%c%c", frame[y][x], frame[y][x], frame[y][x]);
+         $fclose(fd);
+         $display("wrote %s, %0dx%0d", path, SCREEN_W, SCREEN_H);
+      end
+   endtask
 
    // Instrumentation: how many line starts and frame starts the fetch side
    // actually saw, and the range of rows it asked for.
@@ -164,7 +230,14 @@ module tb_fb_scanout;
 
    initial begin
       $timeformat(-9, 0, " ns", 12);
-      $display("=== fb_scanout: one whole 1920x1080 frame, every pixel ===");
+
+      if ($value$plusargs("fb_image=%s", image_file)) begin
+         $readmemh(image_file, img);
+         replay = 1'b1;
+         $display("=== fb_scanout: scanning out %s ===", image_file);
+      end else begin
+         $display("=== fb_scanout: one whole 1920x1080 frame, every pixel ===");
+      end
 
       repeat (20) @(posedge ui_clk);
       ui_rst = 0;
@@ -176,12 +249,20 @@ module tb_fb_scanout;
       wait (cy == FRAME_H-1);
       wait (cy == 0);
       bad_pixel = 0; bad_border = 0; checked = 0; border = 0; n_reads = 0;
-      n_ls = 0; n_vs = 0; row_max = 0;
+      n_ls = 0; n_vs = 0; row_max = 0; white = 0;
+      want_ppm = $value$plusargs("fb_ppm=%s", ppm_file);
+      capture  = want_ppm;
 
       wait (cy == FRAME_H-1);
       wait (cy == 0);
+      capture = 1'b0;
 
       $display("%0d picture pixels checked, %0d border pixels checked", checked, border);
+      // A frame the boot PROM has drawn on is mostly white with black ink.
+      // All-white or all-black passes every structural check below and is
+      // still wrong, so say what the coverage was.
+      $display("%0d of %0d picture pixels white (%0.1f%%)",
+               white, FB_W*FB_H, 100.0 * white / (FB_W*FB_H));
       $display("%0d DDR3 beats read in the frame (expected %0d)",
                n_reads, FB_H * BEATS_PER_LINE);
       $display("line starts %0d, frame starts %0d, highest row fetched %0d",
@@ -197,8 +278,32 @@ module tb_fb_scanout;
       else if (n_reads != FB_H * BEATS_PER_LINE)
         $display("FAIL: read %0d beats, expected exactly %0d -- the fetch is not keeping up",
                  n_reads, FB_H * BEATS_PER_LINE);
+      // A uniform picture passes every check above.  It is what a frame buffer
+      // that was never loaded looks like: $readmemh on a file that is not
+      // there is not an error, it just leaves the array X, and X scans out as
+      // a black screen through {24{~pix}}.  A real one is mostly white with
+      // some ink.
+      else if (replay && (white == 0 || white == FB_W*FB_H))
+        $display("FAIL: the picture is uniform -- was %s read at all?", image_file);
       else
         $display("PASS: fb_scanout");
+
+      // +fb_logo: an end-to-end assertion that does not need eyes, for an image
+      // captured from a boot.  tb_sun2 finds the logo at aperture offset
+      // 0x04808 -- 18440, which is row 128 byte 8, so frame buffer x = 64..71
+      // -- and the byte there is 0x7F.  MSB first: x=64 is a 0 bit and x=65 a
+      // 1 bit, and on a Sun-2 a 1 is black.  So the two pixels must come out
+      // white then black, which pins down the offset, the beat reassembly, the
+      // bit order and the polarity in one line.
+      if ($test$plusargs("fb_logo")) begin
+         if (frame[Y0+128][X0+64] !== 8'hFF || frame[Y0+128][X0+65] !== 8'h00)
+           $display("FAIL: the Sun logo did not scan out at screen (%0d,%0d) -- got %02x %02x, want ff 00",
+                    X0+64, Y0+128, frame[Y0+128][X0+64], frame[Y0+128][X0+65]);
+         else
+           $display("PASS: the Sun logo scans out at screen (%0d,%0d)", X0+64, Y0+128);
+      end
+
+      if (want_ppm) write_ppm(ppm_file);
 
       // DISPEN low must blank the picture entirely.
       video_en = 1'b0;

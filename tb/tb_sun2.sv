@@ -31,6 +31,10 @@ module tb_sun2 #(
     // clock (time constant 14, x16 mode).  Override with -generic_top / -P.
     parameter int    BAUD    = 9600,
     parameter string CONSOLE = "console.log",
+    // Where the frame buffer is written at the end of an SUN2_FB run, for
+    // "make -C sim screenshot" to render.  Relative, like CONSOLE: run_xsim.sh
+    // has already cd'd into build/sim/xsim-vme-fb.
+    parameter string FBIMAGE = "fb.mem",
     // Wait states before the memory acknowledges.  Zero is a memory that
     // answers next cycle, which is what every simulation of this design used
     // until the real path was measured: through MIG a Wishbone read takes 7
@@ -265,6 +269,39 @@ module tb_sun2 #(
            $display("FAIL: no Sun logo in the frame buffer -- nothing reached the screen");
       end
    endtask
+
+   // ------------------------------------------------------------------
+   // The frame buffer, on its way to becoming a picture
+   // ------------------------------------------------------------------
+   // Finding the logo says the CPU wrote the right bits.  It says nothing
+   // about the scan-out -- the line addressing, the bit order inside a beat,
+   // the polarity, the windowbox -- because none of that exists at this level
+   // of the design.  So write what is in the frame buffer out where
+   // tb_fb_scanout can replay it through the real fb_scanout and render a PPM.
+   // See "make -C sim screenshot".
+   //
+   // **Raw 32-bit Wishbone words, deliberately not unscrambled bytes.**
+   // wb_to_mig_ui puts the word at adr[3:2] == L into bits [32L+31:32L] of the
+   // 128-bit beat, so a beat is four consecutive words concatenated
+   // low-lane-first and the replay reassembles them in one line.  Undoing the
+   // byte order here instead would duplicate the reasoning above and give the
+   // replay a second, independent chance to be wrong about it -- and the whole
+   // point of rendering through fb_scanout is that it is the RTL's opinion of
+   // the byte order that gets tested, not the testbench's.
+   task automatic fb_dump(input string path);
+      int fd;
+      begin
+         fd = $fopen(path, "w");
+         if (fd == 0) begin
+            $display("note: could not write %s", path);
+            return;
+         end
+         for (int unsigned w = 0; w < FB_WORDS; w++)
+           $fdisplay(fd, "%08x", ram.fetch(`FB_WB_BASE + w));
+         $fclose(fd);
+         $display("frame buffer written to %s (%0d words)", path, FB_WORDS);
+      end
+   endtask
 `endif
 
    // ------------------------------------------------------------------
@@ -433,6 +470,7 @@ module tb_sun2 #(
       ram.report();
 `ifdef SUN2_FB
       fb_report();
+      fb_dump(FBIMAGE);
 `endif
       $finish;
    endtask

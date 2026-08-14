@@ -42,6 +42,12 @@ make -C sim mbether    # the MultiBus Ethernet card, driven as the boot PROM dri
 make -C sim scanout    # fb_scanout: every pixel of a frame, against a known pattern
 ```
 
+A boot with `FB=1` writes `build/sim/xsim-vme-fb/fb.mem` — the aperture as raw
+32-bit Wishbone words. `make -C sim screenshot` replays it through the real
+`fb_scanout` and writes `build/sim/unit-scanout/screen.ppm`, which is the only
+thing that renders what the machine actually drew rather than reading it out of
+the memory model.
+
 The board testbench can also type at the monitor prompt (`tb/uart_console.sv`),
 which is how the PHY status register in device page 0xFE7 is checked
 end-to-end — a full boot first, so it is an hour of wall clock, not minutes:

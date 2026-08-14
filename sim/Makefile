@@ -25,6 +25,7 @@
 #   make phy                       check the RTL8211EG bring-up sequence
 #   make mbether                   check the MultiBus Ethernet board
 #   make scanout                   check the frame buffer scan-out
+#   make screenshot                render what the last FB=1 boot drew, as a PPM
 #
 # Extra plusargs go through XSIMARGS, e.g.
 #   make xsim XSIMARGS="-testplusarg vcd_full"
@@ -131,6 +132,35 @@ board-phy:
 clkgen adapter migddr3 dvma phy mbether scanout: rom
 	BOARD=$(BOARD) XSIMARGS="$(XSIMARGS)" ./run_unit.sh $@
 
+# --- a picture of what the machine drew -----------------------------------
+# The frame buffer as a PPM, rendered by the real fb_scanout rather than read
+# out of the memory model -- so it exercises the line addressing, the bit order
+# inside a beat, the polarity and the windowbox, none of which exist at the
+# level tb_sun2 checks the logo at.
+#
+# Two steps rather than one because the boot that captures the frame buffer is
+# the better part of an hour and a render is under a minute: the image can be
+# looked at, the RTL changed and the image redrawn without booting again.
+#
+# The image path has to be absolute.  TOP is "..", and run_unit.sh cd's into
+# build/sim/unit-scanout before running, so a relative one resolves against the
+# wrong directory -- and $readmemh on a file that is not there is not an error.
+# It leaves the array X, which every structural check below survives; only the
+# white-coverage and logo checks notice.
+FBIMAGE = $(abspath $(BUILD)/xsim-vme-fb/fb.mem)
+SCREEN  = $(BUILD)/unit-scanout/screen.ppm
+
+screenshot:
+	@if [ ! -f $(FBIMAGE) ]; then \
+		echo "no frame buffer capture at $(FBIMAGE)"; \
+		echo "boot the machine with a display first:"; \
+		echo "    make -C sim xsim MACHINE=vme FB=1 MEM_MIB=1"; \
+		exit 1; \
+	fi
+	$(MAKE) scanout XSIMARGS='-testplusarg fb_image=$(FBIMAGE) \
+		-testplusarg fb_ppm=screen.ppm -testplusarg fb_logo'
+	@echo "screenshot: $(SCREEN)"
+
 iverilog: rom
 	SUN2_DEFINES="$(DEFINES)" ./run_iverilog.sh $(PLUSARGS) $(IVSIMARGS)
 
@@ -153,4 +183,4 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: all rom xsim board board-check board-phy iverilog check clean
-.PHONY: clkgen adapter migddr3 dvma phy mbether scanout
+.PHONY: clkgen adapter migddr3 dvma phy mbether scanout screenshot

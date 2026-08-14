@@ -74,7 +74,8 @@ scanout)
 		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	if xelab -debug off --timescale 1ns/1ps work.tb_fb_scanout -s scanout_sim \
 		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
-	xsim scanout_sim -R | grep -E '===|PASS|FAIL|checked|beats read|line starts'
+	xsim scanout_sim -R ${XSIMARGS:-} \
+		| grep -E '===|PASS|FAIL|checked|beats read|line starts|white|wrote'
 	;;
 
 dvma)
