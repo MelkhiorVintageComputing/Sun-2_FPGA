@@ -146,11 +146,12 @@ the timing report rather than assuming the previous clean run still holds.
 
 ### The frame buffer, if it is built
 
-`make -C syn bitstream MACHINE=vme FB=1 BOARD=v3` adds the 2/50's 1152x900
-display on HDMI, letterboxed 1:1 in 1920x1080. Plug a monitor into the HDMI
-socket; the console moves there and **the serial port goes silent**, which is
-what a 2/50 with a display does and is the first thing to check rather than a
-symptom of failure.
+`make -C syn bitstream FB=1 BOARD=v3` adds the 1152x900 display on HDMI,
+letterboxed 1:1 in 1920x1080 -- the 2/50's on-board frame buffer with
+`MACHINE=vme`, or the 2/120's video board with `MACHINE=multibus`. Plug a
+monitor into the HDMI socket; the console moves there and **the serial port
+goes silent**, which is what a Sun-2 with a display does and is the first thing
+to check rather than a symptom of failure.
 
 * **Nothing on either console:** the machine is not booting; go back to step 1
   with `FB=0`.
@@ -159,11 +160,17 @@ symptom of failure.
 * **A picture, but wrong:** if it is inverted the polarity is wrong (a 1 bit is
   black); if it is sheared the line stride is wrong; if the border is not black
   the window is wrong. `make -C sim scanout` checks all three against a known
-  pattern.
+  pattern, and `make -C sim screenshot MACHINE=<machine>` renders what the last
+  boot actually drew, so the same fault can be compared against a picture
+  rather than described.
+* **A 2/120 that draws its banner and then stops**, printing `Timeout` on the
+  screen it just found: that is the keyboard/mouse SCC, which is on the video
+  board. It is built with `FB=1` on that machine for exactly this reason, so
+  seeing it means the SCC is not decoding -- type 0 page 0xF00.
 
-Both boards close timing with it: V1 at WNS 1.281, V3 at 0.941. **The one thing
-simulation cannot answer** is whether the part really drives 1.485 Gb/s per
-TMDS lane. The 5x clock is on a plain BUFG, above what an Artix-7 is rated for,
+Both boards close timing with it: V1 at WNS 1.281, V3 at 1.262 as a 2/50 and
+0.969 as a 2/120. **The one thing simulation cannot answer** is whether the
+part really drives 1.485 Gb/s per TMDS lane. The 5x clock is on a plain BUFG, above what an Artix-7 is rated for,
 which is what QMTech's own 1080p design for this board does; there is no
 failing timing path because the clock only feeds OSERDES hard blocks, so the
 tools have nothing to report either way. If the screen is unstable or the sink

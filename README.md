@@ -267,14 +267,15 @@ Two device pages differ from MultiBus and are instantiated only for VME
 | Page | VME | MultiBus |
 |---|---|---|
 | 0xFE1 | Intel 82586 Ethernet — control register (`rtl/sun2-vme/sun2_ether_ctl.v`) plus the controller itself (`rtl/sun2-vme/sun2_ethernet.sv`) | 80287 socket, not implemented |
-| 0xFE3 | keyboard/mouse Z8530, a second instance of the serial SCC | parallel port, not implemented |
+| 0xFE3 | keyboard/mouse Z8530, a second instance of the serial SCC | parallel port, not implemented — the 2/120's keyboard SCC is on its video board instead, in type 0 space |
 | 0xFE7 | Ethernet PHY status (`rtl/sun2-vme/sun2_phy_status.v`) — not a Sun-2 device at all, see below | National 58167 real-time clock, not implemented |
 
 Nothing is attached to the keyboard SCC, so the monitor's keyboard hunt times
 out and the console stays on serial A — which is what we want. The frame
 buffer and video control (type 1 pages 0x000 and 0x040) are outside the
 decoded device window unless `SUN2_FB` is defined; without it `s2fbthere()`
-fails and the console has nowhere else to go.
+fails and the console has nowhere else to go. The same is true of the 2/120,
+at quite different addresses — see [the frame buffer](#the-frame-buffer-and-hdmi).
 
 Getting there also needed three things that had never worked in this design
 and are shared with MultiBus, all of them latent because no unprotected bus
@@ -412,22 +413,41 @@ machine solid with nothing printed.
 
 ### The frame buffer, and HDMI
 
-A 2/50 could have a display, and with `SUN2_FB` this one does: 1152×900
-monochrome on an HDMI monitor, letterboxed 1:1 inside 1920×1080. It is off by
-default, because it is not needed to bring a board up and because it changes
-what a working machine looks like.
+Either machine could have a display, and with `SUN2_FB` this one does:
+1152×900 monochrome on an HDMI monitor, letterboxed 1:1 inside 1920×1080. It
+is off by default, because it is not needed to bring a board up and because it
+changes what a working machine looks like.
 
 ```sh
 make -C sim xsim MACHINE=vme FB=1 MEM_MIB=1
+make -C sim xsim MACHINE=multibus FB=1 MEM_MIB=1 ROM=fast
 make -C syn bitstream MACHINE=vme FB=1 BOARD=v3
 ```
 
-Two things appear in the machine, both where the real ones are:
+**It is the same screen on both machines, and largely the same hardware in
+quite different places.** Both boot PROMs reach it at the same *virtual*
+addresses; all of the difference is one page-map entry each:
 
-| | |
-|---|---|
-| Aperture | page-map **type 1**, pages 0–63 — virtual `0xEC0000`, 128 KiB |
-| Control register | type 1 page 0x40 — virtual `0xEE3800` |
+| | 2/50 | 2/120 |
+|---|---|---|
+| Aperture, virtual `0xEC0000` | type 1, pages 0–63 | **type 0**, pages 0xE00–0xE3F → `0x700000` |
+| Control register, virtual `0xEE3800` | type 1 page 0x40 | **type 0** page 0xF03 → `0x781800` |
+| Keyboard/mouse SCC, virtual `0xEEC000` | type 1 page 0xFE3, on board | **type 0** page 0xF00 → `0x780000`, *on the video board* |
+
+On a 2/120 it is a card in the cage — but a **P2-bus** card, not a MultiBus
+one, so it decodes in memory space alongside RAM rather than in the type 2
+system-bus space where the Ethernet card lives. Chapter 4 of its manual
+decodes nothing but `P2.*`; the P1 connector carries interrupts and power.
+`MEM_SPACE_PAGES` is 3584 = 0xE00 on that machine, so the aperture begins
+exactly one page past the end of memory space — which is why nothing answered
+before, and why the PROM's own memory sizing stops in the same place
+(`mon/diag/diag.s:607`, *"Meg 7 is reserved for framebuf"*).
+
+Above `0x700000` the video board decodes A19, A12 and A11 and nothing else, so
+the aperture repeats every 128 KiB to `0x77FFFE` and the register and SCC
+repeat to `0x7FFFFE`. `MATCH_FB` matches that rather than decoding tightly —
+Figure 2-1 of the board manual says so outright, "DO NOT USE, will map to
+Video Memory".
 
 1152 × 900 at one bit per pixel is a 144-byte stride and 129,600 of those
 131,072 bytes; **a 1 bit is black**, the opposite of a Sun-1. The control
@@ -438,6 +458,18 @@ jumper bits to read **zero** — a 1 there would ask for 1024×1024, or send the
 driver looking for a colour board that is not here. Copy mode and the
 retrace interrupt exist as bits and do nothing, which is all any software in
 the tree ever needs.
+
+`rtl/sun2-common/sun2_fb_ctl.v` serves both machines without a conditional in
+it. Two notes, both worth having written down. The Architecture Manual §6.3
+describes bits 11:8 for Machine Type 1 as three reserved bits plus an audio
+enable for a sound generator at `0x780800` — but that is the device-layer
+abstraction, not this board: Table 2-1 of the board's own manual gives 11:8 as
+the J1600 configuration jumpers and marks `0x780800` *NOT USED*. There is no
+sound generator on it, and `bw2reg.h` — the driver that has to work on both
+machines — agrees with the board. And bits 7 and 0 of the copy base read back
+zero, which the board manual states and `bw2reg.h` flags as *"aberrant bits.
+Don't depend on 'em!"*; both of `bwtwoprobe`'s test values have them clear, so
+no software in the tree can tell.
 
 The pixels live in DDR3, in the top 8 MiB, reached the same way the CPU
 reaches memory: `MATCH_FB` is a second aperture on `sun2_wishbone_bridge`,
@@ -462,16 +494,29 @@ MMCM, `boards/Wukong/hdmi_clkgen.sv`, using QMTech's own recipe for this
 board. **The fast clock is on a plain BUFG, which is beyond what an Artix-7 is
 rated for** — that is what QMTech ship working on this hardware, and it is
 flagged in `BRINGUP.md` as the one part of this no simulation can settle.
-Both boards close timing with the frame buffer in: V1 at 1.281 ns of slack,
-V3 at 0.941.
+Both boards close timing with the frame buffer in, on either machine: the V1
+at 1.281 ns of slack, the V3 at 1.262 as a 2/50 and 0.969 as a 2/120.
 
 **The catch, and it is a real one:** when `s2fbthere()` succeeds the monitor
 sets `g_outsink = OUTSCREEN` and **the serial port goes silent**. A machine
 with a display is supposed to print on the display. So the end-to-end test
 cannot read a banner off the console; it searches the RAM model for the Sun
-logo instead, a known 128-word bitmap from `rsun/mon/dpy/sunlogo.c`, and finds
-it at row 128 of the frame buffer. That one assertion covers the aperture
-decode, the address remap, the byte lanes and the PROM's own drawing code.
+logo instead, a known 128-word bitmap from `mon/dpy/sunlogo.c`, and finds it at
+row 128 of the frame buffer. That one assertion covers the aperture decode, the
+address remap, the byte lanes and the PROM's own drawing code.
+
+It finds it at offset `0x04808` on **both** machines, which is the strongest
+available statement that the drawing code really is the same code: `mon/dpy/`
+has no `VME` conditionals anywhere in it.
+
+On a 2/120 the display drags one more thing in with it. `sunmon.c:601` is *"On
+Multibus, keyboard can't be there if there's no frame buffer"* — with no
+display the monitor points `g_keybzscc` at a fake UART inside the PROM and
+never touches `0xEEC000`, and with one it calls `reset_uart()` there with no
+bus-error catcher in reach. So on that machine `SUN2_FB` also builds the
+keyboard/mouse SCC, because the SCC is physically on the video board. Without
+it the boot draws its banner and then loops at `L_SETUP_KEYB`, printing
+`Timeout` on the screen it just found.
 
 `make -C sim scanout` is the unit test for the display side: it checks every
 pixel of a full frame against a positional hash, the window edges, the bit
@@ -481,10 +526,10 @@ And there is a way to actually **look** at what the machine drew:
 
 ```sh
 make -C sim xsim MACHINE=vme FB=1 MEM_MIB=1   # boot; writes fb.mem at the end
-make -C sim screenshot                        # render it
+make -C sim screenshot MACHINE=vme            # render it
 ```
 
-The boot writes the 128 KiB aperture to `build/sim/xsim-vme-fb/fb.mem` as raw
+The boot writes the 128 KiB aperture to `build/sim/xsim-<machine>-fb/fb.mem` as raw
 32-bit Wishbone words — what is in DDR3, not an unscrambled bitmap. The second
 step replays that through the **real `fb_scanout`** at 1920×1080 and writes
 `build/sim/unit-scanout/screen.ppm`. That distinction is the point: the logo
@@ -618,14 +663,19 @@ Every configuration builds clean on Vivado 2025.2:
 
 | | Worst setup slack | Worst hold slack |
 |---|---|---|
-| V1, 12.5 MHz | +1.281 ns | +0.044 ns |
+| V1, 12.5 MHz | +1.281 ns | +0.028 ns |
 | V1, 40 MHz | +0.151 ns | +0.055 ns |
 | V3 (−1), 12.5 MHz | +1.276 ns | +0.008 ns |
-| V1, 12.5 MHz, frame buffer | +1.281 ns | +0.053 ns |
-| V3 (−1), 12.5 MHz, frame buffer | +0.941 ns | +0.052 ns |
+| V1, 12.5 MHz, frame buffer (2/50) | +1.281 ns | +0.049 ns |
+| V3 (−1), 12.5 MHz, frame buffer (2/50) | +1.262 ns | +0.008 ns |
+| V3 (−1), 12.5 MHz, frame buffer (2/120) | +0.969 ns | +0.054 ns |
 
 40 MHz closes, but with little margin — treat it as the fast option, not the
-default. The −1 part barely moves the setup number because the critical path is
+default. **The hold figures are placement-sensitive and small**, and they move
+by tens of picoseconds between builds of unrelated configurations; what they
+have in common is that the limiting path is never ours — it is inside MIG or
+inside the Suska 68010. The one that *was* ours is fixed: see the `clk50` note
+below. The −1 part barely moves the setup number because the critical path is
 inside MIG, which adapts; its hold figure of 8 ps is MIG's own read-data buffer
 at the fast corner rather than anything of ours — met, but thin enough to write
 down. Utilisation leaves plenty of room: 13878 LUTs (22%), 7137 registers (6%),
@@ -743,6 +793,12 @@ carries Micron's AS-IS licence, not an open one.
 
 * **The V1 50 MHz input (M22) is not on a clock-capable pin**, so the XDC needs
   `CLOCK_DEDICATED_ROUTE FALSE` on it. V2/V3 moved the oscillator to M21.
+* **`clk50` has an explicit `BUFG`, and needs one.** It is not only the MMCMs'
+  reference — the reset assembly and the PHY reset sequencer are clocked by it
+  directly. Vivado infers the buffer, but not reliably: it inferred one for a
+  MultiBus build and not the VME build of the same commit, with 13 of 32 BUFGs
+  used either way. Left on general routing it measured 0.93 ns of skew and lost
+  a same-clock hold path by 270 ps.
 * **`if` is not supported in an XDC file.** Vivado's constraint parser accepts
   the file, emits `CRITICAL WARNING: [Designutils 20-1307]` among thousands of
   lines, and skips the block — which is how a `set_clock_groups` went missing

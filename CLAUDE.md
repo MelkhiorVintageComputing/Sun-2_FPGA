@@ -26,7 +26,7 @@ Simulation knobs that matter, all on `make -C sim xsim`:
 | `ROM=fast` | shortens the PROM's RAM-init pass 64-fold (MultiBus only) |
 | `MEM_LATENCY=7` | memory as slow as the real DDR3 path; 0 (the default) is a one-cycle memory |
 | `MB_ETHER=1` | MultiBus only: fit the Sun-2 Ethernet card in the cage. Off by default, because the 23,629 fingerprint is the machine *without* it |
-| `FB=1` | VME only: fit the frame buffer. Changes what the machine looks like — with a display the console goes to the screen and the serial port falls silent |
+| `FB=1` | fit the frame buffer, either machine. Changes what the machine looks like — with a display the console goes to the screen and the serial port falls silent. On MultiBus it also builds the keyboard/mouse SCC, which is on the video board |
 | `TIMEOUT_MS=` | simulated milliseconds before giving up |
 | `XSIMARGS="-testplusarg trace_dvma=16"` | also `trace_irq`, `heartbeat_ms`, `crs_stuck`, `vcd_full` |
 
@@ -99,6 +99,16 @@ here and the read path has no tag. A client's request is still asserted during
 the cycle its `done` comes back — mask it, or the arbiter runs the transaction
 twice and you lose a CPU clock with nothing to show for it.
 
+**One frame buffer, two places.** Both machines have the same 1152x900 screen
+and both PROMs reach it at the same *virtual* addresses; only the page-map
+entry differs. The 2/50 decodes it in TYPE 1 (pages 0..63, register at 0x40);
+the 2/120's video board is a **P2-bus** card and decodes in TYPE 0 alongside
+RAM — aperture at page 0xE00 (0x700000), register at 0xF03, and the
+keyboard/mouse SCC at 0xF00, which is why `SUN2_FB` builds that SCC too. The
+board decodes only A19/A12/A11 up there, so all three alias; `MATCH_FB` in
+`sun2_fpga.v` matches that. Everything from `sun2_wishbone_bridge` to the HDMI
+pins is shared and machine-independent.
+
 **Two Ethernets, sharing only the 82586.** The VME machine's is on board and
 reaches main memory by DVMA through the MMU (`rtl/sun2-vme/sun2_dvma.v`). The MultiBus
 machine's is a card with its own memory and its own page map
@@ -143,11 +153,16 @@ copy from it rather than referencing it.
 ## Verification discipline
 
 The MultiBus machine is the reference that must not regress. It boots to the
-prompt with **23,629 bus errors** at `MEM_MIB=1 ROM=fast`, and the bus-error
-sequence should stay byte-identical — most of those errors are the PROM's own
-page-map diagnostics, so the count is a sensitive fingerprint of MMU and bus
-behaviour. Check it after anything touching shared logic, not just after
-machine-specific work.
+prompt with **23,629 bus errors** at `MEM_MIB=1 ROM=fast`, with no cards, and
+the bus-error sequence should stay byte-identical — most of those errors are
+the PROM's own page-map diagnostics, so the count is a sensitive fingerprint of
+MMU and bus behaviour. Check it after anything touching shared logic, not just
+after machine-specific work.
+
+Fitting a card changes the fingerprint, which is why the reference has none:
+`FB=1` gives **23,628** at `TIMEOUT_MS=3000` and `MB_ETHER=1 FB=1` gives
+23,625. The frame buffer's one missing error is the `0xEC0000` probe that used
+to time out.
 
 Unit tests are expected to earn their keep: mutate the RTL, confirm the test
 fails, revert. `tb/tb_dvma.sv` was written this way and still missed a real
@@ -158,6 +173,14 @@ machine does.
 
 * **`xvlog` is stricter than Verilator and Yosys about declaration order.** A
   wire declared after its first use compiles elsewhere and fails here.
+* **A clock that only *sometimes* gets a BUFG.** `clk50` drives the reset
+  assembly and the PHY reset sequencer as well as the MMCMs. Vivado used to
+  infer its global buffer, and inferred one for the MultiBus build but not the
+  VME build of the same commit — 13 of 32 BUFGs either way, so not a budget
+  limit. On fabric routing it carried 0.93 ns of skew and a same-clock hold
+  path failed by 270 ps, in a machine that had nothing to do with the change
+  that triggered it. It is instantiated explicitly now; do the same for any
+  clock that reaches flip-flops rather than just an MMCM.
 * **XDC ordering is silent.** `set_clock_groups` naming a clock that
   `create_clock` has not yet defined gets `get_clocks` returning nothing and the
   group is dropped with no warning — which surfaces later as a real hold
