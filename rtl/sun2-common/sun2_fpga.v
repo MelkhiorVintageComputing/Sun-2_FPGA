@@ -699,30 +699,52 @@ module sun2_fpga(input         cpu_clk,
 			  .dtrb_n()         // Data terminal ready B (active low)
 			  );
 
-   /* keyboard and mouse port -- VME machines only */
+   /* keyboard and mouse port */
    //
-   // Device page 3.  On a 2/50 or 2/160 this is a second Z8530, identical to
-   // the serial one above: the Architecture Manual's sections 6.6 and 6.7 give
-   // byte-for-byte the same register table (channel B control/data at 0 and 2,
-   // channel A at 4 and 6, level 6, 4.9152 MHz clock), and schematic sheet A06
-   // wires U600 and U601 alike.  They differ only in what hangs off the pins:
-   // channel A is the keyboard, channel B the mouse.
+   // A second Z8530, identical to the serial one above: the Architecture
+   // Manual's sections 6.6 and 6.7 give byte-for-byte the same register table
+   // (channel B control/data at 0 and 2, channel A at 4 and 6, level 6,
+   // 4.9152 MHz clock), and schematic sheet A06 wires U600 and U601 alike.
+   // They differ only in what hangs off the pins: channel A is the keyboard,
+   // channel B the mouse.  Both boot PROMs reach it at the same virtual
+   // address, 0xEEC000, and it is only the page-map entry that differs:
    //
-   // A MultiBus machine has a parallel port here instead, and puts its
-   // keyboard/mouse SCC on the video board at page type 0, page 0xF00.  So
-   // this is the first device that genuinely differs between the two machines,
-   // and MATCH_KBM is tied off to nothing on MultiBus rather than decoded.
+   //   2/50    device page 3 -- TYPE 1 page 0xFE3.  On board.
+   //   2/120   TYPE 0 page 0xF00 (0x780000) -- on the *video board*, four words
+   //           at 780000/2/4/6, which is why it is built only with SUN2_FB.
+   //           Page 3 there is a parallel port, which we do not implement.
+   //
+   // On MultiBus that coupling is not a simplification, it is the machine:
+   // sunmon.c:601 is "On Multibus, keyboard can't be there if there's no frame
+   // buffer".  With no display the monitor points g_keybzscc at a fake UART in
+   // PROM space and never touches 0xEEC000; with one, it calls
+   // reset_uart(g_keybzscc) with no bus-error catcher anywhere in reach.  So a
+   // 2/120 that has a frame buffer must have this too.
    //
    // Nothing is attached: the monitor resets the SCC, programs 1200 baud,
    // polls for a keyboard, gets no answer and falls back to the serial console
-   // -- which is what we want while the console *is* the serial port.  The
-   // point of having it at all is that the write lands, instead of taking a
-   // bus error the monitor has no handler for.
+   // -- "Using RS232 A input.", which is what we want while the console *input*
+   // is the serial port.  The point of having it at all is that the write
+   // lands, instead of taking a bus error the monitor has no handler for.
    wire [7:0] 			 kbm_out;
    wire 			 MATCH_KBM;
+   // KBM_HERE says the machine has somewhere to put it.  It is `undef'd again
+   // right after the instance below rather than left defined, because a
+   // `define inside a module leaks into every file compiled after this one in
+   // the same run.
 `ifdef SUN2_VME
+ `define KBM_HERE
    assign MATCH_KBM = MATCH_PARALLEL;
+`elsif SUN2_FB
+ `define KBM_HERE
+   // The video board decodes A19, A12 and A11 and nothing else above 0x700000,
+   // so the SCC repeats every 8 KiB up to 0x7FFFFE just as the real one does.
+   assign MATCH_KBM = (FC_GENERAL) & (TYPE == 3'h0) & C_S6 &
+                      (ma_pmap2devices[11:8] == 4'hF) &
+                      (ma_pmap2devices[1:0] == 2'b00);
+`endif
 
+`ifdef KBM_HERE
    wire 			 kbm_int_n; // FIXME: level 6, not wired to the IPL encoder yet
 
    z8530_scc  #(.SOFT_RESET_EN(1),
@@ -779,11 +801,13 @@ module sun2_fpga(input         cpu_clk,
 			  .dtrb_n()
 			  );
 `else
-   // MultiBus: page 3 is the parallel port, which we do not implement.  Held
-   // at zero so the read mux and DTACK terms below fold away entirely.
+   // A MultiBus machine with no video board has nowhere to put this, and page 3
+   // is the parallel port, which we do not implement.  Held at zero so the read
+   // mux and DTACK terms below fold away entirely.
    assign MATCH_KBM = 1'b0;
    assign kbm_out   = 8'h00;
 `endif
+`undef KBM_HERE
 
    /* Ethernet control register -- VME machines only */
    //
