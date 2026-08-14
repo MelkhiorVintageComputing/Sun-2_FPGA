@@ -120,6 +120,25 @@ module wukong_top #(
    // ------------------------------------------------------------------
    // Clocks
    // ------------------------------------------------------------------
+   //
+   // The board oscillator gets an explicit global buffer, because it is a real
+   // clock here and not just an MMCM reference: the reset assembly and the PHY
+   // reset sequencer below are clocked by it directly, some thirty flip-flops
+   // between them.
+   //
+   // **Vivado will infer this -- sometimes.**  It inferred one for a MultiBus
+   // build and not for the VME build of the same commit, with 13 of 32 BUFGs
+   // used either way, so it was not a budget limit; the VME machine simply has
+   // more clock nets competing.  Without the buffer clk50 goes to all of those
+   // flops on general routing, which measured 1.264 ns of delay to one end of
+   // the PHY counter and 2.191 ns to the other -- 0.93 ns of skew on a
+   // same-clock path, which is a coin toss for hold and lost it by 270 ps.  The
+   // failure looks nothing like its cause: an unrelated edit elsewhere in the
+   // design moves the placement and the sign of the slack changes with it.
+   //
+   wire clk50_g;
+   BUFG bufg_clk50 (.I(clk50), .O(clk50_g));
+
    wire board_reset = ~cpu_reset;      // button is active low
 
    wire eth_crs_stuck;
@@ -139,7 +158,7 @@ module wukong_top #(
    reg [21:0] phy_rst_ctr  = 22'h0;
    reg        phy_rst_done = 1'b0;
    reg        phy_mdio_ok  = 1'b0;
-   always @(posedge clk50) begin
+   always @(posedge clk50_g) begin
       if (board_reset) begin
          phy_rst_ctr  <= 22'h0;
          phy_rst_done <= 1'b0;
@@ -172,7 +191,7 @@ module wukong_top #(
 
 
    wukong_clkgen #(.CPU_CLK_HZ(CPU_CLK_HZ)) clkgen (
-       .clk50       (clk50),
+       .clk50       (clk50_g),
        .reset       (board_reset),
        .clk_mig_sys (clk_mig_sys),
        .clk_idelay  (clk_idelay),
@@ -191,7 +210,7 @@ module wukong_top #(
    wire init_calib_complete;
 
    reg [7:0] hold_ctr = 8'hFF;
-   always @(posedge clk50) begin
+   always @(posedge clk50_g) begin
       if (board_reset || !mmcm_locked) hold_ctr <= 8'hFF;
       else if (hold_ctr != 8'h00)      hold_ctr <= hold_ctr - 8'd1;
    end
@@ -410,7 +429,7 @@ module wukong_top #(
    wire clk_pixel, clk_pixel_x5, hdmi_locked;
 
    hdmi_clkgen hdmiclk (
-       .clk50        (clk50),
+       .clk50        (clk50_g),
        .reset        (board_reset),
        .clk_pixel    (clk_pixel),
        .clk_pixel_x5 (clk_pixel_x5),
