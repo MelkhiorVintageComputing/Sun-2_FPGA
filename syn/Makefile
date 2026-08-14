@@ -6,6 +6,7 @@
 #   make bitstream MACHINE=vme
 #   make bitstream MB_ETHER=1     with the MultiBus Ethernet card
 #   make bitstream BOARD=v3       for a Wukong V3 instead of a V1
+#   make bitstream FB=1 MACHINE=vme  with the frame buffer on HDMI
 #   make both               both CPU clocks
 #
 # Nothing here is committed; everything lands in ../build.  Vivado is run from
@@ -29,6 +30,9 @@ MACHINE ?= multibus
 # Fit the Sun-2 Ethernet card in the MultiBus cage.  MultiBus only.
 MB_ETHER ?= 0
 
+# Fit the 2/50's frame buffer and its HDMI output.  VME only.
+FB ?= 0
+
 # Which QMTech Wukong revision: v1 or v3.  They share all their RTL and differ
 # in the FPGA speed grade and four pins -- see syn/boards.tcl.  The default
 # stays v1 so every result verified against it keeps its meaning; a V3 is what
@@ -36,7 +40,7 @@ MB_ETHER ?= 0
 BOARD ?= v1
 
 IPDIR   = $(TOP)/build/ip/$(BOARD)/sun2_mig
-TAG     = $(if $(filter 1,$(MB_ETHER)),-mbether,)
+TAG     = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(FB)),-fb,)
 OUTDIR  = $(TOP)/build/syn/$(BOARD)-$(MACHINE)$(TAG)-cpu$(shell expr $(CPU_HZ) / 1000000)
 WORKDIR = $(TOP)/build/syn/work-$(BOARD)
 
@@ -61,7 +65,7 @@ inputs:
 
 bitstream: ip rom inputs | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
-		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD)
+		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB)
 	@echo "bitstream: $(OUTDIR)/sun2_wukong_$(BOARD).bit"
 
 both:

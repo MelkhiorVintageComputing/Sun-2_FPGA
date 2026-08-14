@@ -16,8 +16,8 @@ It also builds into a timing-clean bitstream for a QMTech Wukong V1
 |---|---|
 | `rtl/sun2-common/` | the Sun-2 gateware shared by both machines: bus, MMU, PROM, timer, registers, Wishbone bridge |
 | `rtl/sun2-multibus/` | what only a 2/120 has — the MultiBus Ethernet card |
-| `rtl/sun2-vme/` | what only a 2/50 has — on-board Ethernet, its DVMA bridge, the PHY status register |
-| `boards/Wukong/` | the board layer, shared by the Wukong V1 and V3: clock generation, reset, Wishbone-to-DDR3, PHY bring-up |
+| `rtl/sun2-vme/` | what only a 2/50 has — on-board Ethernet, its DVMA bridge, the PHY status register, the video control register |
+| `boards/Wukong/` | the board layer, shared by the Wukong V1 and V3: clock generation, reset, Wishbone-to-DDR3, PHY bring-up, the DDR3 arbiter and the frame buffer's scan-out |
 | `tb/` | testbenches and simulation models |
 | `sim/` | simulation flows |
 | `syn/` | FPGA build: constraints, MIG configuration, Vivado scripts |
@@ -61,6 +61,10 @@ The sources under `Inputs/`:
   has both machines' page-map setup side by side, and `mon/h/buserr.h` documents
   register semantics no manual spells out. Reach for it before guessing at
   what a PROM is doing.
+* `hdmi` — [hdl-util/hdmi](https://github.com/hdl-util/hdmi), the HDMI
+  transmitter behind the frame buffer: TMDS encoding, the 10:1 serialisers and
+  CEA-861 video timing, used at VIDEO_ID_CODE 16 (1920×1080p60) with
+  `DVI_OUTPUT` so there is no audio island to feed.
 * `sun2-multi-rev-R.bin` — Rev R boot PROM of a MultiBus Sun 2/120.
 * `sun250_prom_combined.bin` — boot PROM of a VME Sun 2/50, used by
   `MACHINE=vme` (see [Which machine](#which-machine)).
@@ -268,8 +272,9 @@ Two device pages differ from MultiBus and are instantiated only for VME
 
 Nothing is attached to the keyboard SCC, so the monitor's keyboard hunt times
 out and the console stays on serial A — which is what we want. The frame
-buffer and video control (type 1 pages 0x000 and 0x040) are deliberately
-outside the decoded device window, so `s2fbthere()` fails for the same reason.
+buffer and video control (type 1 pages 0x000 and 0x040) are outside the
+decoded device window unless `SUN2_FB` is defined; without it `s2fbthere()`
+fails and the console has nowhere else to go.
 
 Getting there also needed three things that had never worked in this design
 and are shared with MultiBus, all of them latent because no unprotected bus
@@ -405,6 +410,73 @@ That is not optional: the PROM's driver waits on the controller with no timeout
 anywhere, so a transmit that never completes for want of a PHY clock hangs the
 machine solid with nothing printed.
 
+### The frame buffer, and HDMI
+
+A 2/50 could have a display, and with `SUN2_FB` this one does: 1152×900
+monochrome on an HDMI monitor, letterboxed 1:1 inside 1920×1080. It is off by
+default, because it is not needed to bring a board up and because it changes
+what a working machine looks like.
+
+```sh
+make -C sim xsim MACHINE=vme FB=1 MEM_MIB=1
+make -C syn bitstream MACHINE=vme FB=1 BOARD=v3
+```
+
+Two things appear in the machine, both where the real ones are:
+
+| | |
+|---|---|
+| Aperture | page-map **type 1**, pages 0–63 — virtual `0xEC0000`, 128 KiB |
+| Control register | type 1 page 0x40 — virtual `0xEE3800` |
+
+1152 × 900 at one bit per pixel is a 144-byte stride and 129,600 of those
+131,072 bytes; **a 1 bit is black**, the opposite of a Sun-1. The control
+register's DISPEN (bit 15) is the only bit the monitor writes, but SunOS's
+`bwtwoprobe` also wants `copybase` to read back what it wrote, wants the
+register aliased at `+0` and `+2` across its whole page, and wants the four
+jumper bits to read **zero** — a 1 there would ask for 1024×1024, or send the
+driver looking for a colour board that is not here. Copy mode and the
+retrace interrupt exist as bits and do nothing, which is all any software in
+the tree ever needs.
+
+The pixels live in DDR3, in the top 8 MiB, reached the same way the CPU
+reaches memory: `MATCH_FB` is a second aperture on `sun2_wishbone_bridge`,
+remapped to `FB_WB_BASE`. So there is no second path to get wrong — the byte
+lanes, the read-back and the DTACK are the ones that already carry every
+memory cycle. What is new is a second *master*: `boards/Wukong/mig_arb.sv`
+sits in front of MIG with the CPU adapter on one port and
+`boards/Wukong/fb_scanout.sv` on the other.
+
+Scanout reads a line at a time into a ping-pong buffer in `ui_clk` and shifts
+it out in the pixel clock. A line is 9 beats of 16 bytes and an HDMI line is
+14.8 µs, so the fetch has roughly six times the time it needs; the whole
+screen at 60 Hz is 7.8 MB/s against a bus that does over a thousand. The cost
+to the CPU is small and measured rather than argued — `make -C sim migddr3`
+reports a mean read of 7.0 CPU clocks alone, 7.5 with realistic scanout
+traffic and 9.1 with the scanout saturated deliberately.
+
+`Inputs/hdmi` (hdl-util/hdmi) does the TMDS encoding and serialising, at
+1920×1080p60 with `DVI_OUTPUT` so there is no audio to feed. Its 148.4375 MHz
+pixel clock and the 742.1875 MHz clock the serialisers need come from a third
+MMCM, `boards/Wukong/hdmi_clkgen.sv`, using QMTech's own recipe for this
+board. **The fast clock is on a plain BUFG, which is beyond what an Artix-7 is
+rated for** — that is what QMTech ship working on this hardware, and it is
+flagged in `BRINGUP.md` as the one part of this no simulation can settle.
+Both boards close timing with the frame buffer in: V1 at 1.281 ns of slack,
+V3 at 0.941.
+
+**The catch, and it is a real one:** when `s2fbthere()` succeeds the monitor
+sets `g_outsink = OUTSCREEN` and **the serial port goes silent**. A machine
+with a display is supposed to print on the display. So the end-to-end test
+cannot read a banner off the console; it searches the RAM model for the Sun
+logo instead, a known 128-word bitmap from `rsun/mon/dpy/sunlogo.c`, and finds
+it at row 128 of the frame buffer. That one assertion covers the aperture
+decode, the address remap, the byte lanes and the PROM's own drawing code.
+
+`make -C sim scanout` is the unit test for the display side: it checks every
+pixel of a full frame against a positional hash, the window edges, the bit
+order, the polarity, and that a line costs exactly nine beats.
+
 ### Ethernet — the MultiBus machine, which shares none of that
 
 A 2/120 has no on-board Ethernet. It has a card in the MultiBus cage, and the
@@ -477,19 +549,34 @@ and dominates run time; instantiate the timer as `ttl_am9513 #(.TRACE(1))` in
 
 ## Building for hardware
 
-Target: QMTech Wukong **V1** (XC7A100T-2FGG676, one MT41K128M16JT-125 DDR3L,
-50 MHz oscillator). The board layer replaces what a LiteX SoC wrapper used to
-provide — clocks, DDR3 controller, Wishbone clock crossing, DRAM
-initialisation, reset sequencing and pin constraints — with plain
-SystemVerilog plus Xilinx's MIG, and no LiteX at all.
+Target: QMTech Wukong, **V1** (XC7A100T-2FGG676) or **V3** (XC7A100T-1FGG676),
+either with one MT41K128M16JT-125 DDR3L and a 50 MHz oscillator. The board
+layer replaces what a LiteX SoC wrapper used to provide — clocks, DDR3
+controller, Wishbone clock crossing, DRAM initialisation, reset sequencing and
+pin constraints — with plain SystemVerilog plus Xilinx's MIG, and no LiteX at
+all.
 
 ```sh
-make -C syn ip           # generate the MIG DDR3 controller from its .prj
-make -C syn bitstream    # 12.5 MHz CPU clock
+make -C syn ip                      # the MIG DDR3 controller, once per board
+make -C syn bitstream               # 12.5 MHz CPU clock
 make -C syn bitstream CPU_HZ=40000000
 make -C syn bitstream MACHINE=vme   # a 2/50 instead of a 2/120
 make -C syn both
 ```
+
+Four axes, each defaulting to what every verified result was measured with:
+
+| | | |
+|---|---|---|
+| `BOARD` | `v1` (default), `v3` | the V1 is discontinued, so the V3 is what a new build will land on; they differ in the speed grade and four pins — the oscillator, the reset button and the two LEDs |
+| `MACHINE` | `multibus` (default), `vme` | which Sun-2 |
+| `MB_ETHER` | `0` (default), `1` | the MultiBus Ethernet card |
+| `FB` | `0` (default), `1` | the frame buffer on HDMI, VME only |
+
+`BOARD` reaches the MIG too: both boards want identical DDR3 and differ only in
+the target part, so `generate_ip.tcl` substitutes it into a per-board copy of
+the one committed `.prj`, and `build/ip/<board>/` keeps them from overwriting
+each other.
 
 Nothing in this repository has run on a board yet. `BRINGUP.md` is the staged
 procedure for the first time it does — what to check, in what order, and what
@@ -503,23 +590,30 @@ for the memory controller (see `syn/mig/README.md` for its provenance and the
 four fields we changed); everything MIG emits lands in `build/ip/`. The build
 refuses to write a bitstream if timing is not met.
 
-Both configurations build clean on Vivado 2025.2:
+Every configuration builds clean on Vivado 2025.2:
 
-| CPU clock | Worst setup slack | Worst hold slack |
+| | Worst setup slack | Worst hold slack |
 |---|---|---|
-| 12.5 MHz | +1.281 ns | +0.044 ns |
-| 40 MHz | +0.151 ns | +0.055 ns |
+| V1, 12.5 MHz | +1.281 ns | +0.044 ns |
+| V1, 40 MHz | +0.151 ns | +0.055 ns |
+| V3 (−1), 12.5 MHz | +1.276 ns | +0.008 ns |
+| V1, 12.5 MHz, frame buffer | +1.281 ns | +0.053 ns |
+| V3 (−1), 12.5 MHz, frame buffer | +0.941 ns | +0.052 ns |
 
 40 MHz closes, but with little margin — treat it as the fast option, not the
-default. Utilisation is the same either way and leaves plenty of room: 13878
-LUTs (22%), 7137 registers (6%), 20 block RAMs (15%), 3 of 6 MMCMs (two ours,
-one MIG's).
+default. The −1 part barely moves the setup number because the critical path is
+inside MIG, which adapts; its hold figure of 8 ps is MIG's own read-data buffer
+at the fast corner rather than anything of ours — met, but thin enough to write
+down. Utilisation leaves plenty of room: 13878 LUTs (22%), 7137 registers (6%),
+20 block RAMs (15%), 3 of 6 MMCMs (two ours, one MIG's) — and with the frame
+buffer and HDMI, 17115 LUTs (27%), 22.5 block RAMs, 4 MMCMs and 89 I/O.
 
 ### Clocks
 
-Two MMCMs in `boards/Wukong/wukong_clkgen.sv`, instantiated directly rather than
-through the clocking wizard, so the file reads and simulates like any other
-source.
+Two MMCMs in `boards/Wukong/wukong_clkgen.sv`, and a third in
+`boards/Wukong/hdmi_clkgen.sv` when the frame buffer is built — all
+instantiated directly rather than through the clocking wizard, so the files
+read and simulate like any other source.
 
 | Clock | Derivation | Result |
 |---|---|---|
@@ -527,6 +621,8 @@ source.
 | `cpu_clk` 12.5 or 40 MHz | MMCM A, ÷80 or ÷25 | exact |
 | IDELAYCTRL 200 MHz | MMCM A, ÷5 | exact |
 | SCC `serial_clk` 4.9152 MHz | MMCM B, ÷2 ×24.625 ÷125.25 | 4.915170 MHz, +0.0006% |
+| HDMI `clk_pixel` 148.5 MHz | MMCM C, VCO 742.1875 MHz, ÷5 | 148.4375 MHz, −0.042% |
+| HDMI `clk_pixel_x5` | MMCM C, ÷1 | 742.1875 MHz, exactly 5× |
 
 4.9152 MHz is not a rational multiple of 50 MHz with small terms, so it gets an
 MMCM to itself — where the fractional CLKOUT0 divider brings it within
@@ -535,8 +631,19 @@ because the PROM derives the 9600 baud console straight from this clock. The
 200 MHz output is needed because MIG only allows its "use the system clock"
 IDELAYCTRL option when the input clock *is* 200 MHz.
 
-`tb_clkgen` measures all four in simulation rather than trusting the
-arithmetic — which is how the step-1 baud rate bug would have been caught.
+148.5 MHz cannot be made exactly from 50 MHz through one MMCM at all —
+148.5/50 is 2.97, and the feedback multiplier would have to be 2.97 times an
+integer output divider — and neither existing MMCM can approach it: A's spare
+outputs are integer dividers off a 1 GHz VCO, and B's one fractional output is
+the serial clock, which must not be perturbed. So the third MMCM uses QMTech's
+own recipe for this board, 0.042% low and well inside what CEA-861 allows.
+
+`tb_clkgen` measures all six in simulation rather than trusting the
+arithmetic — which is how the step-1 baud rate bug would have been caught. It
+also checks the one relationship the TMDS serialisers depend on, that
+`clk_pixel_x5` is *exactly* five times `clk_pixel`: OSERDESE2 in 10:1 DDR does
+not work otherwise, and a behavioural model that generates the two clocks
+independently is not five to one no matter how close each is on its own.
 
 ### Memory
 
@@ -544,7 +651,14 @@ arithmetic — which is how the step-1 baud rate bug would have been caught.
 user interface: 32-bit words in the CPU clock domain to 128-bit beats in MIG's
 83.33 MHz `ui_clk`, with a two-phase handshake across the domains and one
 transaction in flight. `app_wdf_mask` masks per byte, so sub-word writes need
-no read-modify-write. `tb_wb_to_mig_ui` checks it against `wb_ram_model` over
+no read-modify-write.
+
+It does not touch MIG directly, though: `boards/Wukong/mig_arb.sv` owns the
+`app_*` port and round-robins between the adapter and the frame buffer's
+scan-out. One transaction in flight on the whole interface, because what MIG's
+`ORDERING = "NORM"` guarantees about read-data return order is not established
+here and the read path carries no tag. With no frame buffer the second client
+is tied off and never asks. `tb_wb_to_mig_ui` checks it against `wb_ram_model` over
 randomised traffic with randomised stalls on both of MIG's ready signals.
 
 ### Board-level simulation
@@ -564,6 +678,15 @@ the Micron model at 125 µs and the reset chain releases the Sun-2 190 ns later,
 but the boot PROM does not touch main memory until `L_M_MAP` around 600 ms,
 which is far past what a full DDR3 model can simulate in reasonable time.
 
+**The board testbench does not build with `FB=1`.** `Inputs/hdmi`'s serialiser
+picks its primitives from `SYNTHESIS` or `MODEL_TECH` and falls through to
+Altera's otherwise, and its behavioural path has two `always_ff` blocks driving
+the same signals, which xsim will not accept. So the frame buffer is simulated
+at `sim/xsim` level, where the scan-out and HDMI are absent and the aperture,
+the control register and the logo in memory are what is checked; `make -C sim
+scanout` covers the display side on its own; and the TMDS output itself is
+covered only by the bitstream and, eventually, a monitor.
+
 That leaves one join the two board configurations do not cover — the adapter
 talking to the *actual* controller rather than a model of it — so there is a
 third test for exactly that:
@@ -574,7 +697,13 @@ make -C sim adapter    # wb_to_mig_ui vs the reference, randomised, seconds
 make -C sim dvma       # sun2_dvma: Wishbone master -> 68010 bus cycles
 make -C sim clkgen     # measure the generated clocks
 make -C sim phy        # phy_rtl8211_init vs an independent clause-22 PHY model
+make -C sim scanout    # fb_scanout: a whole frame, pixel by pixel
 ```
+
+`migddr3` also stands in for the frame buffer's share of the bus:
+`XSIMARGS="-testplusarg fb_traffic"` runs a scan-out-shaped second client
+alongside the CPU, and `+fb_saturate` runs one that never stops asking. The
+mean CPU read goes 7.0 → 7.5 → 9.1 clocks across the three.
 
 Micron's DDR3 model comes from the *generated* example design, not the copy in
 the Vivado install — that one is an unsubstituted template full of
@@ -585,6 +714,11 @@ carries Micron's AS-IS licence, not an open one.
 
 * **The V1 50 MHz input (M22) is not on a clock-capable pin**, so the XDC needs
   `CLOCK_DEDICATED_ROUTE FALSE` on it. V2/V3 moved the oscillator to M21.
+* **`if` is not supported in an XDC file.** Vivado's constraint parser accepts
+  the file, emits `CRITICAL WARNING: [Designutils 20-1307]` among thousands of
+  lines, and skips the block — which is how a `set_clock_groups` went missing
+  and turned an asynchronous crossing into a 5 ns timing failure. Conditional
+  constraints belong in `build.tcl`, choosing which XDC to read.
 * **DDR3 `CS#` must not be driven.** Sheet 3 of the V1 schematic shows it tied
   low through R35 and not routed to the FPGA; E22 is a free I/O. MIG's
   configuration has the chip-select pin disabled, which is correct. The old

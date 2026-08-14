@@ -30,7 +30,8 @@ cd "$rundir"
 case "$what" in
 clkgen)
 	# The MMCM primitives come from unisims, and they need glbl for GSR.
-	xvlog --sv "$top/boards/Wukong/wukong_clkgen.sv" "$top/tb/tb_clkgen.sv" >/dev/null
+	xvlog --sv "$top/boards/Wukong/wukong_clkgen.sv" "$top/boards/Wukong/hdmi_clkgen.sv" \
+		"$top/tb/tb_clkgen.sv" >/dev/null
 	xvlog "$XILINX_VIVADO/data/verilog/src/glbl.v" >/dev/null
 	for hz in ${CPU_HZ_LIST:-12500000 40000000}; do
 		echo "---- CPU_CLK_HZ=$hz ----"

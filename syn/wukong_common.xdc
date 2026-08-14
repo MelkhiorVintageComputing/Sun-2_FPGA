@@ -58,6 +58,22 @@ set_property -dict {PACKAGE_PIN G6 IOSTANDARD LVCMOS33} [get_ports {diag_leds0[6
 set_property -dict {PACKAGE_PIN G8 IOSTANDARD LVCMOS33} [get_ports {diag_leds0[7]}]
 
 # ---------------------------------------------------------------------------
+# HDMI -- the 2/50's frame buffer, bank 35.  Identical on V1 and V3.
+# ---------------------------------------------------------------------------
+# Pins from QMTech's own HDMI reference design (Test06_HDMI_OUT), which is the
+# authoritative pinout for this board and gives the same four pairs for both
+# revisions.  The ports exist whether or not the frame buffer is built, so
+# these constraints are unconditional; with SUN2_FB off the pins sit idle.
+set_property -dict {PACKAGE_PIN D4 IOSTANDARD TMDS_33} [get_ports tmds_clk_p]
+set_property -dict {PACKAGE_PIN C4 IOSTANDARD TMDS_33} [get_ports tmds_clk_n]
+set_property -dict {PACKAGE_PIN E1 IOSTANDARD TMDS_33} [get_ports {tmds_p[0]}]
+set_property -dict {PACKAGE_PIN D1 IOSTANDARD TMDS_33} [get_ports {tmds_n[0]}]
+set_property -dict {PACKAGE_PIN F2 IOSTANDARD TMDS_33} [get_ports {tmds_p[1]}]
+set_property -dict {PACKAGE_PIN E2 IOSTANDARD TMDS_33} [get_ports {tmds_n[1]}]
+set_property -dict {PACKAGE_PIN G2 IOSTANDARD TMDS_33} [get_ports {tmds_p[2]}]
+set_property -dict {PACKAGE_PIN G1 IOSTANDARD TMDS_33} [get_ports {tmds_n[2]}]
+
+# ---------------------------------------------------------------------------
 # Clock domains
 # ---------------------------------------------------------------------------
 # Everything derives from clk50, so Vivado would otherwise try to time paths
@@ -78,6 +94,12 @@ set_clock_groups -asynchronous \
     -group $cpu_clk \
     -group $serial_clk \
     -group [get_clocks -include_generated_clocks $mig_clk]
+
+# The HDMI clocks are grouped in syn/wukong_hdmi.xdc, which build.tcl reads only
+# when the frame buffer is built.  It has to be a separate file rather than a
+# conditional here: Vivado's XDC parser rejects `if' outright --
+# "Command 'if' is not supported in the xdc constraint file" -- and carries on
+# without it, so a guard written here is not a guard at all.
 
 # ---------------------------------------------------------------------------
 # The Wishbone/MIG clock crossing

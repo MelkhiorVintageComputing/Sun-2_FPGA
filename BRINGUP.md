@@ -144,6 +144,32 @@ the DVMA group and on `mii_rx_clk` for the receive group rather than trying to
 put both in one core; and remember that adding it changes placement, so re-read
 the timing report rather than assuming the previous clean run still holds.
 
+### The frame buffer, if it is built
+
+`make -C syn bitstream MACHINE=vme FB=1 BOARD=v3` adds the 2/50's 1152x900
+display on HDMI, letterboxed 1:1 in 1920x1080. Plug a monitor into the HDMI
+socket; the console moves there and **the serial port goes silent**, which is
+what a 2/50 with a display does and is the first thing to check rather than a
+symptom of failure.
+
+* **Nothing on either console:** the machine is not booting; go back to step 1
+  with `FB=0`.
+* **Serial silent, screen blank:** the display was found but nothing is
+  scanning out. DISPEN is bit 15 of the video control register at `0xEE3800`.
+* **A picture, but wrong:** if it is inverted the polarity is wrong (a 1 bit is
+  black); if it is sheared the line stride is wrong; if the border is not black
+  the window is wrong. `make -C sim scanout` checks all three against a known
+  pattern.
+
+Both boards close timing with it: V1 at WNS 1.281, V3 at 0.941. **The one thing
+simulation cannot answer** is whether the part really drives 1.485 Gb/s per
+TMDS lane. The 5x clock is on a plain BUFG, above what an Artix-7 is rated for,
+which is what QMTech's own 1080p design for this board does; there is no
+failing timing path because the clock only feeds OSERDES hard blocks, so the
+tools have nothing to report either way. If the screen is unstable or the sink
+will not lock, that is where to look, and the fix is 1080p30 -- VIDEO_ID_CODE
+34 in `wukong_top.sv`, half the serial rate for the same picture.
+
 ### Known limits, not bugs
 
 * **Gigabit** is out of reach on this board: the PHY's CLK125 is not routed to
@@ -165,3 +191,13 @@ memory access every 2.43 µs, and a 32-bit DVMA word is two 68010 cycles. When
 that is exceeded the symptom is not clean: bytes vanish from the *middle* of a
 frame, and the receiver then ignores the whole of the next one. Real traffic on
 the wire is the first thing that will test this.
+
+The frame buffer, when built, takes a share of the same bus, and that share is
+measured rather than argued: `make -C sim migddr3` with
+`XSIMARGS="-testplusarg fb_traffic"` puts a scan-out-shaped client alongside
+the CPU and the mean read goes 7.0 -> 7.5 clocks, worst case 9. With
+`+fb_saturate` -- a client that never stops asking, which the real scan-out
+never does -- it is 9.1 mean and 11 worst. So `MEM_LATENCY=7` stays the right
+figure to simulate at, and the receive-side budget above still holds with the
+display running. It is worth re-checking if the scan-out is ever made to fetch
+more than a line at a time.

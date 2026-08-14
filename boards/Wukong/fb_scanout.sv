@@ -102,6 +102,14 @@ module fb_scanout #(
    // The shifter.  pixbuf holds the beat being displayed; nextbuf is fetched
    // from the line buffer well ahead of when it is needed, which is why the
    // block RAM's registered output costs nothing here.
+   //
+   // There is exactly **one** read address, and that is not incidental: an
+   // earlier version also read beat 0 directly when entering the picture,
+   // which together with the write port made three, and three ports cannot be
+   // block RAM.  Vivado said so -- "Infeasible attribute ram_style" -- and
+   // quietly built it out of LUTs instead, which then failed timing by 9.8 ns.
+   // So beat 0 is primed through the same path as every other beat, a couple
+   // of pixels earlier.
    reg [127:0] pixbuf, nextbuf;
    reg [6:0]   p;          // pixel within the beat
    reg [3:0]   bidx;       // which beat of the line to read next
@@ -113,10 +121,11 @@ module fb_scanout #(
          p      <= 7'h0;
          bidx   <= 4'h0;
          pixbuf <= 128'h0;
+      end else if (cx == X0 - 3 && in_y) begin
+         // Aim the one read port at beat 0, so nextbuf has it by X0-1.
+         bidx <= 4'h0;
       end else if (cx == X0 - 1 && in_y) begin
-         // About to enter the picture: first beat into the shifter, second on
-         // its way.
-         pixbuf <= linebuf[{rdbuf, 4'h0}];
+         pixbuf <= nextbuf;      // beat 0
          bidx   <= 4'h1;
          p      <= 7'h0;
       end else if (in_x && in_y) begin

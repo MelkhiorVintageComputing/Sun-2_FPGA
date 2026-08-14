@@ -26,6 +26,7 @@ Simulation knobs that matter, all on `make -C sim xsim`:
 | `ROM=fast` | shortens the PROM's RAM-init pass 64-fold (MultiBus only) |
 | `MEM_LATENCY=7` | memory as slow as the real DDR3 path; 0 (the default) is a one-cycle memory |
 | `MB_ETHER=1` | MultiBus only: fit the Sun-2 Ethernet card in the cage. Off by default, because the 23,629 fingerprint is the machine *without* it |
+| `FB=1` | VME only: fit the frame buffer. Changes what the machine looks like — with a display the console goes to the screen and the serial port falls silent |
 | `TIMEOUT_MS=` | simulated milliseconds before giving up |
 | `XSIMARGS="-testplusarg trace_dvma=16"` | also `trace_irq`, `heartbeat_ms`, `crs_stuck`, `vcd_full` |
 
@@ -38,6 +39,7 @@ make -C sim migddr3    # the adapter against the real MIG + Micron DDR3, reports
 make -C sim clkgen     # measures what the MMCMs actually generate
 make -C sim phy        # phy_rtl8211_init against an independent clause-22 PHY model
 make -C sim mbether    # the MultiBus Ethernet card, driven as the boot PROM drives it
+make -C sim scanout    # fb_scanout: every pixel of a frame, against a known pattern
 ```
 
 The board testbench can also type at the monitor prompt (`tb/uart_console.sv`),
@@ -83,6 +85,13 @@ downstream knows DVMA exists.
 12-clock timeout and a bus error: instantiate it, add a `MATCH_*` term, add an
 arm to the `P_DOUT` read mux before the `16'hDEAD` fall-through, **and** add it
 to the read and/or write DTACK terms.
+
+**Two masters on DDR3.** `mig_arb` owns MIG's one user port; `wb_to_mig_ui` is
+the CPU's client and `fb_scanout` the frame buffer's. One transaction in flight
+on the whole interface, because MIG's `ORDERING = "NORM"` is not established
+here and the read path has no tag. A client's request is still asserted during
+the cycle its `done` comes back — mask it, or the arbiter runs the transaction
+twice and you lose a CPU clock with nothing to show for it.
 
 **Two Ethernets, sharing only the 82586.** The VME machine's is on board and
 reaches main memory by DVMA through the MMU (`rtl/sun2-vme/sun2_dvma.v`). The MultiBus

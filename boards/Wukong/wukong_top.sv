@@ -1,5 +1,8 @@
 `timescale 1ns / 1ps
 
+// For FB_WB_BASE, so the scan-out looks where the CPU writes.
+`include "sun2_config.vh"
+
 //
 // Sun-2 on a QMTech Wukong, V1 or V3.
 //
@@ -74,6 +77,14 @@ module wukong_top #(
     output wire        phy_reset_n,      // R1, active low, no external circuit
     output wire        phy_mdc,          // H2
     inout  wire        phy_mdio,         // H1, 1.5k pull-up on the board
+
+    // HDMI, for the 2/50's frame buffer.  Same balls on V1 and V3.  The ports
+    // exist whether or not SUN2_FB is set, so syn/wukong_common.xdc can
+    // constrain them unconditionally; with no frame buffer they sit idle.
+    output wire [2:0]  tmds_p,           // E1 F2 G2
+    output wire [2:0]  tmds_n,           // D1 E2 G1
+    output wire        tmds_clk_p,       // D4
+    output wire        tmds_clk_n,       // C4
 
 `ifdef BOARD_MEM_FAST
     // Simulation only: the Wishbone port, straight out
@@ -389,10 +400,78 @@ module wukong_top #(
        .app_rd_data (app_rd_data), .app_rd_data_valid (app_rd_data_valid)
    );
 
-   // Nothing scans out yet -- that is the next piece.  Tied off so the arbiter
-   // sees a client that never asks.
+   // ------------------------------------------------------------------
+   // The frame buffer on HDMI
+   // ------------------------------------------------------------------
+   wire [2:0] tmds;
+   wire       tmds_clock;
+
+`ifdef SUN2_FB
+   wire clk_pixel, clk_pixel_x5, hdmi_locked;
+
+   hdmi_clkgen hdmiclk (
+       .clk50        (clk50),
+       .reset        (board_reset),
+       .clk_pixel    (clk_pixel),
+       .clk_pixel_x5 (clk_pixel_x5),
+       .locked       (hdmi_locked)
+   );
+
+   // The pixel domain comes out of reset once its own MMCM has locked.
+   wire pix_rst;
+   reset_sync rst_pix (
+       .clk          (clk_pixel),
+       .rst_async_in (board_reset | ~hdmi_locked),
+       .rst_sync_out (pix_rst)
+   );
+
+   wire [11:0] cx;
+   wire [10:0] cy;
+   wire [23:0] rgb;
+
+   fb_scanout #(.FB_APP_BASE(28'(`FB_WB_BASE * 2))) scanout (
+       .ui_clk (ui_clk), .ui_rst (ui_clk_sync_rst),
+       .c_addr (c1_addr), .c_req (c1_req), .c_done (c1_done), .c_rdata (c1_rdata),
+       .clk_pixel (clk_pixel), .pix_rst (pix_rst),
+       .cx (cx), .cy (cy), .video_en (fb_video_en), .rgb (rgb)
+   );
+
+   // DVI rather than full HDMI: no audio to send, and it costs less.  Every
+   // HDMI sink accepts a DVI signal.
+   hdmi #(.VIDEO_ID_CODE(16),          // 1920x1080p60
+          .DVI_OUTPUT(1'b1),
+          .VIDEO_REFRESH_RATE(60.0),
+          .IT_CONTENT(1'b1),
+          .VENDOR_NAME({"Sun     "}),
+          .PRODUCT_DESCRIPTION({"Sun-2/50        "})
+   ) hdmi_tx (
+       .clk_pixel_x5 (clk_pixel_x5),
+       .clk_pixel    (clk_pixel),
+       .clk_audio    (clk_pixel),       // unused with DVI_OUTPUT
+       .reset        (pix_rst),
+       .rgb          (rgb),
+       .audio_sample_word ('{16'd0, 16'd0}),
+       .tmds         (tmds),
+       .tmds_clock   (tmds_clock),
+       .cx           (cx),
+       .cy           (cy),
+       .frame_width  (), .frame_height (), .screen_width (), .screen_height ()
+   );
+`else
+   // No frame buffer: the arbiter sees a client that never asks, and the HDMI
+   // pins sit still.
    assign c1_addr = 28'h0;
    assign c1_req  = 1'b0;
+   assign tmds       = 3'b000;
+   assign tmds_clock = 1'b0;
+`endif
+
+   // The hdmi module hands out single-ended TMDS; the differential buffers are
+   // ours.  TMDS_33 is the right standard on a 3.3 V HR bank.
+   OBUFDS obufds_d0  (.I(tmds[0]),   .O(tmds_p[0]), .OB(tmds_n[0]));
+   OBUFDS obufds_d1  (.I(tmds[1]),   .O(tmds_p[1]), .OB(tmds_n[1]));
+   OBUFDS obufds_d2  (.I(tmds[2]),   .O(tmds_p[2]), .OB(tmds_n[2]));
+   OBUFDS obufds_clk (.I(tmds_clock), .O(tmds_clk_p), .OB(tmds_clk_n));
 
    // MIG's sys_rst is active low (SysResetPolarity in the .prj).
    sun2_mig ddr3 (

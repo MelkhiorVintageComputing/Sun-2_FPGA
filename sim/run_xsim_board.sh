@@ -117,7 +117,9 @@ xvlog --work sun2 "${defargs[@]}" \
 	"$top/rtl/sun2-common/tolog.v"
 
 echo "== compiling the board layer and testbench (SystemVerilog) =="
-board_src=("$top/boards/Wukong/wukong_clkgen.sv" "$top/boards/Wukong/reset_sync.sv" "$top/boards/Wukong/wukong_top.sv")
+board_src=("$top/boards/Wukong/wukong_clkgen.sv" "$top/boards/Wukong/reset_sync.sv" \
+           "$top/boards/Wukong/hdmi_clkgen.sv" "$top/boards/Wukong/fb_scanout.sv" \
+           "$top/boards/Wukong/wukong_top.sv")
 tb_src=("$top/tb/wb_ram_model.sv" "$top/tb/uart_monitor.sv" "$top/tb/uart_console.sv" \
         "$top/tb/mii_peer.sv" "$top/tb/mdio_phy_model.sv" "$top/tb/tb_wukong.sv")
 

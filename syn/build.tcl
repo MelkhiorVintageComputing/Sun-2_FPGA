@@ -1,10 +1,11 @@
 # Non-project Vivado build for the Sun-2 on a QMTech Wukong V1.
 #
-#   vivado -mode batch -source syn/build.tcl [-tclargs CPU_HZ MACHINE MB_ETHER BOARD]
+#   vivado -mode batch -source syn/build.tcl [-tclargs CPU_HZ MACHINE MB_ETHER BOARD FB]
 #
 # MACHINE is multibus (default) or vme; see "Which machine" in the README.
 # MB_ETHER=1 fits the Sun-2 Ethernet card in the MultiBus cage.
 # BOARD is v1 (default) or v3, the QMTech Wukong revision; see syn/boards.tcl.
+# FB=1 fits the 2/50's frame buffer and its HDMI output.
 #
 # Nothing generated is committed: the MIG IP comes from syn/mig/sun2_mig.prj
 # via syn/generate_ip.tcl, and everything lands in build/.
@@ -21,10 +22,12 @@ set cpu_hz   12500000
 set machine  multibus
 set mb_ether 0
 set board    v1
+set fb       0
 if {[llength $argv] > 0} { set cpu_hz   [lindex $argv 0] }
 if {[llength $argv] > 1} { set machine  [lindex $argv 1] }
 if {[llength $argv] > 2} { set mb_ether [lindex $argv 2] }
 if {[llength $argv] > 3} { set board    [lindex $argv 3] }
+if {[llength $argv] > 4} { set fb       [lindex $argv 4] }
 board_check $board
 
 switch -- $machine {
@@ -41,9 +44,17 @@ if {$mb_ether == 1} {
     lappend defines SUN2_MB_ETHER
 }
 
+if {$fb == 1} {
+    if {$machine ne "vme"} {
+        puts "ERROR: FB is VME only: the 2/120's frame buffer is a different device"
+        exit 1
+    }
+    lappend defines SUN2_FB
+}
+
 set part    [board_part $board]
 set ipdir   $top/build/ip/$board
-set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}]-cpu[expr {$cpu_hz / 1000000}]
+set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}]-cpu[expr {$cpu_hz / 1000000}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir
@@ -124,10 +135,21 @@ read_verilog -sv [list \
     $top/boards/Wukong/phy_rtl8211_init.sv \
     $top/Inputs/z8530_scc/z8530_scc.sv \
     $top/boards/Wukong/wukong_clkgen.sv \
+    $top/boards/Wukong/hdmi_clkgen.sv \
     $top/boards/Wukong/reset_sync.sv \
     $top/boards/Wukong/wb_to_mig_ui.sv \
     $top/boards/Wukong/mig_arb.sv \
     $top/boards/Wukong/fb_scanout.sv \
+    $top/Inputs/hdmi/src/tmds_channel.sv \
+    $top/Inputs/hdmi/src/serializer.sv \
+    $top/Inputs/hdmi/src/packet_assembler.sv \
+    $top/Inputs/hdmi/src/packet_picker.sv \
+    $top/Inputs/hdmi/src/audio_clock_regeneration_packet.sv \
+    $top/Inputs/hdmi/src/audio_info_frame.sv \
+    $top/Inputs/hdmi/src/audio_sample_packet.sv \
+    $top/Inputs/hdmi/src/auxiliary_video_information_info_frame.sv \
+    $top/Inputs/hdmi/src/source_product_description_info_frame.sv \
+    $top/Inputs/hdmi/src/hdmi.sv \
     $top/boards/Wukong/wukong_top.sv \
 ]
 
@@ -146,6 +168,12 @@ synth_ip [get_ips sun2_mig]
 # returns nothing and drops the group silently.
 read_xdc $here/wukong_$board.xdc
 read_xdc $here/wukong_common.xdc
+
+# Only when there is a frame buffer: the clocks it names exist only then.
+if {$fb == 1} {
+    read_xdc $here/wukong_hdmi.xdc
+    puts "== read wukong_hdmi.xdc =="
+}
 
 # ---------------------------------------------------------------------------
 # Synthesis and implementation
