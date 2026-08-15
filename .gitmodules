@@ -16,3 +16,6 @@
 [submodule "Inputs/hdmi"]
 	path = Inputs/hdmi
 	url = https://github.com/hdl-util/hdmi
+[submodule "Inputs/Wish5380"]
+	path = Inputs/Wish5380
+	url = git@github.com:MelkhiorVintageComputing/Wish5380.git
