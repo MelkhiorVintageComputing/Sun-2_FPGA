@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+#
+# Build a disk image for the emulated Xylogics 450.
+#
+# A Sun-2 disk is not a filesystem as far as the boot PROM is concerned.  It is
+# a label in block 0 and a boot program in blocks 1 to 15, and that is the
+# whole of what xyboot() in
+# Inputs/sunos-34-src/sun/prom_monitor/msun/mon/prom2/xy.c reads before it
+# hands control over.  This writes exactly that, so that a simulated machine
+# can be shown to boot from a disk without anyone having to find a genuine
+# SunOS image first.
+#
+# The image is a byte-for-byte copy of what the Sun sees in memory -- the
+# convention is argued in the header of rtl/sun2-multibus/sun2_xy450.sv, and it
+# is the one a real `dd if=/dev/rxy0a` already has, because the only way to
+# read a Sun-2 disk is through a controller.
+#
+# The label is struct dk_label from Inputs/sunos-34-src/sun/sys/sun/dklabel.h,
+# 512 bytes, big-endian, with an XOR-of-shorts checksum that the PROM's
+# chklabel() insists on:
+#
+#     0   dkl_asciilabel[128]
+#     128 dkl_pad[296]
+#     424 apc, gap1, gap2, intrlv, ncyl, acyl, nhead, nsect, bhead, ppart
+#     444 dkl_map[8] = { cylno, nblk } as pairs of 32-bit words
+#     508 magic 0xDABE
+#     510 checksum
+#
+# ppart and bhead must both be zero: xyboot() walks base heads 0 to 3 and drive
+# types 0 to 3 looking for a label whose own idea of where it is agrees with
+# where it was found, and the first thing it tries is head 0.
+#
+# Usage:
+#   tools/mkxydisk [-o FILE] [--cyl N] [--head N] [--sect N] [--acyl N]
+#                  [--label TEXT] [--message TEXT]
+#
+
+import argparse
+import struct
+import sys
+
+SECSIZE = 512
+DKL_MAGIC = 0xDABE
+NDKMAP = 8
+
+# The monitor's vector table lives at the start of PROM space, and the boot
+# map leaves it where mapinit put it.  v_putchar is the seventh pointer.
+ROMP = 0xEF0000
+V_PUTCHAR = ROMP + 24
+
+
+def label_block(ncyl, acyl, nhead, nsect, ascii_label):
+    """struct dk_label, checksummed."""
+    b = bytearray(SECSIZE)
+
+    text = ascii_label.encode("ascii", "replace")[:127]
+    b[0:len(text)] = text
+
+    struct.pack_into(
+        ">10H", b, 424,
+        0,        # dkl_apc, alternates per cylinder
+        0,        # dkl_gap1
+        0,        # dkl_gap2
+        1,        # dkl_intrlv, 1:1 -- the 450's own default
+        ncyl,     # dkl_ncyl,  data cylinders
+        acyl,     # dkl_acyl,  alternate cylinders
+        nhead,    # dkl_nhead
+        nsect,    # dkl_nsect
+        0,        # dkl_bhead, and it has to be the head it was found on
+        0,        # dkl_ppart
+    )
+
+    # One partition covering the data cylinders, which is what a freshly
+    # labelled disk with nothing on it honestly has.
+    struct.pack_into(">II", b, 444, 0, ncyl * nhead * nsect)
+
+    struct.pack_into(">H", b, 508, DKL_MAGIC)
+
+    # chklabel(): "count = sizeof(struct dk_label) / sizeof(short); while
+    # (count--) sum ^= *sp++; if (sum != 0) ..."  So the checksum is whatever
+    # makes the XOR of all 256 shorts zero.
+    words = struct.unpack(">256H", bytes(b))
+    ck = 0
+    for w in words[:255]:
+        ck ^= w
+    struct.pack_into(">H", b, 510, ck)
+    return bytes(b)
+
+
+def bootblock(message):
+    """A 68010 program that says it ran.
+
+    The monitor loads blocks 1..15 to 0x4000 and jumps there, so this is a real
+    boot program -- just one that prints through the PROM's own putchar and
+    then stops, rather than loading a kernel.
+
+            lea     msg(pc),a2
+    loop:   moveq   #0,d0
+            move.b  (a2)+,d0
+            beq.s   done
+            move.l  d0,-(sp)
+            movea.l V_PUTCHAR,a0
+            jsr     (a0)
+            addq.l  #4,sp
+            bra.s   loop
+    done:   bra.s   done
+    msg:    .asciz  message
+    """
+    code = bytearray()
+    code += struct.pack(">HH", 0x45FA, 0x0018)   # lea 0x18(pc),a2  -> msg
+    code += struct.pack(">H", 0x7000)            # moveq #0,d0
+    code += struct.pack(">H", 0x101A)            # move.b (a2)+,d0
+    code += struct.pack(">H", 0x670E)            # beq.s done
+    code += struct.pack(">H", 0x2F00)            # move.l d0,-(sp)
+    code += struct.pack(">HI", 0x2079, V_PUTCHAR)  # movea.l V_PUTCHAR,a0
+    code += struct.pack(">H", 0x4E90)            # jsr (a0)
+    code += struct.pack(">H", 0x588F)            # addq.l #4,sp
+    code += struct.pack(">H", 0x60EE)            # bra.s loop
+    code += struct.pack(">H", 0x60FE)            # done: bra.s done
+    assert len(code) == 0x1A, len(code)
+    code += message.encode("ascii", "replace") + b"\n\x00"
+
+    # Blocks 1..15: BBSIZE is 8192 and the PROM reads BBSIZE/DEV_BSIZE - 1 of
+    # them after the label.
+    out = bytearray(15 * SECSIZE)
+    out[0:len(code)] = code
+    return bytes(out)
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(description="build a bootable Xylogics 450 disk image")
+    ap.add_argument("-o", "--output", default="xydisk.img")
+    ap.add_argument("--cyl", type=int, default=32, help="data cylinders")
+    ap.add_argument("--acyl", type=int, default=2, help="alternate cylinders")
+    ap.add_argument("--head", type=int, default=4, help="heads")
+    ap.add_argument("--sect", type=int, default=32, help="sectors per track")
+    ap.add_argument("--label", default="FPGA Xylogics 450 cyl 32 alt 2 hd 4 sec 32")
+    ap.add_argument("--message", default="Xylogics 450 boot block running.")
+    args = ap.parse_args(argv[1:])
+
+    if args.head > 256 or args.sect > 256 or (args.cyl + args.acyl) > 2048:
+        ap.error("geometry is outside what an 11-bit cylinder and 8-bit "
+                 "head/sector address can reach")
+
+    total = (args.cyl + args.acyl) * args.head * args.sect
+    img = bytearray(total * SECSIZE)
+    img[0:SECSIZE] = label_block(args.cyl, args.acyl, args.head, args.sect, args.label)
+    boot = bootblock(args.message)
+    img[SECSIZE:SECSIZE + len(boot)] = boot
+
+    with open(args.output, "wb") as f:
+        f.write(img)
+
+    print("%s: %d blocks, %.2f MiB, %d/%d cyl, %d heads, %d sectors"
+          % (args.output, total, total * SECSIZE / 1048576.0,
+             args.cyl, args.acyl, args.head, args.sect))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

@@ -34,9 +34,16 @@ set -u
 
 log=${1:-../build/sim/xsim/console.log}
 machine=${2:-multibus}
-# "mbether" if a Sun-2 Ethernet board is fitted in the MultiBus card cage, in
-# which case the machine must find it and try to net boot, exactly as the VME
-# machine does with its on-board one.
+# What is fitted in the cage, because it changes what success looks like:
+#
+#   mbether   a Sun-2 Ethernet board, which the machine must find and try to
+#             net boot from, exactly as the VME machine does with its on-board
+#             one.
+#   xy450     a Xylogics 450 and a disk, which auto-boot reaches *first* --
+#             `xy' is the first entry in the PROM's boottab[] -- so the machine
+#             boots and never prints a monitor prompt at all.
+#   fb        a frame buffer, which takes the console away from the serial port
+#             entirely; then silence is the evidence.
 fitted=${3:-}
 rc=0
 
@@ -94,6 +101,9 @@ if [ "$fitted" = fb ]; then
 	fi
 elif grep -q '>' "$log"; then
 	echo "PASS: monitor prompt seen"
+elif [ "$fitted" = xy450 ]; then
+	# A machine that boots does not stop at a prompt, which is the point.
+	echo "note: no monitor prompt, because the disk booted"
 elif [ "$fitted" = mbether ]; then
 	# Not a failure here, and not reachable either: see the note below.
 	echo "note: no monitor prompt, which this configuration cannot reach"
@@ -165,6 +175,40 @@ if [ "$fitted" = mbether ]; then
 		echo "PASS: the 82586 built a frame in card memory and transmitted it"
 	else
 		echo "FAIL: nothing was ever transmitted"
+		rc=1
+	fi
+fi
+
+# The disk.  Getting here proves rather a lot at once: the MultiBus I/O space
+# decode, the card's register byte lanes, DVMA through the MMU into the window
+# the boot map put on physical 0xC0000, the IOPB byte inversion, the sector
+# byte order (a label read with the sector bytes swapped still checksums and
+# fails only on the magic), and the CHS-to-block map for fifteen more sectors.
+if [ "$fitted" = xy450 ]; then
+	if grep -q 'Probing Multibus: *xy' "$log"; then
+		echo "PASS: the Xylogics 450 answered xyprobe()"
+	else
+		echo "FAIL: xyprobe() did not find the Xylogics 450"
+		rc=1
+	fi
+
+	if grep -q 'Boot: xy(' "$log"; then
+		echo "PASS: auto-boot selected the disk"
+	else
+		echo "FAIL: auto-boot did not reach the disk"
+		rc=1
+	fi
+
+	if grep -q 'xy: error' "$log"; then
+		echo "FAIL: $(grep -o 'xy: error .*' "$log" | head -1)"
+		rc=1
+	elif grep -q 'No label found' "$log"; then
+		echo "FAIL: the sectors moved but no valid label was in them"
+		rc=1
+	elif grep -q 'boot block running' "$log"; then
+		echo "PASS: the label was read and the boot block loaded and ran"
+	else
+		echo "FAIL: nothing was loaded from the disk"
 		rc=1
 	fi
 fi

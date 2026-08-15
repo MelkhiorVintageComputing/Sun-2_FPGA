@@ -7,6 +7,7 @@
 #   ./run_unit.sh dvma      sun2_dvma: Wishbone master -> 68010 bus cycles
 #   ./run_unit.sh phy       phy_rtl8211_init + wb_mdio against a PHY model
 #   ./run_unit.sh mbether   sun2_mb_ether against the boot PROM's own sequences
+#   ./run_unit.sh xy450     sun2_xy450's registers, as the PROM and SunOS probe them
 #   ./run_unit.sh scanout   fb_scanout: DDR3 to pixels, a whole frame checked
 #
 set -e -o pipefail
@@ -67,6 +68,22 @@ mbether)
 	if xelab -debug off --timescale 1ns/1ps work.tb_mb_ether -s mbether_sim \
 		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	xsim mbether_sim -R | grep -E '===|PASS|FAIL|checks|ISCP'
+	;;
+
+xy450)
+	# The card, a memory behind its DVMA port, and a real disk image -- built
+	# here rather than committed, so the test also checks that the tool and the
+	# controller agree about byte order.
+	"$top/tools/mkxydisk" -o xy0.img > /dev/null
+	if xvlog --sv \
+		"$top/rtl/sun2-multibus/sun2_xy450.sv" \
+		"$top/tb/blk_file.sv" \
+		"$top/tb/tb_xy450.sv" \
+		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug off --timescale 1ns/1ps work.tb_xy450 -s xy450_sim \
+		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	xsim xy450_sim -R -testplusarg blk_image=xy0.img \
+		| grep -E '===|PASS|FAIL|checks|blk\]|DVMA:'
 	;;
 
 scanout)

@@ -7,6 +7,7 @@
 #   make bitstream MB_ETHER=1     with the MultiBus Ethernet card
 #   make bitstream BOARD=v3       for a Wukong V3 instead of a V1
 #   make bitstream FB=1           with the frame buffer on HDMI
+#   make bitstream XY450=1        with the Xylogics 450 disk controller
 #   make both               both CPU clocks
 #
 # Nothing here is committed; everything lands in ../build.  Vivado is run from
@@ -33,6 +34,9 @@ MB_ETHER ?= 0
 # Fit the frame buffer and its HDMI output.  Either machine.
 FB ?= 0
 
+# Fit the Xylogics 450 disk controller.  MultiBus only.
+XY450 ?= 0
+
 # Which QMTech Wukong revision: v1 or v3.  They share all their RTL and differ
 # in the FPGA speed grade and four pins -- see syn/boards.tcl.  The default
 # stays v1 so every result verified against it keeps its meaning; a V3 is what
@@ -40,7 +44,7 @@ FB ?= 0
 BOARD ?= v1
 
 IPDIR   = $(TOP)/build/ip/$(BOARD)/sun2_mig
-TAG     = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(FB)),-fb,)
+TAG     = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)
 OUTDIR  = $(TOP)/build/syn/$(BOARD)-$(MACHINE)$(TAG)-cpu$(shell expr $(CPU_HZ) / 1000000)
 WORKDIR = $(TOP)/build/syn/work-$(BOARD)
 
@@ -62,10 +66,11 @@ rom:
 # Immutable inputs that need a patch are copied and patched into build/inputs.
 inputs:
 	$(TOP)/tools/patch_inputs.sh Wish82586
+	$(TOP)/tools/patch_inputs.sh Wish5380
 
 bitstream: ip rom inputs | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
-		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB)
+		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB) $(XY450)
 	@echo "bitstream: $(OUTDIR)/sun2_wukong_$(BOARD).bit"
 
 both:

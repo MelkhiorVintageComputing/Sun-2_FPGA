@@ -1,12 +1,13 @@
 # Non-project Vivado build for the Sun-2 on a QMTech Wukong V1.
 #
-#   vivado -mode batch -source syn/build.tcl [-tclargs CPU_HZ MACHINE MB_ETHER BOARD FB]
+#   vivado -mode batch -source syn/build.tcl [-tclargs CPU_HZ MACHINE MB_ETHER BOARD FB XY450]
 #
 # MACHINE is multibus (default) or vme; see "Which machine" in the README.
 # MB_ETHER=1 fits the Sun-2 Ethernet card in the MultiBus cage.
 # BOARD is v1 (default) or v3, the QMTech Wukong revision; see syn/boards.tcl.
 # FB=1 fits the frame buffer and its HDMI output -- the 2/50's on-board one, or
 #      the 2/120's video board, which also carries the keyboard/mouse SCC.
+# XY450=1 fits the Xylogics 450 disk controller in the MultiBus cage.
 #
 # Nothing generated is committed: the MIG IP comes from syn/mig/sun2_mig.prj
 # via syn/generate_ip.tcl, and everything lands in build/.
@@ -24,11 +25,13 @@ set machine  multibus
 set mb_ether 0
 set board    v1
 set fb       0
+set xy450    0
 if {[llength $argv] > 0} { set cpu_hz   [lindex $argv 0] }
 if {[llength $argv] > 1} { set machine  [lindex $argv 1] }
 if {[llength $argv] > 2} { set mb_ether [lindex $argv 2] }
 if {[llength $argv] > 3} { set board    [lindex $argv 3] }
 if {[llength $argv] > 4} { set fb       [lindex $argv 4] }
+if {[llength $argv] > 5} { set xy450    [lindex $argv 5] }
 board_check $board
 
 switch -- $machine {
@@ -52,9 +55,19 @@ if {$fb == 1} {
     lappend defines SUN2_FB
 }
 
+# The Xylogics 450 is a MultiBus card; a 2/50 takes a 451 on the VME bus, which
+# is a different card in a different address space.
+if {$xy450 == 1} {
+    if {$machine ne "multibus"} {
+        puts "ERROR: XY450 is MultiBus only: a 2/50 takes a Xylogics 451 on the VME bus"
+        exit 1
+    }
+    lappend defines SUN2_XY450
+}
+
 set part    [board_part $board]
 set ipdir   $top/build/ip/$board
-set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}]-cpu[expr {$cpu_hz / 1000000}]
+set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu[expr {$cpu_hz / 1000000}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir
@@ -132,6 +145,10 @@ read_verilog -sv [list \
     $top/build/inputs/Wish82586/src/wb_mdio.sv \
     $top/rtl/sun2-vme/sun2_ethernet.sv \
     $top/rtl/sun2-multibus/sun2_mb_ether.sv \
+    $top/rtl/sun2-multibus/sun2_xy450.sv \
+    $top/build/inputs/Wish5380/src/wish5380_pkg.sv \
+    $top/build/inputs/Wish5380/src/sd_spi.sv \
+    $top/build/inputs/Wish5380/src/blk_sd.sv \
     $top/boards/Wukong/phy_rtl8211_init.sv \
     $top/Inputs/z8530_scc/z8530_scc.sv \
     $top/boards/Wukong/wukong_clkgen.sv \
@@ -173,6 +190,14 @@ read_xdc $here/wukong_common.xdc
 if {$fb == 1} {
     read_xdc $here/wukong_hdmi.xdc
     puts "== read wukong_hdmi.xdc =="
+}
+
+# Only when there is a disk: the sd_* ports on wukong_top exist only then, and
+# where they go differs by board -- J9 on a V3, a PMOD on a V1, which has no
+# card slot of its own.
+if {$xy450 == 1} {
+    read_xdc $here/wukong_sd_$board.xdc
+    puts "== read wukong_sd_$board.xdc =="
 }
 
 # ---------------------------------------------------------------------------

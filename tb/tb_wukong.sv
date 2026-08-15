@@ -92,6 +92,13 @@ module tb_wukong #(
 
        .serial_tx (serial_tx), .serial_rx (serial_rx),
        .user_led (user_led), .diag_leds0 (diag_leds0), .user_btn (1'b1),
+
+`ifdef SUN2_XY450
+       // No SD card model here -- see BRINGUP.md.  MISO idles high, which is
+       // what an empty slot's pull-up gives, and blk_sd never comes ready.
+       .sd_dat0 (1'b1), .sd_cd (1'b1),
+`endif
+
        .wb_cyc_o (wb_cyc), .wb_stb_o (wb_stb), .wb_adr_o (wb_adr),
        .wb_dat_o (wb_dat_m2s), .wb_sel_o (wb_sel), .wb_we_o (wb_we),
        .wb_dat_i (wb_dat_s2m), .wb_ack_i (wb_ack),
@@ -134,6 +141,13 @@ module tb_wukong #(
 
        .serial_tx (serial_tx), .serial_rx (serial_rx),
        .user_led (user_led), .diag_leds0 (diag_leds0), .user_btn (1'b1),
+
+`ifdef SUN2_XY450
+       // No SD card model here -- see BRINGUP.md.  MISO idles high, which is
+       // what an empty slot's pull-up gives, and blk_sd never comes ready.
+       .sd_dat0 (1'b1), .sd_cd (1'b1),
+`endif
+
        .ddr3_dq (ddr3_dq), .ddr3_dqs_p (ddr3_dqs_p), .ddr3_dqs_n (ddr3_dqs_n),
        .ddr3_addr (ddr3_addr), .ddr3_ba (ddr3_ba),
        .ddr3_ras_n (ddr3_ras_n), .ddr3_cas_n (ddr3_cas_n), .ddr3_we_n (ddr3_we_n),

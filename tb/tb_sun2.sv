@@ -130,6 +130,30 @@ module tb_sun2 #(
      $display("[%t] WARNING: carrier sense stuck asserted -- transmission cannot proceed",
               $realtime);
 
+   // ------------------------------------------------------------------
+   // The Xylogics 450's disk
+   // ------------------------------------------------------------------
+   // The block seam comes out of `top` for the same reason the MII pins do:
+   // what is on the far end is an SD card on the board and a file here, and
+   // the machine cannot tell.  With no +blk_image the drive reports itself
+   // absent, which is a state the boot PROM has to handle anyway.
+   wire        blk_start, blk_we, blk_buf_we;
+   wire [31:0] blk_lba;
+   wire [7:0]  blk_buf_rdata, blk_buf_wdata;
+   wire [8:0]  blk_buf_addr;
+   wire        blk_done, blk_err, blk_ready;
+   wire [31:0] blk_count;
+
+   // Clocked from the machine's own C100, which is what the card runs on;
+   // the block seam has no clock crossing in it.
+   blk_file disk(.clk(dut.C100), .rst(sys_reset),
+                 .blk_start(blk_start), .blk_we(blk_we), .blk_lba(blk_lba),
+                 .blk_buf_rdata(blk_buf_rdata),
+                 .blk_done(blk_done), .blk_err(blk_err),
+                 .blk_ready(blk_ready), .blk_count(blk_count),
+                 .blk_buf_we(blk_buf_we), .blk_buf_addr(blk_buf_addr),
+                 .blk_buf_wdata(blk_buf_wdata));
+
    mii_peer peer(.mii_tx_clk(mii_tx_clk), .mii_txd(mii_txd),
                  .mii_tx_en(mii_tx_en), .mii_tx_er(mii_tx_er),
                  .mii_rx_clk(mii_rx_clk), .mii_rxd(mii_rxd),
@@ -170,6 +194,18 @@ module tb_sun2 #(
            .mii_rx_er(mii_rx_er),
            .mii_crs(mii_crs),
            .mii_col(mii_col),
+
+           .blk_start(blk_start),
+           .blk_we(blk_we),
+           .blk_lba(blk_lba),
+           .blk_buf_rdata(blk_buf_rdata),
+           .blk_done(blk_done),
+           .blk_err(blk_err),
+           .blk_ready(blk_ready),
+           .blk_count(blk_count),
+           .blk_buf_we(blk_buf_we),
+           .blk_buf_addr(blk_buf_addr),
+           .blk_buf_wdata(blk_buf_wdata),
 
            .wb_cyc_o(wb_cyc),
            .wb_stb_o(wb_stb),

@@ -26,6 +26,7 @@ top=$(cd "$here/.." && pwd)
 : "${SUN2_CPU_HZ:=12500000}"
 
 "$top/tools/patch_inputs.sh" Wish82586
+"$top/tools/patch_inputs.sh" Wish5380
 
 if [ ! -x "$XILINX_VIVADO/bin/xvlog" ]; then
 	echo "xsim not found under $XILINX_VIVADO -- set XILINX_VIVADO" >&2
@@ -164,6 +165,10 @@ xvlog --sv --work sun2 "${defargs[@]}" "${incargs[@]}" \
 	"$top/boards/Wukong/phy_rtl8211_init.sv" \
 	"$top/rtl/sun2-vme/sun2_ethernet.sv" \
 	"$top/rtl/sun2-multibus/sun2_mb_ether.sv" \
+	"$top/rtl/sun2-multibus/sun2_xy450.sv" \
+	"$top/build/inputs/Wish5380/src/wish5380_pkg.sv" \
+	"$top/build/inputs/Wish5380/src/sd_spi.sv" \
+	"$top/build/inputs/Wish5380/src/blk_sd.sv" \
 	"$top/Inputs/z8530_scc/z8530_scc.sv" \
 	"${board_src[@]}" \
 	"${tb_src[@]}"

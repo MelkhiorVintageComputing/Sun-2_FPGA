@@ -74,6 +74,27 @@ module sun2_fpga(input         cpu_clk,
 		 input [15:0]  mb_din,    // card -> CPU
 		 input 	       mb_hit,
 		 input 	       mb_ack,
+		 /* The MultiBus I/O space, page-map TYPE 3.  The same contract
+		  as mb_* above and a separate set of wires because it is a
+		  separate address space on the real bus: a card decodes one or
+		  the other, never both, and the same 16-bit number means
+		  different things in each.  The monitor maps 64 KiB of it at
+		  BUSIO_BASE (0xEB0000), which is where every controller's
+		  registers live -- the Xylogics at 0xEE40, the Interphase at
+		  0xEE48. */
+		 output        mbio_sel,
+		 output [15:0] mbio_addr,
+		 output        mbio_we,
+		 output        mbio_uds_n,
+		 output        mbio_lds_n,
+		 output [15:0] mbio_dout,  // CPU -> card
+		 input [15:0]  mbio_din,   // card -> CPU
+		 input 	       mbio_hit,
+		 input 	       mbio_ack,
+		 /* A MultiBus card's interrupt, jumpered to level 2 -- which is
+		  where conf.sun2/XY100 puts the Xylogics 450.  Autovectored:
+		  the Sun-2 does not take a vector from the bus. */
+		 input 	       mbio_int,
 		 /* debug */
 		 output [7:0]  diag_leds,
 		 output        en_boot,
@@ -115,10 +136,24 @@ module sun2_fpga(input         cpu_clk,
  `ifdef SUN2_MB_ETHER
       $fatal(1, "SUN2_MB_ETHER is MultiBus only: a 2/50 has its Ethernet on board, in device page 1");
  `endif
+ `ifdef SUN2_XY450
+      $fatal(1, "SUN2_XY450 is MultiBus only: a 2/50 takes a Xylogics 451 on the VME bus");
+ `endif
 `endif
 `ifdef SUN2_MB_ETHER
       $display("   MultiBus Ethernet: registers at 0x%05x, %0d KiB of memory at 0x%05x",
                `MB_ETHER_REG_BASE, `MB_ETHER_MEM_KIB, `MB_ETHER_MEM_BASE);
+`endif
+`ifdef SUN2_XY450
+      $display("   Xylogics 450: registers at MultiBus I/O 0x%04x", `XY450_IO_BASE);
+      // Every boot remaps virtual 0xF00000..0xF3FFFF -- the DVMA window the
+      // controller DMAs through -- onto physical page 0x180, byte 0xC0000
+      // (fakemapinit2 in the monitor, and in the Rev R image at 0xEF6F04).  A
+      // machine with less than a megabyte installed has nothing there, and the
+      // symptom would be a disk that reads zeroes rather than an obvious fault.
+      if (`MEM_PAGES < 512)
+        $fatal(1, "SUN2_XY450 needs at least 1 MiB installed (MEM_PAGES >= 512, have %0d): the DVMA window lands on physical 0xC0000",
+               `MEM_PAGES);
 `endif
       if (`MEM_PAGES > `MEM_SPACE_PAGES)
         $fatal(1, "MEM_PAGES (%0d) exceeds MEM_SPACE_PAGES (%0d): memory is installed where nothing answers",
@@ -545,6 +580,27 @@ module sun2_fpga(input         cpu_clk,
    assign mb_lds_n       = P_LDS_n;
    assign mb_dout        = P_DIN;
 
+   // MultiBus I/O space -- TYPE 3, MPM_BUSIO.  A space and not a device, on
+   // exactly the same terms as TYPE 2 above: nothing here decides whether a
+   // card answers, and with an empty cage the cycle runs to C_S24 and takes
+   // the bus-error timeout.  That is not a detail -- xyprobe() is a pokec()
+   // pair that has to *fail* at 0xEE48 for the monitor to report one
+   // controller rather than two.
+   //
+   // The monitor maps 64 KiB of this space at BUSIO_BASE, 32 pages, so five
+   // page bits are live and the top seven must be zero.  A cycle above 64 KiB
+   // cannot come from the monitor's own map, but a hand-built page-map entry
+   // could produce one, and it should time out rather than alias.
+   wire 			 MATCH_MBIO;
+   assign MATCH_MBIO     = (FC_GENERAL) & (TYPE == 3'h3) & C_S6 &
+                           (ma_pmap2devices[11:5] == 7'h0);
+   assign mbio_sel       = MATCH_MBIO;
+   assign mbio_addr      = {ma_pmap2devices[4:0], P_A[10:1], 1'b0};
+   assign mbio_we        = ~P_RW_n;
+   assign mbio_uds_n     = P_UDS_n;
+   assign mbio_lds_n     = P_LDS_n;
+   assign mbio_dout      = P_DIN;
+
    wire [15:0] 			 timer_out;
    wire 			 FOUT, timer_int[5:1]; /* FOUT for completeness, not et implemented in the TTL code */
    // X1/X2 is the 4.9152 MHz crystal oscillator (schematic sheet A05: the
@@ -920,6 +976,7 @@ module sun2_fpga(input         cpu_clk,
 		   MATCH_FBCTL     ? fbctl_out :
 		   MATCH_FB        ? wishbone_out :
 		   mb_hit          ? mb_din :
+		   mbio_hit        ? mbio_din :
 		   16'hDEAD;
 
    // DTACK generator. has knowledge of timings for all devices
@@ -958,6 +1015,8 @@ module sun2_fpga(input         cpu_clk,
 			 MultiBus XACK is; with no card mb_hit never rises and
 			 the cycle times out. */
 			(mb_hit & mb_ack) |
+			/* and the same again for MultiBus I/O space */
+			(mbio_hit & mbio_ack) |
 
 			1'b0);
    
@@ -1029,7 +1088,12 @@ module sun2_fpga(input         cpu_clk,
 			  .GS_n() // unused output
 			   );
    assign INT1_n = ~EN_INT1;
-   assign INT2_n = ~EN_INT2;
+   // Level 2 carries the software-settable interrupt and whatever MultiBus
+   // card is jumpered there.  The Xylogics 450 leaves the factory on INT5/ and
+   // Sun rejumpers it to INT2/ -- "priority 2" in conf.sun2/XY100 -- so this
+   // is the disk.  With no card mbio_int is tied low and this reduces to what
+   // it always was.
+   assign INT2_n = ~(EN_INT2 | mbio_int);
    // Level 3 carries both the software-settable interrupt and the on-board
    // Ethernet (Architecture Manual 6.13, "Interrupts: Level 3"); the control
    // register's INTEN gates the latter, and sun2_ether_ctl has already applied

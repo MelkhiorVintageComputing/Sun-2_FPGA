@@ -8,6 +8,7 @@
 #   make xsim MACHINE=vme  be a Sun 2/50 (VME) instead of a 2/120 (MultiBus)
 #   make xsim MB_ETHER=1   fit the MultiBus Ethernet board (MultiBus only)
 #   make xsim FB=1         fit the frame buffer (either machine)
+#   make xsim XY450=1      fit the Xylogics 450 disk controller (MultiBus only)
 #   make iverilog          the open-source flow (GHDL-converted CPU), best effort
 #   make check             assert the console reached the monitor prompt
 #                          (pass the same MACHINE= as the run it is checking)
@@ -24,6 +25,7 @@
 #   make dvma                      check the Wishbone-to-68010 DVMA bridge
 #   make phy                       check the RTL8211EG bring-up sequence
 #   make mbether                   check the MultiBus Ethernet board
+#   make xy450                     check the Xylogics 450's registers
 #   make scanout                   check the frame buffer scan-out
 #   make screenshot                render what the last FB=1 boot drew, as a PPM
 #
@@ -71,6 +73,12 @@ endif
 # screen and the serial port goes quiet.
 ifeq ($(FB),1)
 DEFINES += SUN2_FB
+endif
+# Fit a Xylogics 450 disk controller in the MultiBus card cage, with an SD card
+# where four SMD drives used to be.  MultiBus only -- a 2/50 takes a 451 on the
+# VME bus, which is a different card in a different space.
+ifeq ($(XY450),1)
+DEFINES += SUN2_XY450
 endif
 
 # Simulated milliseconds before giving up, and the console string that means
@@ -129,7 +137,7 @@ board-phy:
 	$(MAKE) board-check MACHINE=vme
 
 # --- unit tests for the board layer ---------------------------------------
-clkgen adapter migddr3 dvma phy mbether scanout: rom
+clkgen adapter migddr3 dvma phy mbether xy450 scanout: rom
 	BOARD=$(BOARD) XSIMARGS="$(XSIMARGS)" ./run_unit.sh $@
 
 # --- a picture of what the machine drew -----------------------------------
@@ -165,11 +173,15 @@ iverilog: rom
 	SUN2_DEFINES="$(DEFINES)" ./run_iverilog.sh $(PLUSARGS) $(IVSIMARGS)
 
 # Must match the run directory run_xsim.sh chooses, which composes the two.
-RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(FB)),-fb,)
-# What check_console.sh should expect.  A display wins: with one fitted the
-# console moves to the screen and there is no serial output left to check,
-# whatever else is in the cage.
-FITTED  = $(if $(filter 1,$(FB)),fb,$(if $(filter 1,$(MB_ETHER)),mbether,))
+RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)
+# What check_console.sh should expect, in order of what wins.  A display wins
+# outright: with one fitted the console moves to the screen and there is no
+# serial output left to check, whatever else is in the cage.  A disk beats an
+# Ethernet card because `xy' comes before `ie' in the PROM's boot list, so
+# auto-boot reaches the disk and never tries the network.
+FITTED  = $(if $(filter 1,$(FB)),fb,\
+          $(if $(filter 1,$(XY450)),xy450,\
+          $(if $(filter 1,$(MB_ETHER)),mbether,)))
 
 check:
 	./check_console.sh $(BUILD)/xsim-$(MACHINE)$(RUNTAG)/console.log $(MACHINE) $(FITTED)
@@ -178,4 +190,4 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: all rom xsim board board-check board-phy iverilog check clean
-.PHONY: clkgen adapter migddr3 dvma phy mbether scanout screenshot
+.PHONY: clkgen adapter migddr3 dvma phy mbether xy450 scanout screenshot

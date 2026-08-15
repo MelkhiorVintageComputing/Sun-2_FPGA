@@ -47,6 +47,23 @@ module top(input         cpu_clk,
 	   input 	 mii_crs,
 	   input 	 mii_col,
 
+	   /* The block back end the Xylogics 450 keeps its sectors on.  Brought
+	    out here for the same reason the MII pins are: what sits on the far
+	    end is an SD card on the board and a file-backed model in
+	    simulation, and the machine does not care which.  The contract is
+	    Inputs/Wish5380/doc/block.md.  Tied off when no card is fitted. */
+	   output 	 blk_start,
+	   output 	 blk_we,
+	   output [31:0] blk_lba,
+	   output [7:0]  blk_buf_rdata,
+	   input 	 blk_done,
+	   input 	 blk_err,
+	   input 	 blk_ready,
+	   input [31:0]  blk_count,
+	   input 	 blk_buf_we,
+	   input [8:0] 	 blk_buf_addr,
+	   input [7:0] 	 blk_buf_wdata,
+
 	   /* wishbone */
 	   output 	 wb_cyc_o,
 	   output 	 wb_stb_o,
@@ -105,6 +122,14 @@ module top(input         cpu_clk,
    wire [15:0] mb_cpu_dout;    // CPU -> card
    wire [15:0] mb_card_dout;   // card -> CPU
    wire        mb_ether_int;
+
+   // MultiBus I/O space, a separate set of wires because it is a separate
+   // address space -- see the port comment in sun2_fpga.v.
+   wire        mbio_sel, mbio_we, mbio_uds_n, mbio_lds_n, mbio_hit, mbio_ack;
+   wire [15:0] mbio_addr;
+   wire [15:0] mbio_cpu_dout;  // CPU -> card
+   wire [15:0] mbio_card_dout; // card -> CPU
+   wire        mbio_int;
    
    
    sun2_fpga sun2(.cpu_clk(cpu_clk),
@@ -165,6 +190,16 @@ module top(input         cpu_clk,
 		  .mb_din(mb_card_dout),
 		  .mb_hit(mb_hit),
 		  .mb_ack(mb_ack),
+		  .mbio_sel(mbio_sel),
+		  .mbio_addr(mbio_addr),
+		  .mbio_we(mbio_we),
+		  .mbio_uds_n(mbio_uds_n),
+		  .mbio_lds_n(mbio_lds_n),
+		  .mbio_dout(mbio_cpu_dout),
+		  .mbio_din(mbio_card_dout),
+		  .mbio_hit(mbio_hit),
+		  .mbio_ack(mbio_ack),
+		  .mbio_int(mbio_int),
 
 		  .diag_leds(diag_leds),
 		  .en_boot(en_boot),
@@ -322,6 +357,20 @@ module top(input         cpu_clk,
    assign mb_hit        = 1'b0;
    assign mb_ack        = 1'b0;
    assign mb_ether_int  = 1'b0;
+
+   // ... and no MultiBus I/O space either.  A 2/50 has TYPE 3 for the top half
+   // of the VME bus instead, which is not implemented.
+   assign mbio_card_dout = 16'h0;
+   assign mbio_hit       = 1'b0;
+   assign mbio_ack       = 1'b0;
+   assign mbio_int       = 1'b0;
+
+   // No disk on this machine either: the 2/50's Xylogics is a 451 on the VME
+   // bus, which is a different card in a different space.
+   assign blk_start      = 1'b0;
+   assign blk_we         = 1'b0;
+   assign blk_lba        = 32'h0;
+   assign blk_buf_rdata  = 8'h0;
 `else
    //
    // MultiBus: nothing on board.  The 2/120's device page 1 is an 80287
@@ -337,6 +386,7 @@ module top(input         cpu_clk,
    assign ether_int     = mb_ether_int;
    assign ether_bus_err = 1'b0;
 
+ `ifndef SUN2_XY450
    assign dvma_active   = 1'b0;
    assign dvma_a        = 23'h0;
    assign dvma_fc       = 3'h0;
@@ -346,6 +396,7 @@ module top(input         cpu_clk,
    assign dvma_lds_n    = 1'b1;
    assign dvma_dout     = 16'h0;
    assign P_BR_n        = 1'b1;
+ `endif
 
  `ifdef SUN2_MB_ETHER
    //
@@ -396,6 +447,114 @@ module top(input         cpu_clk,
    assign mb_hit        = 1'b0;
    assign mb_ack        = 1'b0;
    assign mb_ether_int  = 1'b0;
+ `endif
+
+ `ifdef SUN2_XY450
+   //
+   // The Xylogics 450 disk controller, in MultiBus I/O space.  See
+   // rtl/sun2-multibus/sun2_xy450.sv.  Only controller 0 is fitted, so the
+   // PROM's probe of the second address, 0xEE48, still has to time out.
+   //
+   // This is the first MultiBus *master* in the design.  The card fetches its
+   // command block and moves its data itself, and on a Sun-2 that means DVMA:
+   // MultiBus address X is virtual 0xF00000 + X, supervisor data, through the
+   // MMU.  sun2_dvma turns its Wishbone accesses into 68010 bus cycles, which
+   // is the same job it does for the 2/50's on-board Ethernet -- the module is
+   // compiled into both builds already and needed no change.
+   //
+   wire        xy_wb_cyc, xy_wb_stb, xy_wb_we, xy_wb_ack, xy_wb_err, xy_wb_clr;
+   wire [3:0]  xy_wb_sel;
+   wire [21:0] xy_wb_adr;
+   wire [31:0] xy_wb_dat_o, xy_wb_dat_i;
+
+   sun2_xy450 #(.IO_BASE(`XY450_IO_BASE)) xy450
+     (.CLK(C100),
+      .RESET(sys_reset),
+
+      .mbio_sel(mbio_sel),
+      .mbio_addr(mbio_addr),
+      .mbio_we(mbio_we),
+      .mbio_uds_n(mbio_uds_n),
+      .mbio_lds_n(mbio_lds_n),
+      .mbio_din(mbio_cpu_dout),
+      .mbio_dout(mbio_card_dout),
+      .mbio_hit(mbio_hit),
+      .mbio_ack(mbio_ack),
+
+      .int_o(mbio_int),
+
+      .wb_cyc_o(xy_wb_cyc),
+      .wb_stb_o(xy_wb_stb),
+      .wb_we_o(xy_wb_we),
+      .wb_sel_o(xy_wb_sel),
+      .wb_adr_o(xy_wb_adr),
+      .wb_dat_o(xy_wb_dat_o),
+      .wb_dat_i(xy_wb_dat_i),
+      .wb_ack_i(xy_wb_ack),
+      .wb_err_i(xy_wb_err),
+      .wb_clr_o(xy_wb_clr),
+
+      .blk_start(blk_start),
+      .blk_we(blk_we),
+      .blk_lba(blk_lba),
+      .blk_buf_rdata(blk_buf_rdata),
+      .blk_done(blk_done),
+      .blk_err(blk_err),
+      .blk_ready(blk_ready),
+      .blk_count(blk_count),
+      .blk_buf_we(blk_buf_we),
+      .blk_buf_addr(blk_buf_addr),
+      .blk_buf_wdata(blk_buf_wdata)
+      );
+
+   sun2_dvma xy_dvma(.CLK(C100),
+		     .RESET(sys_reset),
+
+		     .wb_cyc_i(xy_wb_cyc),
+		     .wb_stb_i(xy_wb_stb),
+		     .wb_we_i(xy_wb_we),
+		     .wb_sel_i(xy_wb_sel),
+		     .wb_adr_i(xy_wb_adr),
+		     .wb_dat_i(xy_wb_dat_o),
+		     .wb_dat_o(xy_wb_dat_i),
+		     .wb_ack_o(xy_wb_ack),
+		     .wb_err_o(xy_wb_err),
+
+		     .EN_DVMA(EN_DVMA),
+		     .P_BR_n(P_BR_n),
+		     .P_BG_n(P_BG_n),
+		     .BUS_EN(BUS_EN),
+		     .cpu_as_n(cpu_as_n),
+
+		     .dvma_active(dvma_active),
+		     .dvma_a(dvma_a),
+		     .dvma_fc(dvma_fc),
+		     .dvma_as_n(dvma_as_n),
+		     .dvma_rw_n(dvma_rw_n),
+		     .dvma_uds_n(dvma_uds_n),
+		     .dvma_lds_n(dvma_lds_n),
+		     .dvma_dout(dvma_dout),
+		     .dvma_din(P_DOUT),
+		     .P_DTACK_n(P_DTACK_n),
+		     .P_BERR_n(P_BERR_n),
+
+		     // The error latch is named for the Ethernet card it was
+		     // written for.  A disk controller reports a fault in its
+		     // IOPB and carries on, so the card clears it itself before
+		     // every command rather than needing a reset.
+		     .ether_reset(xy_wb_clr),
+		     .dvma_err()
+		     );
+ `else
+   assign mbio_card_dout = 16'h0;
+   assign mbio_hit       = 1'b0;
+   assign mbio_ack       = 1'b0;
+   assign mbio_int       = 1'b0;
+
+   assign blk_start      = 1'b0;
+   assign blk_we         = 1'b0;
+   assign blk_lba        = 32'h0;
+   assign blk_buf_rdata  = 8'h0;
  `endif
 `endif
 

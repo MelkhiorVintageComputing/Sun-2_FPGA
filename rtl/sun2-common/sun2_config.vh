@@ -188,6 +188,34 @@
 `endif
 
 //---------------------------------------------------------------------
+// The Xylogics 450 disk controller
+//---------------------------------------------------------------------
+// A Xylogics 450 in the MultiBus card cage, with its four SMD drives replaced
+// by one SD card.  See rtl/sun2-multibus/sun2_xy450.sv.
+//
+// Unlike the Ethernet card, this one is a bus *master*: it fetches its command
+// block from memory and moves the data itself, through DVMA -- MultiBus memory
+// address X becomes virtual 0xF00000 + X, supervisor data, through the MMU.
+// That is the same path rtl/sun2-vme/sun2_dvma.v drives for the 2/50's
+// Ethernet, and it is why a MultiBus machine with a disk has a DVMA master
+// where it never had one before.
+//
+// Its registers are six bytes in MultiBus *I/O* space, page-map TYPE 3, which
+// is a different space from the TYPE 2 the Ethernet card lives in.  The boot
+// PROM knows two addresses and probes both -- 0xEE40 for controller 0 and
+// 0xEE48 for controller 1 (msun/mon/prom2/xy.c: `xystd[]`) -- and only one
+// controller is built, so the 0xEE48 probe must still time out.
+//
+// Optional and off by default, like every other card: the 23,629-bus-error
+// regression fingerprint describes a 2/120 with an empty cage.
+//
+//`define SUN2_XY450
+
+`ifndef XY450_IO_BASE
+ `define XY450_IO_BASE 16'hEE40
+`endif
+
+//---------------------------------------------------------------------
 // The frame buffer
 //---------------------------------------------------------------------
 // The Sun-2 monochrome frame buffer: 1152x900, one bit per pixel, in a 128 KiB

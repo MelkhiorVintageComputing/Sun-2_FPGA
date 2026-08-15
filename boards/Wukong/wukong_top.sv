@@ -86,6 +86,23 @@ module wukong_top #(
     output wire        tmds_clk_p,       // D4
     output wire        tmds_clk_n,       // C4
 
+`ifdef SUN2_XY450
+    // The micro-SD slot the Xylogics 450's platters became: J9 on a Wukong V3,
+    // and a PMOD on a V1, which has no card slot at all.  SPI mode uses four
+    // of the six lines; the pins are in syn/wukong_sd_v1.xdc and
+    // syn/wukong_sd_v3.xdc, which are read only when XY450=1.
+    //
+    // Unlike the HDMI pins these are conditional, because they are the only
+    // ports on this module with nowhere to go on one of the two boards: a
+    // build without a disk would leave them unconstrained and the bitstream
+    // DRC would refuse it.
+    output wire        sd_clk,           // CLK
+    output wire        sd_cmd,           // CMD  -> MOSI
+    input  wire        sd_dat0,          // DAT0 -> MISO
+    output wire        sd_dat3,          // DAT3 -> /CS
+    input  wire        sd_cd,            // card detect
+`endif
+
 `ifdef BOARD_MEM_FAST
     // Simulation only: the Wishbone port, straight out
     output wire        wb_cyc_o,
@@ -303,6 +320,50 @@ module wukong_top #(
        .full_duplex (phy_fd)
    );
 
+   // ------------------------------------------------------------------
+   // The disk
+   // ------------------------------------------------------------------
+   // blk_sd comes from Inputs/Wish5380 unchanged -- an SD card in SPI mode
+   // behind the block interface its doc/block.md defines.  It was written for
+   // an NCR 5380, which is a different controller for a different machine, but
+   // the seam is deliberately narrow enough that neither end knows.
+   //
+   // The Xylogics runs on cpu_clk (sun2_fpga's C100 is cpu_clk when
+   // CPU_CLK_MULTIPLE_SERIAL is off, which it is), and the block interface has
+   // no clock crossing in it, so the back end runs there too.  blk_sd divides
+   // that down itself: 400 kHz to bring the card up, then 25 MHz.
+   // blk_req_t and blk_rsp_t are declared at file scope in wish5380_pkg.sv
+   // rather than inside the package -- see the note on interfaces in
+   // Inputs/Wish5380/doc/block.md -- so they are compilation-unit types and
+   // there is nothing to qualify or import.  All of this is one xvlog call.
+   blk_req_t blk_req;
+   blk_rsp_t blk_rsp;
+
+`ifdef SUN2_XY450
+   // In picoseconds, computed in two steps: Vivado's Verilog parser rejects a
+   // decimal constant of 1e12 outright -- "should be smaller than 2147483648"
+   // -- and silently substitutes a negative number.  xsim takes it without a
+   // murmur, so this only shows up at synthesis.
+   localparam int SD_CLK_PERIOD_PS = 1_000_000_000 / (CPU_CLK_HZ / 1000);
+
+   blk_sd #(.CLK_PERIOD_PS(SD_CLK_PERIOD_PS)) sdcard (
+       .clk_i(cpu_clk),
+       .rst_i(sys_reset),
+       .blk_i(blk_req),
+       .blk_o(blk_rsp),
+       .sd_clk_o(sd_clk),
+       .sd_cs_n_o(sd_dat3),
+       .sd_mosi_o(sd_cmd),
+       .sd_miso_i(sd_dat0)
+   );
+   // Card detect is an input with a pull-up and a switch to ground; nothing
+   // reads it yet.  blk_sd finds out whether there is a card by talking to it,
+   // which is the only answer that means anything.
+   wire _unused_sd_cd = sd_cd;
+`else
+   assign blk_rsp = '0;
+`endif
+
    top machine (
        .cpu_clk    (cpu_clk),
        // clk40 is unused inside sun2_fpga -- the only thing that ever read it
@@ -340,6 +401,19 @@ module wukong_top #(
        .mii_rx_er  (phy_mii_rx_er),
        .mii_crs    (phy_mii_crs),
        .mii_col    (phy_mii_col),
+
+       // The Xylogics 450's media: the micro-SD slot, through blk_sd.
+       .blk_start     (blk_req.start),
+       .blk_we        (blk_req.we),
+       .blk_lba       (blk_req.lba),
+       .blk_buf_rdata (blk_req.buf_rdata),
+       .blk_done      (blk_rsp.done),
+       .blk_err       (blk_rsp.err),
+       .blk_ready     (blk_rsp.ready),
+       .blk_count     (blk_rsp.count),
+       .blk_buf_we    (blk_rsp.buf_we),
+       .blk_buf_addr  (blk_rsp.buf_addr),
+       .blk_buf_wdata (blk_rsp.buf_wdata),
 
        .wb_cyc_o   (wb_cyc),
        .wb_stb_o   (wb_stb),
