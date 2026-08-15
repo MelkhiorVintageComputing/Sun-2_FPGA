@@ -219,6 +219,14 @@ Then the machine should say `Probing Multibus: xy` and auto-boot into it.
   the bytes are wrong. Byte order is the first suspect; a label read with the
   sector bytes swapped still passes the checksum and fails only on the magic.
 
+**The interrupt has been exercised, once.** `make -C sim xychain` boots a
+68010 program off the disk that installs a level-2 autovector handler and
+drives chained IOPBs, which is the only thing in this design that has ever
+taken an interrupt from a MultiBus card. If the disk works but the machine
+seems to stall under load, that path -- IPND as a level, the 74LS148 encoder,
+`EN_INT` in the system enable register -- is where to look, and that target is
+how to look at it.
+
 **No SD card model is simulated.** The block seam is what makes everything
 above it testable without one -- `make -C sim xy450` runs the whole controller
 against a file -- and per the rule at the top of this list, a card model
@@ -239,9 +247,9 @@ that misbehaves, that is the moment to write one.
   track-header commands and the defect map all need real per-sector headers,
   which an SD card has no room for; `/stand/diag` will get an error. Images are
   made with `tools/mkxydisk` on the host.
-* **The disk controller does not chain IOPBs.** The boot PROM never does, so
-  booting is unaffected; a running SunOS would notice, and that is the natural
-  next piece of work.
+* **No overlapped seeking.** EEF is accepted and ignored. With one drive there
+  is nothing to overlap and IOPBs completing in chain order is explicitly
+  legal; it becomes worth revisiting if drives 1-3 are ever fitted.
 * **Only one drive, unit 0**, and only one controller. The PROM probes
   `0xEE48` for a second and has to find nothing there.
 

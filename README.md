@@ -120,6 +120,7 @@ make -C sim xsim MEM=sim_only           # 512 KiB in-core SRAM instead of Wishbo
 make -C sim xsim ROM=pristine           # this machine's unmodified PROM (very slow)
 make -C sim xsim MACHINE=vme            # be a Sun 2/50 (VME) instead of a 2/120
 make -C sim xsim XY450=1                # fit the Xylogics 450 disk (MultiBus only)
+make -C sim xychain                     # drive chained IOPBs from inside the machine
 make -C sim xsim MEM_LATENCY=7          # memory as slow as the real DDR3 path
 make -C sim xsim XSIMARGS="-testplusarg trace_dvma=16"   # Ethernet bus mastering
 make -C sim xsim XSIMARGS="-testplusarg trace_irq=20"     # timer/interrupt activity
@@ -694,16 +695,63 @@ off-the-shelf micro-SD PMOD expects — a convention, not a measurement; see
 and an ordinary file behind it, which is what makes the whole controller
 testable without simulating a card at all.
 
-`make -C sim xy450` is the unit test: 68 checks, all replays of real code —
+**It chains.** The 450 executes a linked list of IOPBs from one Go: each
+command byte's CHEN bit says whether to follow that IOPB's Next IOPB Address,
+relocated by the same registers as the head, so a chain lives inside one 64 KiB
+block. SunOS builds one per interrupt — at most one IOPB per drive plus the
+controller's own, so five — and expects **one interrupt at the end**, not one
+per IOPB: `xyasynch()` sets `xy_ie` and clears `xy_intrall` (`xy.c:709-716`),
+and a second interrupt would be read as the *next* chain completing.
+
+Two details of the chain walk are load-bearing and neither is obvious.
+
+* **`xy_nxtoff` is only valid when CHEN is set.** `xychain()` clears
+  `xy_chain` on the tail of every chain and never clears the offset beside it
+  (`xy.c:744-745`), so the tail carries a live-looking pointer left over from
+  whichever chain that IOPB was in the middle of last time. Following it is a
+  DMA into the previous transfer's buffer.
+* **A hard error stops the chain where it happened.** Everything behind the
+  failure must come back untouched, `xy_complete` still clear, because
+  `xyintr()` skips those and `xychain()` re-issues them verbatim — *"If the
+  done bit isn't set, we just ignore the iopb; it will get chained up and
+  executed again"* (`xy.c:1798-1801`).
+
+That last sentence is also why the single-IOPB controller this replaced worked
+at all: SunOS handles a card that runs only the head. Chaining buys fidelity,
+throughput and fairness rather than correctness, and with one drive fitted a
+chain is at most two IOPBs long.
+
+**SunOS 3.4 never uses the Attention protocol.** `XY_ATTN` and `XY_ACK` are
+declared in `sundev/xycreg.h` and referenced by no C file in the tree; the
+driver only ever touches the controller between chains. It is implemented here
+anyway, because AACK means "the chain is standing still and you may edit it"
+and granting it mid-transfer — which is what this did before there was a chain
+to protect — invites a driver that does use it, such as 4.x's, to rewrite a
+link the controller is about to follow.
+
+`make -C sim xy450` is the unit test: 102 checks, all replays of real code —
 `xyprobe()` from both drivers, the controller reset, a NOP that has to report
 controller type 1, a read of block 0 checked with `chklabel()`'s own checksum,
 Set Drive Size, write-then-read, a two-sector transfer across the head
-boundary, and every completion code a driver in the tree tests for by name.
+boundary, every completion code a driver in the tree tests for by name, and
+the chain cases — one interrupt for a chain of five, a stale tail pointer that
+must not be followed, an error that stops the chain dead, a chain that points
+at itself, and the Attention handshake.
+
+`make -C sim xychain` is the other half, and the only thing in this design that
+has ever taken an interrupt from a MultiBus card. `tools/xychain` is a 68010
+program built with an m68k cross-compiler, written on to the disk by
+`mkxydisk --boot` and loaded by the boot PROM like any other boot block. It
+builds chains in the DVMA window, drives them through the real MMU while the
+CPU competes for the bus, installs a level-2 autovector handler at `0x68` and
+counts the interrupts. Among other things it reads back the sector that
+contains its own first page and compares it against the copy it is executing.
 
 What is deliberately not there: formatting (Write Format, the track-header
 commands and the defect map all need real per-sector headers, which an SD card
-has no room for), ECC, command chaining and the Attention protocol, a second
-controller at `0xEE48`, and 24-bit addressing.
+has no room for), ECC, overlapped seeking (EEF is accepted and ignored — with
+one drive there is nothing to overlap and completing in chain order is
+explicitly legal), a second controller at `0xEE48`, and 24-bit addressing.
 
 ### Everything else
 

@@ -42,6 +42,7 @@ make -C sim clkgen     # measures what the MMCMs actually generate
 make -C sim phy        # phy_rtl8211_init against an independent clause-22 PHY model
 make -C sim mbether    # the MultiBus Ethernet card, driven as the boot PROM drives it
 make -C sim xy450      # the Xylogics 450 disk controller, against a real disk image
+make -C sim xychain    # boots a 68010 program that drives chained IOPBs and takes the interrupt
 make -C sim scanout    # fb_scanout: every pixel of a frame, against a known pattern
 ```
 
@@ -132,8 +133,20 @@ through the MMU, reusing `rtl/sun2-vme/sun2_dvma.v` unchanged. Media is an SD
 card on a V3, a file in simulation, behind the block seam
 `Inputs/Wish5380/doc/block.md` defines.
 
-Two facts about it that are easy to get wrong and fail quietly. **The PROM
-remaps the DVMA window before every boot** — `FAKES1BOOT` is unconditional, so
+It **chains**: CHEN in an IOPB's command byte says to follow that IOPB's Next
+IOPB Address, relocated by the same registers as the head. Two things there
+fail quietly. `xy_nxtoff` is **only valid when CHEN is set** — `xychain()`
+clears `xy_chain` on the tail and leaves a stale offset beside it
+(`xy.c:744-745`), so following it unconditionally is a DMA into the previous
+transfer's buffer. And the driver wants **one interrupt at the end of a chain,
+not one per IOPB**: `xyasynch()` sets `xy_ie` and clears `xy_intrall`, and a
+second interrupt is read as the *next* chain completing. Note also that SunOS
+3.4 never uses the Attention protocol at all — `XY_ATTN`/`XY_ACK` appear in no
+C file in the tree — so AREQ/AACK exists here for 4.x and for not lying to a
+driver that does use it.
+
+Two more facts, about how it reaches memory. **The PROM remaps the DVMA window
+before every boot** — `FAKES1BOOT` is unconditional, so
 `setupmap(fakemapinit2)` puts virtual `0xF00000`–`0xF3FFFF` on physical
 `0xC0000` as ordinary memory, which is why a disk needs at least 1 MiB
 installed and why the steady-state TYPE 2 mapping is a red herring. And **the
