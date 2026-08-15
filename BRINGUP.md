@@ -169,13 +169,61 @@ to check rather than a symptom of failure.
   seeing it means the SCC is not decoding -- type 0 page 0xF00.
 
 Both boards close timing with it: V1 at WNS 1.281, V3 at 1.262 as a 2/50 and
-0.969 as a 2/120. **The one thing simulation cannot answer** is whether the
+0.969 as a 2/120; with a disk as well, V3 gives 1.248. **The one thing simulation cannot answer** is whether the
 part really drives 1.485 Gb/s per TMDS lane. The 5x clock is on a plain BUFG, above what an Artix-7 is rated for,
 which is what QMTech's own 1080p design for this board does; there is no
 failing timing path because the clock only feeds OSERDES hard blocks, so the
 tools have nothing to report either way. If the screen is unstable or the sink
 will not lock, that is where to look, and the fix is 1080p30 -- VIDEO_ID_CODE
 34 in `wukong_top.sv`, half the serial rate for the same picture.
+
+### The disk, if it is built
+
+`make -C syn bitstream XY450=1 BOARD=v3` fits the Xylogics 450 and drives the
+V3's micro-SD slot, J9 -- CLK on L4, CMD on J8, DAT0 on M5, DAT3 as /CS on J6,
+card detect on N6.
+
+**A V1 has no card slot at all**, so `BOARD=v1` puts the four SPI lines on PMOD
+**J11** instead, in the Digilent Type 2 (SPI) order an off-the-shelf micro-SD
+PMOD expects: /CS on H4, MOSI on F4, MISO on A4, SCK on A5. That is a
+convention rather than a measurement -- nothing has ever been plugged in there
+-- so check it against whatever breakout is actually used before trusting it.
+See `syn/wukong_sd_v1.xdc`.
+
+Put an image on the card first. `tools/mkxydisk` writes a labelled, bootable
+one; it goes on the card raw, at LBA 0, with no partition table and no
+filesystem:
+
+```sh
+tools/mkxydisk -o xy0.img
+sudo dd if=xy0.img of=/dev/sdX bs=1M conv=fsync    # the whole card is the disk
+```
+
+Then the machine should say `Probing Multibus: xy` and auto-boot into it.
+
+* **`Probing Multibus:` with nothing after it:** the card is not answering its
+  registers at all. That is six bytes in MultiBus I/O space and nothing to do
+  with the SD card -- it fails the same way with no card inserted, so an empty
+  slot rules the SD side out.
+* **`Waiting for disk to spin up...`:** the registers work and the media does
+  not. `blk_sd` never came ready, which means the card never finished its SPI
+  init: CMD0, CMD8, ACMD41, CMD58, CMD9. This is the first thing on this board
+  that depends on real signal integrity at 25 MHz on four unbuffered lines.
+* **`xy: error 5 cmd 2`:** Header Not Found, which here means the block was
+  past the end of the media. Either the card is smaller than the label claims
+  or `blk_count` came back wrong from CMD9.
+* **`xy: error e cmd 2`:** Slave Acknowledge Error -- a DVMA cycle that nothing
+  answered. That is the machine, not the disk: check that the memory reaches
+  physical `0xC0000`, because the boot map puts the DVMA window there.
+* **`No label found - attempting boot anyway.`:** the sectors are moving and
+  the bytes are wrong. Byte order is the first suspect; a label read with the
+  sector bytes swapped still passes the checksum and fails only on the magic.
+
+**No SD card model is simulated.** The block seam is what makes everything
+above it testable without one -- `make -C sim xy450` runs the whole controller
+against a file -- and per the rule at the top of this list, a card model
+belongs here rather than being built speculatively. If the card is the thing
+that misbehaves, that is the moment to write one.
 
 ### Known limits, not bugs
 
@@ -187,6 +235,15 @@ will not lock, that is where to look, and the fix is 1080p30 -- VIDEO_ID_CODE
 * **Link-change interrupts** are unavailable: INTB is not routed. The status
   register polls, and the boot PROM polls anyway.
 * **Actually net-booting** needs an ND server, not more hardware.
+* **The disk cannot be formatted from the machine.** Write Format, the
+  track-header commands and the defect map all need real per-sector headers,
+  which an SD card has no room for; `/stand/diag` will get an error. Images are
+  made with `tools/mkxydisk` on the host.
+* **The disk controller does not chain IOPBs.** The boot PROM never does, so
+  booting is unaffected; a running SunOS would notice, and that is the natural
+  next piece of work.
+* **Only one drive, unit 0**, and only one controller. The PROM probes
+  `0xEE48` for a second and has to find nothing there.
 
 ### Bandwidth, still only half measured
 

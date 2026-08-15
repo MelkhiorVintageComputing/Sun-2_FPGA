@@ -15,7 +15,8 @@ make -C sim xsim MACHINE=vme              # boot the VME 2/50 instead
 make -C sim check MACHINE=vme             # pass/fail on the console log
 make -C sim board [BOARD_MEM=ddr3]        # the machine as it will be on the Wukong
 make -C syn ip [BOARD=v3]                 # generate the MIG DDR3 controller (once per board)
-make -C syn bitstream [MACHINE=vme] [CPU_HZ=40000000] [BOARD=v3]
+make -C syn bitstream [MACHINE=vme] [CPU_HZ=40000000] [BOARD=v3] [XY450=1]
+tools/mkxydisk -o build/disk/xy0.img       # a labelled, bootable disk image
 ```
 
 Simulation knobs that matter, all on `make -C sim xsim`:
@@ -27,6 +28,7 @@ Simulation knobs that matter, all on `make -C sim xsim`:
 | `MEM_LATENCY=7` | memory as slow as the real DDR3 path; 0 (the default) is a one-cycle memory |
 | `MB_ETHER=1` | MultiBus only: fit the Sun-2 Ethernet card in the cage. Off by default, because the 23,629 fingerprint is the machine *without* it |
 | `FB=1` | fit the frame buffer, either machine. Changes what the machine looks like — with a display the console goes to the screen and the serial port falls silent. On MultiBus it also builds the keyboard/mouse SCC, which is on the video board |
+| `XY450=1` | MultiBus only: fit the Xylogics 450 disk controller. Needs `MEM_MIB=1` or more and `-testplusarg blk_image=<abs path>`; `tools/mkxydisk` writes one |
 | `TIMEOUT_MS=` | simulated milliseconds before giving up |
 | `XSIMARGS="-testplusarg trace_dvma=16"` | also `trace_irq`, `heartbeat_ms`, `crs_stuck`, `vcd_full` |
 
@@ -39,6 +41,7 @@ make -C sim migddr3    # the adapter against the real MIG + Micron DDR3, reports
 make -C sim clkgen     # measures what the MMCMs actually generate
 make -C sim phy        # phy_rtl8211_init against an independent clause-22 PHY model
 make -C sim mbether    # the MultiBus Ethernet card, driven as the boot PROM drives it
+make -C sim xy450      # the Xylogics 450 disk controller, against a real disk image
 make -C sim scanout    # fb_scanout: every pixel of a frame, against a known pattern
 ```
 
@@ -120,6 +123,25 @@ With nothing plugged in the timeout must still fire, because that is how the
 PROM's probes discover empty addresses — a blanket TYPE 2 decode makes the
 machine hallucinate a 3Com at `0xE0000`.
 
+**The disk is the only bus master a MultiBus build has.** `rtl/sun2-multibus/sun2_xy450.sv`
+is a Xylogics 450: six bytes of registers in MultiBus **I/O** space (page-map
+TYPE 3, which is a *second* space port beside the TYPE 2 one and was not
+decoded at all before), and everything else by DVMA — the controller fetches
+its own 24-byte IOPB and moves its own sectors, at virtual `0xF00000 + X`
+through the MMU, reusing `rtl/sun2-vme/sun2_dvma.v` unchanged. Media is an SD
+card on a V3, a file in simulation, behind the block seam
+`Inputs/Wish5380/doc/block.md` defines.
+
+Two facts about it that are easy to get wrong and fail quietly. **The PROM
+remaps the DVMA window before every boot** — `FAKES1BOOT` is unconditional, so
+`setupmap(fakemapinit2)` puts virtual `0xF00000`–`0xF3FFFF` on physical
+`0xC0000` as ordinary memory, which is why a disk needs at least 1 MiB
+installed and why the steady-state TYPE 2 mapping is a red herring. And **the
+byte-address inversion applies to the IOPB but not to sector data**: MultiBus
+numbers bytes little-endian, so IOPB byte *N* is at offset *N*^1, while data
+moves in word mode and lands straight. Get the second one wrong and the label
+still checksums — it reads `0xBEDA` instead of `0xDABE`.
+
 **Mixed language, and the distinctions are load-bearing.** The MC68010
 (`Inputs/Suska_Configware/68K10`) is VHDL and needs `-2008`. The Sun-2 gateware
 in `rtl/sun2-common/*.v` must be compiled as **Verilog-2001, not SystemVerilog**. The SCC,
@@ -159,15 +181,41 @@ the PROM's own page-map diagnostics, so the count is a sensitive fingerprint of
 MMU and bus behaviour. Check it after anything touching shared logic, not just
 after machine-specific work.
 
-Fitting a card changes the fingerprint, which is why the reference has none:
-`FB=1` gives **23,628** at `TIMEOUT_MS=3000` and `MB_ETHER=1 FB=1` gives
-23,625. The frame buffer's one missing error is the `0xEC0000` probe that used
-to time out.
+Fitting a card changes the fingerprint, which is why the reference has none,
+and the changes add up: `FB=1` gives **23,628**, `MB_ETHER=1` gives **23,626**,
+and both together give **23,625**. Each missing error is a probe that used to
+time out -- one at `0xEC0000` for the display, three for the Ethernet card --
+so 23,629 - 1 - 3 is exactly the pair. A count that does not decompose that way
+is worth running down before anything else.
+
+A disk changes it more, because a successful boot ends the run sooner than a
+failed one: `XY450=1` with an image, stopping at the boot block rather than at
+the prompt, gives **23,617** —
+
+```sh
+make -C sim xsim MEM_MIB=1 ROM=fast XY450=1 STOP_ON="running." \
+     XSIMARGS="-testplusarg blk_image=$PWD/build/disk/xy0.img"
+```
+
+and the stop string has to be one word, because `sim/Makefile` passes it to
+xsim unquoted.  A 2/120 with all three cards -- `XY450=1 MB_ETHER=1 FB=1` at
+`TIMEOUT_MS=8000` -- gives **23,615**, with the console on the screen and the
+serial port silent; `make -C sim screenshot MACHINE=multibus MB_ETHER=1 FB=1
+XY450=1` renders what it drew, which is the only artefact that shows the whole
+machine working at once.
 
 Unit tests are expected to earn their keep: mutate the RTL, confirm the test
 fails, revert. `tb/tb_dvma.sv` was written this way and still missed a real
 timing bug once, because its memory model answered a cycle sooner than the
-machine does.
+machine does. `tb/tb_xy450.sv` missed two the same way and both are worth knowing
+about. Every transfer in it was a round trip to the same address, so a wrong
+cylinder/head/sector-to-block map was still its own inverse and passed; it now
+reads the block number out of the media model directly, at a cylinder *and* a
+head that are both non-zero. And its memory model answered errors without
+remembering them, while the real `sun2_dvma` latches a bus error and stops the
+channel until told to forget it — modelling that latch immediately exposed a
+real bug, where a bad *data* address also killed the status writeback and the
+IOPB came back with the driver's own zeroes in it, reading as success.
 
 ## Traps that have already cost time
 

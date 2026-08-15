@@ -15,13 +15,13 @@ It also builds into a timing-clean bitstream for a QMTech Wukong V1
 | Path | What |
 |---|---|
 | `rtl/sun2-common/` | the Sun-2 gateware shared by both machines: bus, MMU, PROM, timer, registers, Wishbone bridge |
-| `rtl/sun2-multibus/` | what only a 2/120 has — the MultiBus Ethernet card |
+| `rtl/sun2-multibus/` | what only a 2/120 has — the MultiBus Ethernet card and the Xylogics 450 disk controller |
 | `rtl/sun2-vme/` | what only a 2/50 has — on-board Ethernet, its DVMA bridge, the PHY status register, the video control register |
 | `boards/Wukong/` | the board layer, shared by the Wukong V1 and V3: clock generation, reset, Wishbone-to-DDR3, PHY bring-up, the DDR3 arbiter and the frame buffer's scan-out |
 | `tb/` | testbenches and simulation models |
 | `sim/` | simulation flows |
 | `syn/` | FPGA build: constraints, MIG configuration, Vivado scripts |
-| `tools/` | boot PROM preparation |
+| `tools/` | boot PROM preparation, and `mkxydisk` for disk images |
 | `Inputs/` | third-party and reference material — **immutable** |
 | `Old/` | the previous working implementation, kept for reference — not in git, never modified |
 
@@ -61,6 +61,10 @@ The sources under `Inputs/`:
   has both machines' page-map setup side by side, and `mon/h/buserr.h` documents
   register semantics no manual spells out. Reach for it before guessing at
   what a PROM is doing.
+* `Wish5380` — an NCR 5380 SCSI controller, which this design does not use.
+  What it is here for is `src/blk_sd.sv` and `src/sd_spi.sv`: a tested SD-card
+  block back end with a documented seam (`doc/block.md`), which the Xylogics
+  450 keeps its sectors on. The SCSI half is not compiled.
 * `hdmi` — [hdl-util/hdmi](https://github.com/hdl-util/hdmi), the HDMI
   transmitter behind the frame buffer: TMDS encoding, the 10:1 serialisers and
   CEA-861 video timing, used at VIDEO_ID_CODE 16 (1920×1080p60) with
@@ -69,8 +73,9 @@ The sources under `Inputs/`:
 * `sun250_prom_combined.bin` — boot PROM of a VME Sun 2/50, used by
   `MACHINE=vme` (see [Which machine](#which-machine)).
 * `doc/` — the Sun-2 Architecture Manual, the Sun 2/50 schematic and
-  engineering manual, the MC68000 user manual, and the QMTech Wukong board
-  documents. The engineering manual is the one with an OCR text layer, and it
+  engineering manual, the 2/120 video board engineering manual, the Xylogics
+  450 user's manual and schematic, the MC68000 user manual, and the QMTech
+  Wukong board documents. The engineering manual is the one with an OCR text layer, and it
   carries the U214/U215 PAL listings — the DVMA arbiter's actual equations.
 
 ## Running the simulation
@@ -114,6 +119,7 @@ make -C sim xsim TIMEOUT_MS=8000        # simulated milliseconds before giving u
 make -C sim xsim MEM=sim_only           # 512 KiB in-core SRAM instead of Wishbone
 make -C sim xsim ROM=pristine           # this machine's unmodified PROM (very slow)
 make -C sim xsim MACHINE=vme            # be a Sun 2/50 (VME) instead of a 2/120
+make -C sim xsim XY450=1                # fit the Xylogics 450 disk (MultiBus only)
 make -C sim xsim MEM_LATENCY=7          # memory as slow as the real DDR3 path
 make -C sim xsim XSIMARGS="-testplusarg trace_dvma=16"   # Ethernet bus mastering
 make -C sim xsim XSIMARGS="-testplusarg trace_irq=20"     # timer/interrupt activity
@@ -600,6 +606,104 @@ Two details worth knowing before touching it, both of which cost time:
 sequences rather than a paraphrase of them — `ieprobe()`'s three bus cycles,
 `ieinit()`'s page-map programming, and then the chip's SCP handshake, which is
 the only check that pins the byte order down.
+
+### A disk: the Xylogics 450, on an SD card
+
+`XY450=1` fits a Xylogics 450 SMD disk controller in the MultiBus cage, with a
+micro-SD card where four fourteen-inch platters used to be. MultiBus only: a
+2/50 takes a Xylogics 451 on the VME bus, which is a different card in a
+different address space.
+
+The machine boots from it:
+
+```
+Probing Multibus: xy
+Auto-boot in progress...
+Boot: xy(0,0,0)vmunix
+Xylogics 450 boot block running.
+```
+
+```sh
+tools/mkxydisk -o build/disk/xy0.img            # a labelled, bootable disk
+make -C sim xsim XY450=1 MEM_MIB=1 ROM=fast STOP_ON="running." \
+     XSIMARGS="-testplusarg blk_image=$PWD/build/disk/xy0.img"
+```
+
+`xy` is the *first* entry in the PROM's `boottab[]`, so a `b` with no argument
+tries a Xylogics before anything else, and `showconfig()` probes for one every
+time the machine starts. Without the card that probe times out and the machine
+reports no boot devices, which is what it did until now.
+
+**The registers are in MultiBus I/O space, page-map TYPE 3**, which nothing in
+this design decoded before. Six bytes at `0xEE40` — the PROM knows `0xEE40` and
+`0xEE48` and probes both, and only controller 0 is fitted, so the second probe
+still has to time out. `sun2_fpga` gains an `mbio_*` port beside `mb_*` on
+exactly the same terms: a *space*, not a device, where a card answers or the
+cycle takes the usual timeout.
+
+**It is the first bus master a MultiBus build has ever had.** The controller
+fetches its 24-byte command block and moves every sector itself, and on a Sun-2
+that means DVMA: MultiBus address X is virtual `0xF00000 + X`, supervisor data,
+through the MMU. `rtl/sun2-vme/sun2_dvma.v` already did that for the 2/50's
+Ethernet and needed no change — only `top_fpga.v` stops tying it off.
+
+Three things about this were not obvious and cost real time to establish.
+
+* **The PROM remaps before every boot.** Its steady-state map has virtual
+  `0xF00000` as a megabyte of TYPE 2, which would send the controller's DVMA
+  cycle straight back out to the bus. But `commands.c:5` is *"Always define it
+  until we finger out what to do with DVMA"*, so `FAKES1BOOT` is unconditional,
+  and both the `b` command and auto-boot run `setupmap(fakemapinit2)` before
+  `boot()` — putting virtual `0xF00000`–`0xF3FFFF`, exactly the 256 KiB DVMA
+  window, on physical page `0x180` as ordinary memory. That table is in the Rev
+  R image at `0xEF6F04`. **A machine with less than 1 MiB installed therefore
+  cannot boot from disk**, because the window lands on physical `0xC0000`;
+  `sun2_fpga` `$fatal`s rather than let it read zeroes.
+* **The byte numbering is inverted, but only for the IOPB.** MultiBus is
+  little-endian and a 68000 is not, so with the data bus wired straight through
+  the two byte numberings disagree by one: `xyaddr->xy_csr` is CPU offset 5 and
+  hardware register `0x44`, and IOPB byte *N* is at offset *N*^1. SunOS's own
+  `struct xydevice` and `struct xyiopb` carry the controller's numbers as
+  comments and declare their fields in swapped pairs. Sector data is *not*
+  inverted: the manual says the IOPB moves in byte mode while data moves in
+  word mode, and no driver in the tree ever sets the byte-mode bit.
+* **The image is a memory image.** Sector byte *K* lands at data address *K*,
+  so `build/disk/xy0.img` is a byte-for-byte copy of what the Sun sees. That is
+  the convention any image anyone can actually produce already has, because the
+  only way to read a Sun-2 disk is through a controller — `dd if=/dev/rxy0a`
+  yields the bytes the controller put in memory, not the bits on the platter.
+
+Geometry is software-defined. The controller keeps four drive-size slots that
+Set Drive Size fills in, and turns cylinder/head/sector into a block number
+with `((cyl * heads) + head) * sectors + sector`. Power-up defaults are the
+manual's Table 2-8, which matters because the PROM reads block 0 with each
+drive type in turn before it has told the controller anything.
+
+`tools/mkxydisk` writes a `dk_label` — magic `0xDABE`, the XOR-of-shorts
+checksum `chklabel()` insists on, geometry and one partition — and a boot
+program in blocks 1 to 15 that prints through the PROM's own `putchar` and
+stops. That is the whole of what `xyboot()` reads before handing over control,
+so it is enough to prove the path end to end without anyone having to find a
+genuine SunOS image first.
+
+On hardware the media is the V3's micro-SD slot (J9), through `blk_sd` and
+`sd_spi` taken unchanged from `Inputs/Wish5380`. **A Wukong V1 has no card slot
+at all**, so that build puts the four SPI lines on PMOD J11 in the order an
+off-the-shelf micro-SD PMOD expects — a convention, not a measurement; see
+`syn/wukong_sd_v1.xdc`. In simulation the same block seam has `tb/blk_file.sv`
+and an ordinary file behind it, which is what makes the whole controller
+testable without simulating a card at all.
+
+`make -C sim xy450` is the unit test: 68 checks, all replays of real code —
+`xyprobe()` from both drivers, the controller reset, a NOP that has to report
+controller type 1, a read of block 0 checked with `chklabel()`'s own checksum,
+Set Drive Size, write-then-read, a two-sector transfer across the head
+boundary, and every completion code a driver in the tree tests for by name.
+
+What is deliberately not there: formatting (Write Format, the track-header
+commands and the defect map all need real per-sector headers, which an SD card
+has no room for), ECC, command chaining and the Attention protocol, a second
+controller at `0xEE48`, and 24-bit addressing.
 
 ### Everything else
 
