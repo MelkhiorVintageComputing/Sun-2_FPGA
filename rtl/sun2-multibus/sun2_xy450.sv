@@ -331,6 +331,7 @@ module sun2_xy450 #(
    // calls 0x15 reserved, xyreg.h calls it "unimplemented command", and
    // nothing else claims the value.
    localparam logic [7:0] CC_OK     = 8'h00;
+   localparam logic [7:0] CC_OPTO   = 8'h04;  // operation timeout
    localparam logic [7:0] CC_HDNF   = 8'h05;  // header not found: past the end
    localparam logic [7:0] CC_CADR   = 8'h07;  // illegal cylinder address
    localparam logic [7:0] CC_SADR   = 8'h0A;  // illegal sector address
@@ -371,6 +372,18 @@ module sun2_xy450 #(
    localparam logic [4:0] E_WB       = 5'd17;
    localparam logic [4:0] E_WB_W     = 5'd18;
    localparam logic [4:0] E_FINISH   = 5'd19;
+   localparam logic [4:0] E_IOPB_END = 5'd20;
+   localparam logic [4:0] E_NEXT     = 5'd21;
+   localparam logic [4:0] E_ATTN     = 5'd22;
+   localparam logic [4:0] E_ATTN_REQ = 5'd23;
+   localparam logic [4:0] E_ATTN_W   = 5'd24;
+
+   // How many IOPBs one Go may execute.  The real card has a two-second
+   // watchdog per IOPB and would spin on a chain that pointed back at itself;
+   // this is that watchdog, counted rather than timed, and it reports the code
+   // the manual gives for it.  SunOS builds chains of at most five -- one per
+   // unit plus the controller's own -- so nothing legitimate comes near it.
+   localparam int CHAIN_LIMIT = 64;
 
    reg [4:0]  est;
    reg [7:0]  iopb [0:23];
@@ -390,6 +403,16 @@ module sun2_xy450 #(
    reg        in_creset;
    reg [7:0]  creset_ctr;
    reg        clr_dvma;
+
+   // The chain.  chain_reloc is latched at Go because every IOPB in a chain is
+   // relocated by the same registers -- "All IOPBs in a chain must be located
+   // within the 64K-byte memory block starting at the base address in the IOPB
+   // Relocation Registers" -- and the driver writes them once at probe and
+   // never again.
+   reg [15:0] chain_reloc;
+   reg [15:0] chain_next;   // this IOPB's Next IOPB Address, bytes 12 and 13
+   reg        do_chain;     // ... and whether CHEN said to believe it
+   reg [6:0]  chain_cnt;
 
    // Bus access: one byte at a time.  Word-at-a-time would halve the cycle
    // count, but every access goes through sun2_dvma, which re-arbitrates for
@@ -414,7 +437,14 @@ module sun2_xy450 #(
    // Fields of the fetched IOPB, by controller byte number.
    wire       f_aud   = iopb[0][7];
    wire       f_relo  = iopb[0][6];
+   wire       f_chen  = iopb[0][5];
    wire       f_ien   = iopb[0][4];
+   // "INTERRUPT ON EACH IOPB -- When interrupts are enabled, and IEI is set,
+   // the 450 interrupts each time it completes an IOPB."  SunOS sets IEN and
+   // clears IEI (xy.c:709-716, `xy->xy_ie = 1; xy->xy_intrall = 0;`), so it
+   // wants exactly one interrupt per chain; a second one arriving after the
+   // driver has started the next chain is read as that chain completing.
+   wire       f_iei   = iopb[1][6];
    wire [3:0] f_cmd   = iopb[0][3:0];
    wire       f_done  = iopb[2][0];
    wire [1:0] f_dt    = iopb[5][7:6];
@@ -469,6 +499,10 @@ module sun2_xy450 #(
         clr_dvma   <= 1'b0;
         cc         <= CC_OK;
         hard       <= 1'b0;
+        chain_reloc<= 16'h0000;
+        chain_next <= 16'h0000;
+        do_chain   <= 1'b0;
+        chain_cnt  <= 7'd0;
         for (wi = 0; wi < 24; wi = wi + 1) iopb[wi] <= 8'h00;
      end else begin
         dma_buf_we <= 1'b0;
@@ -538,10 +572,18 @@ module sun2_xy450 #(
            end
         end else begin
 
-           // The attention protocol, which nothing in the tree uses: software
-           // sets AREQ, the controller answers with AACK, software does what
-           // it came to do and clears AREQ.
-           if (csr_areq & ~csr_aack) csr_aack <= 1'b1;
+           // The attention protocol.  AACK does not mean "noted", it means
+           // "the chain is standing still and you may edit it", so it is
+           // granted only where that is true: immediately when the controller
+           // is idle, and otherwise at the boundary between IOPBs, in
+           // E_IOPB_END below.  Granting it in the middle of a transfer -- as
+           // this did before there was a chain to protect -- invites software
+           // to rewrite links the controller is about to follow.
+           //
+           // SunOS 3.4 never uses any of this: XY_ATTN and XY_ACK are declared
+           // in sundev/xycreg.h and referenced by no C file in the tree.  4.x
+           // does, which is why it is here rather than tied off.
+           if (csr_areq & ~csr_aack & (est == E_IDLE)) csr_aack <= 1'b1;
 
            // ---------------------------------------------------------
            // The IOPB engine
@@ -550,10 +592,12 @@ module sun2_xy450 #(
              E_IDLE:
                // `xyaddr->xy_csr = XY_GO`
                if (wr_lo & sel_ctl & mbio_din[7] & ~csr_gbsy) begin
-                  csr_gbsy <= 1'b1;
-                  clr_dvma <= 1'b1;   // forget any earlier DVMA fault
-                  cc       <= CC_OK;
-                  hard     <= 1'b0;
+                  csr_gbsy    <= 1'b1;
+                  clr_dvma    <= 1'b1;   // forget any earlier DVMA fault
+                  cc          <= CC_OK;
+                  hard        <= 1'b0;
+                  chain_reloc <= reloc;
+                  chain_cnt   <= 7'd0;
                   // "The IOPB Address Registers and IOPB Relocation Registers
                   // combine to form a 20-bit physical memory address", and
                   // IOPB relocation happens whenever the relocation registers
@@ -592,12 +636,25 @@ module sun2_xy450 #(
                 cur_sect <= iopb[7];
                 data_va  <= DVMA_BASE + {4'h0, mb_data_addr};
 
+                // Captured here because the next fetch overwrites iopb[].
+                // chain_next is taken unconditionally and do_chain is what
+                // gates its use: on the tail of a chain the driver clears
+                // xy_chain and leaves xy_nxtoff at whatever it was when this
+                // same IOPB was in the middle of an earlier chain
+                // (xy.c:744-745), so believing it is a walk into a stale
+                // pointer and a DMA into last time's buffer.
+                do_chain   <= f_chen;
+                chain_next <= {iopb[19], iopb[18]};   // bytes 13 and 12
+
                 if (f_done) begin
                    // "System software must clear (zero) Status Bytes 1 and 2
                    // before giving the IOPB to the 450.  If DONE is set, the
                    // 450 reads the IOPB and considers it complete (therefore,
-                   // it cannot execute the IOPB again)."
-                   est <= E_FINISH;
+                   // it cannot execute the IOPB again)."  Considered complete,
+                   // so the chain moves on rather than stopping: there is
+                   // nothing to write back, but the IOPBs behind it are still
+                   // owed their turn.
+                   est <= E_IOPB_END;
                 end else if (needs_geo & ~drive_ok) begin
                    cc <= CC_NRDY; hard <= 1'b1; est <= E_STATUS;
                 end else if (needs_geo & ({iopb[9][2:0], iopb[8]} > g_mcyl)) begin
@@ -829,13 +886,88 @@ module sun2_xy450 #(
                         ib  <= 5'd6;
                         est <= E_WB;
                      end else
-                       est <= E_FINISH;
+                       est <= E_IOPB_END;
                   end else if (ib == 5'd16) begin
-                     est <= E_FINISH;
+                     est <= E_IOPB_END;
                   end else begin
                      ib  <= ib + 5'd1;
                      est <= E_WB;
                   end
+               end
+
+             // --- one IOPB is over; decide what the chain does next ---
+             E_IOPB_END: begin
+                // Per-IOPB interrupt, if this IOPB asked for one.  The
+                // end-of-chain interrupt is E_FINISH's business.
+                if (f_ien & f_iei) csr_ipnd <= 1'b1;
+
+                if (hard)
+                  // "The 450 terminates the chain with an error if one IOPB
+                  // has a hard error."  Everything behind it is left exactly
+                  // as the driver wrote it, xy_complete still clear, because
+                  // xyintr() skips those and xychain() re-issues them verbatim.
+                  est <= E_FINISH;
+                else if (csr_areq) begin
+                   csr_aack <= 1'b1;
+                   est      <= E_ATTN;
+                end else if (do_chain)
+                  est <= E_NEXT;
+                else
+                  est <= E_FINISH;
+             end
+
+             // --- follow the link ---
+             E_NEXT:
+               if (chain_cnt == CHAIN_LIMIT[6:0]) begin
+                  // A chain that points back at itself.  See CHAIN_LIMIT.
+                  cc <= CC_OPTO; hard <= 1'b1; est <= E_STATUS;
+               end else begin
+                  chain_cnt <= chain_cnt + 7'd1;
+                  iopb_va   <= DVMA_BASE +
+                               {4'h0, ({chain_reloc, 4'h0} + {4'h0, chain_next})};
+                  cc        <= CC_OK;
+                  hard      <= 1'b0;
+                  ib        <= 5'd0;
+                  est       <= E_FETCH;
+               end
+
+             // --- paused for the Attention protocol ---
+             // "System software may now remove those IOPBs marked complete,
+             // and/or may add new IOPBs to the chain (you may modify CHEN and
+             // the Next IOPB Address ...)".  GBSY stays set throughout, which
+             // is the case 2.6.2.5 tells software to expect and handle.
+             E_ATTN:
+               if (~csr_areq) begin
+                  ib  <= 5'd0;
+                  est <= E_ATTN_REQ;
+               end
+
+             // Re-read this IOPB's command byte and next pointer, because
+             // appending to the chain is exactly what the pause was for.
+             // Acknowledging and then not looking again would drop the
+             // appended IOPB with nothing to show for it.
+             E_ATTN_REQ: begin
+                bus_va  <= iopb_va + (ib == 5'd0 ? 24'h000001 :   // byte 00
+                                      ib == 5'd1 ? 24'h000013 :   // byte 12
+                                                   24'h000012);   // byte 13
+                bus_we  <= 1'b0;
+                bus_req <= 1'b1;
+                est     <= E_ATTN_W;
+             end
+
+             E_ATTN_W:
+               if (wb_err_i) begin
+                  bus_req <= 1'b0;
+                  cc <= CC_MADR; hard <= 1'b1; est <= E_STATUS;
+               end else if (wb_ack_i) begin
+                  bus_req <= 1'b0;
+                  case (ib)
+                    5'd0: do_chain          <= bus_rd[5];
+                    5'd1: chain_next[7:0]   <= bus_rd;
+                    default: chain_next[15:8] <= bus_rd;
+                  endcase
+                  if (ib == 5'd2) est <= E_IOPB_END;
+                  else begin ib <= ib + 5'd1; est <= E_ATTN_REQ; end
                end
 
              E_FINISH: begin

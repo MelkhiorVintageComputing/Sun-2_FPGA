@@ -299,6 +299,93 @@ module tb_xy450;
       end
    endtask
 
+   // ------------------------------------------------------------------
+   // Chains
+   // ------------------------------------------------------------------
+   // Everything here is at an arbitrary MultiBus offset rather than the PROM's
+   // fixed 0x100, because a chain is several IOPBs at once.  xychain() builds
+   // them in the 8 KiB iopbmap at DVMA offset 0 and links them with 16-bit
+   // offsets relocated by the same registers, which is what this mimics.
+   task automatic iopb_put_at(input logic [19:0] mb, input int n,
+                              input logic [7:0] d);
+      mem_put(DVMA_BASE + mb + (n ^ 1), d);
+   endtask
+
+   function automatic logic [7:0] iopb_get_at(input logic [19:0] mb, input int n);
+      iopb_get_at = mem_byte(DVMA_BASE + mb + (n ^ 1));
+   endfunction
+
+   // One IOPB, filled in the way xycmd()/initiopb() fill one.  `nxt` is written
+   // whether or not `chen` is set: the driver leaves a stale pointer on the
+   // tail of every chain and the controller has to not follow it.
+   task automatic build_iopb(input logic [19:0] mb,
+                             input logic [7:0]  cmd0,   // AUD/RELO/CHEN/IEN/cmd
+                             input logic [7:0]  imode,  // IEI/ASR/EEF/ECC
+                             input logic [7:0]  drive,
+                             input logic [7:0]  head,
+                             input logic [7:0]  sect,
+                             input logic [15:0] cyl,
+                             input logic [15:0] nsect,
+                             input logic [15:0] bufoff,
+                             input logic [15:0] nxt);
+      int i;
+      begin
+         for (i = 0; i < 24; i++) iopb_put_at(mb, i, 8'h00);
+         iopb_put_at(mb, 0,  cmd0);
+         iopb_put_at(mb, 1,  imode);
+         iopb_put_at(mb, 4,  8'h04);            // XY_THROTTLE
+         iopb_put_at(mb, 5,  drive);
+         iopb_put_at(mb, 6,  head);
+         iopb_put_at(mb, 7,  sect);
+         iopb_put_at(mb, 8,  cyl[7:0]);
+         iopb_put_at(mb, 9,  {5'h0, cyl[10:8]});
+         iopb_put_at(mb, 10, nsect[7:0]);
+         iopb_put_at(mb, 11, nsect[15:8]);
+         iopb_put_at(mb, 12, bufoff[7:0]);
+         iopb_put_at(mb, 13, bufoff[15:8]);
+         iopb_put_at(mb, 18, nxt[7:0]);         // Next IOPB Address low
+         iopb_put_at(mb, 19, nxt[15:8]);        // ... and high
+      end
+   endtask
+
+   task automatic go_at(input logic [15:0] off);
+      bit ok;
+      begin
+         pokec(XY_IOPBREL0, 8'h00, ok);
+         pokec(XY_IOPBREL1, 8'h00, ok);
+         pokec(XY_IOPBOFF0, off[15:8], ok);
+         pokec(XY_IOPBOFF1, off[7:0],  ok);
+         pokec(XY_CSR, XY_GO, ok);
+      end
+   endtask
+
+   // Run a chain the way a driver does: poll, acknowledge every interrupt as
+   // it appears, and count them.  Counting edges of int_o from a concurrent
+   // process would not work -- IPND is a level, so a second interrupt is
+   // invisible until the first is acknowledged, which is the whole point of
+   // it being a level.
+   task automatic run_chain(input logic [15:0] off, output int irqs,
+                            output bit finished);
+      logic [7:0] c;
+      bit         ok;
+      int         n;
+      begin
+         irqs = 0;
+         finished = 1'b0;
+         go_at(off);
+         for (n = 0; n < 100000; n++) begin
+            peekc(XY_CSR, c, ok);
+            if (!ok) break;
+            if (c & XY_INTR) begin irqs++; pokec(XY_CSR, XY_INTR, ok); end
+            if ((c & XY_BUSY) == 8'h00) begin finished = 1'b1; break; end
+         end
+         // The end-of-chain interrupt lands in the same cycle GBSY drops, so
+         // the loop above can exit without having seen it.
+         peekc(XY_CSR, c, ok);
+         if (c & XY_INTR) begin irqs++; pokec(XY_CSR, XY_INTR, ok); end
+      end
+   endtask
+
    // chklabel(), byte for byte: magic, then the XOR of all 256 shorts.
    function automatic bit label_ok(input logic [23:0] base);
       logic [15:0] sum, w;
@@ -317,7 +404,7 @@ module tb_xy450;
    logic [7:0]  v;
    logic [15:0] q;
    bit          ok, got;
-   int          i, bad;
+   int          i, bad, irqs;
    string       s;
 
    initial begin
@@ -644,6 +731,168 @@ module tb_xy450;
       want((v & XY_INTR) != 8'h00, "IPND is clear while the card interrupts");
       pokec(XY_CSR, XY_INTR, ok);      // Interrupt Reset
       want(int_o == 1'b0, "writing 1 to IPND did not drop the interrupt");
+
+      // ==================================================================
+      // 11. Chains
+      // ==================================================================
+      // The geometry from section 7 is still in force -- 4 heads, 32 sectors --
+      // so blocks 0 and 1 are cylinder 0, head 0, sectors 0 and 1.
+      //
+      // IOPBs at 0x100, 0x120, 0x140, 0x160, 0x180; buffers at 0x400 upward.
+      // The command byte is AUD | CHEN | IEN | cmd, which is what xychain()
+      // and xyasynch() between them produce.
+
+      // --- two IOPBs, and a tail with a stale next pointer ---
+      // The second IOPB's Next IOPB Address is deliberately garbage with CHEN
+      // clear.  xychain() clears xy_chain on the tail and never clears
+      // xy_nxtoff (xy.c:744-745), so this is not a contrived case: it is what
+      // the driver hands the controller every time.
+      build_iopb(20'h00100, 8'hB2, 8'h02, 8'h00, 8'd0, 8'd0, 16'd0, 16'd1,
+                 16'h0400, 16'h0120);
+      build_iopb(20'h00120, 8'h92, 8'h02, 8'h00, 8'd0, 8'd1, 16'd0, 16'd1,
+                 16'h0600, 16'hDEAD);
+      for (i = 0; i < 1024; i++) mem_put(DVMA_BASE + 20'h400 + i, 8'h00);
+
+      run_chain(16'h0100, irqs, got);
+      want(got, "a two-IOPB chain never cleared GBSY");
+      want(iopb_get_at(20'h00100, 2)[0] == 1'b1, "the head of the chain has no DONE");
+      want(iopb_get_at(20'h00120, 2)[0] == 1'b1, "the second IOPB was never executed");
+      want(iopb_get_at(20'h00100, 3) == 8'h00 && iopb_get_at(20'h00120, 3) == 8'h00,
+           $sformatf("chained completion codes %02x and %02x, want 00 and 00",
+                     iopb_get_at(20'h00100, 3), iopb_get_at(20'h00120, 3)));
+      want(irqs == 1,
+           $sformatf("%0d interrupts for a chain of two: the driver clears IEI and expects exactly one",
+                     irqs));
+      want({mem_byte(DVMA_BASE + 20'h400 + 508),
+            mem_byte(DVMA_BASE + 20'h400 + 509)} == 16'hDABE,
+           "the first IOPB of the chain did not read the label");
+      want({mem_byte(DVMA_BASE + 20'h600),
+            mem_byte(DVMA_BASE + 20'h600 + 1)} == 16'h45FA,
+           "the second IOPB of the chain did not read the boot block");
+
+      // --- five, the longest chain xychain() can build ---
+      // One IOPB per unit plus the controller's own, XYUNPERC + 1.
+      for (i = 0; i < 5; i++)
+        build_iopb(20'h00100 + i*20'h20, (i == 4) ? 8'h92 : 8'hB2, 8'h02,
+                   8'h00, 8'd0, i[7:0], 16'd0, 16'd1,
+                   16'h0400 + i[15:0]*16'h200,
+                   16'h0120 + i[15:0]*16'h20);
+      for (i = 0; i < 2560; i++) mem_put(DVMA_BASE + 20'h400 + i, 8'h00);
+
+      run_chain(16'h0100, irqs, got);
+      want(got, "a five-IOPB chain never cleared GBSY");
+      bad = 0;
+      for (i = 0; i < 5; i++)
+        if (iopb_get_at(20'h00100 + i*20'h20, 2)[0] !== 1'b1 ||
+            iopb_get_at(20'h00100 + i*20'h20, 3) !== 8'h00) bad++;
+      want(bad == 0, $sformatf("%0d of 5 chained IOPBs did not complete cleanly", bad));
+      want(irqs == 1, $sformatf("%0d interrupts for a chain of five, want 1", irqs));
+      want({mem_byte(DVMA_BASE + 20'h400 + 508),
+            mem_byte(DVMA_BASE + 20'h400 + 509)} == 16'hDABE,
+           "block 0 is not where the five-IOPB chain put it");
+      want({mem_byte(DVMA_BASE + 20'h600),
+            mem_byte(DVMA_BASE + 20'h600 + 1)} == 16'h45FA,
+           "block 1 is not where the five-IOPB chain put it");
+
+      // --- a hard error in the middle stops the chain dead ---
+      // "The 450 terminates the chain with an error if one IOPB has a hard
+      // error."  What matters to the driver is the *third* IOPB: xyintr()
+      // skips anything without DONE and xychain() re-issues it verbatim, so
+      // it must come back untouched rather than half-executed.
+      build_iopb(20'h00100, 8'hB2, 8'h02, 8'h00, 8'd0, 8'd0, 16'd0, 16'd1,
+                 16'h0400, 16'h0120);
+      build_iopb(20'h00120, 8'hB2, 8'h02, 8'h01, 8'd0, 8'd0, 16'd0, 16'd1,
+                 16'h0600, 16'h0140);        // unit 1: not fitted
+      build_iopb(20'h00140, 8'h92, 8'h02, 8'h00, 8'd0, 8'd2, 16'd0, 16'd1,
+                 16'h0800, 16'hBEEF);
+      for (i = 0; i < 1536; i++) mem_put(DVMA_BASE + 20'h400 + i, 8'hFF);
+
+      run_chain(16'h0100, irqs, got);
+      want(got, "a chain with a hard error in it never cleared GBSY");
+      want(iopb_get_at(20'h00100, 3) == 8'h00, "the IOPB before the error did not succeed");
+      want(iopb_get_at(20'h00120, 3) == 8'h16,
+           $sformatf("the failing IOPB reported %02x, want 16", iopb_get_at(20'h00120, 3)));
+      want(iopb_get_at(20'h00120, 2)[7] == 1'b1,
+           "the failing IOPB did not set its own error summary -- xyintr() would fail the whole chain");
+      want(iopb_get_at(20'h00140, 2) == 8'h00,
+           $sformatf("the IOPB after the error came back as %02x: it must be untouched",
+                     iopb_get_at(20'h00140, 2)));
+      want(mem_byte(DVMA_BASE + 20'h800) == 8'hFF,
+           "the IOPB after the error transferred data anyway");
+      pokec(XY_CSR, XY_ERROR, ok);
+
+      // --- IEI: an interrupt per IOPB rather than one at the end ---
+      build_iopb(20'h00100, 8'hB2, 8'h42, 8'h00, 8'd0, 8'd0, 16'd0, 16'd1,
+                 16'h0400, 16'h0120);
+      build_iopb(20'h00120, 8'h92, 8'h42, 8'h00, 8'd0, 8'd1, 16'd0, 16'd1,
+                 16'h0600, 16'h0000);
+      run_chain(16'h0100, irqs, got);
+      want(got && irqs == 2,
+           $sformatf("%0d interrupts with IEI set on a chain of two, want 2", irqs));
+
+      // --- a chain that points back at itself ---
+      // The real card gives up on an IOPB after two seconds; this one counts
+      // instead, and reports the same completion code.
+      build_iopb(20'h00100, 8'hB0, 8'h02, 8'h00, 8'd0, 8'd0, 16'd0, 16'd0,
+                 16'h0000, 16'h0100);        // NOP, chained to itself
+      run_chain(16'h0100, irqs, got);
+      want(got, "a chain that points at itself never stopped");
+      want(iopb_get_at(20'h00100, 3) == 8'h04,
+           $sformatf("a cyclic chain reported %02x, want 04 (operation timeout)",
+                     iopb_get_at(20'h00100, 3)));
+      pokec(XY_CSR, XY_ERROR, ok);
+
+      // ==================================================================
+      // 12. The Attention protocol
+      // ==================================================================
+      // AACK does not mean "noted", it means "the chain is standing still".
+      // Granting it in the middle of a transfer would invite software to
+      // rewrite a link the controller is about to follow, so the check is not
+      // that AACK arrives but *when*: the head must already be complete and
+      // the second IOPB must not have started.
+      build_iopb(20'h00100, 8'hB2, 8'h02, 8'h00, 8'd0, 8'd0, 16'd0, 16'd1,
+                 16'h0400, 16'h0120);
+      build_iopb(20'h00120, 8'h92, 8'h02, 8'h00, 8'd0, 8'd1, 16'd0, 16'd1,
+                 16'h0600, 16'h0000);
+      // Block 0, because it is the one sector with content this test can
+      // recognise: blocks 2 upward are the zero padding after the boot block.
+      build_iopb(20'h00140, 8'h92, 8'h02, 8'h00, 8'd0, 8'd0, 16'd0, 16'd1,
+                 16'h0800, 16'h0000);
+      for (i = 0; i < 1536; i++) mem_put(DVMA_BASE + 20'h400 + i, 8'h00);
+
+      go_at(16'h0100);
+      pokec(XY_CSR, XY_ATTN, ok);          // ... while the head is transferring
+      for (i = 0; i < 100000; i++) begin
+         peekc(XY_CSR, v, ok);
+         if (v & XY_ACK) break;
+      end
+      want((v & XY_ACK) != 8'h00, "the Attention request was never acknowledged");
+      want((v & XY_BUSY) != 8'h00, "GBSY dropped during an Attention pause");
+      want(iopb_get_at(20'h00100, 2)[0] == 1'b1,
+           "AACK was granted before the IOPB in progress had finished");
+      want(iopb_get_at(20'h00120, 2)[0] == 1'b0,
+           "the chain kept going while AACK was set");
+
+      // Re-point the completed head at a different IOPB, which is what the
+      // pause exists for: "you may modify CHEN and the Next IOPB Address, but
+      // do not touch previously chained IOPBs that are not marked complete".
+      iopb_put_at(20'h00100, 18, 8'h40);   // next = 0x0140
+      iopb_put_at(20'h00100, 19, 8'h01);
+      pokec(XY_CSR, 8'h00, ok);            // clear AREQ; the chain resumes
+
+      for (i = 0; i < 100000; i++) begin
+         peekc(XY_CSR, v, ok);
+         if ((v & XY_BUSY) == 8'h00) break;
+      end
+      want((v & XY_BUSY) == 8'h00, "the chain never resumed after the Attention pause");
+      want(iopb_get_at(20'h00140, 2)[0] == 1'b1,
+           "the IOPB appended during the Attention pause was never executed");
+      want(iopb_get_at(20'h00120, 2)[0] == 1'b0,
+           "the IOPB that was unlinked during the pause ran anyway");
+      want({mem_byte(DVMA_BASE + 20'h800 + 508),
+            mem_byte(DVMA_BASE + 20'h800 + 509)} == 16'hDABE,
+           "the appended IOPB completed without transferring anything");
+      pokec(XY_CSR, XY_INTR, ok);
 
       $display("DVMA: %0d reads, %0d writes", dvma_reads, dvma_writes);
       $display("checks: %0d, failures: %0d", checks, fail);
