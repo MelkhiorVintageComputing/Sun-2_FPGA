@@ -30,9 +30,14 @@
 # types 0 to 3 looking for a label whose own idea of where it is agrees with
 # where it was found, and the first thing it tries is head 0.
 #
+# The boot program can be replaced with any flat binary linked at 0x4000 --
+# `--boot tools/xychain/xychain.bin` is how the chained-IOPB exerciser gets on
+# to the disk.  It must fit in blocks 1 to 15, because that is all xyboot()
+# reads.
+#
 # Usage:
 #   tools/mkxydisk [-o FILE] [--cyl N] [--head N] [--sect N] [--acyl N]
-#                  [--label TEXT] [--message TEXT]
+#                  [--label TEXT] [--message TEXT] [--boot FILE]
 #
 
 import argparse
@@ -136,6 +141,9 @@ def main(argv):
     ap.add_argument("--sect", type=int, default=32, help="sectors per track")
     ap.add_argument("--label", default="FPGA Xylogics 450 cyl 32 alt 2 hd 4 sec 32")
     ap.add_argument("--message", default="Xylogics 450 boot block running.")
+    ap.add_argument("--boot", metavar="FILE",
+                    help="a flat binary linked at 0x4000 to use as the boot "
+                         "program instead of the built-in one")
     args = ap.parse_args(argv[1:])
 
     if args.head > 256 or args.sect > 256 or (args.cyl + args.acyl) > 2048:
@@ -145,15 +153,28 @@ def main(argv):
     total = (args.cyl + args.acyl) * args.head * args.sect
     img = bytearray(total * SECSIZE)
     img[0:SECSIZE] = label_block(args.cyl, args.acyl, args.head, args.sect, args.label)
-    boot = bootblock(args.message)
+
+    if args.boot:
+        with open(args.boot, "rb") as f:
+            raw = f.read()
+        # xyboot() reads blocks 1 through BBSIZE/DEV_BSIZE - 1 and no more.
+        room = 15 * SECSIZE
+        if len(raw) > room:
+            ap.error("%s is %d bytes; blocks 1 to 15 hold %d"
+                     % (args.boot, len(raw), room))
+        boot = raw + bytes(room - len(raw))
+    else:
+        boot = bootblock(args.message)
+
     img[SECSIZE:SECSIZE + len(boot)] = boot
 
     with open(args.output, "wb") as f:
         f.write(img)
 
-    print("%s: %d blocks, %.2f MiB, %d/%d cyl, %d heads, %d sectors"
+    print("%s: %d blocks, %.2f MiB, %d/%d cyl, %d heads, %d sectors, boot %s"
           % (args.output, total, total * SECSIZE / 1048576.0,
-             args.cyl, args.acyl, args.head, args.sect))
+             args.cyl, args.acyl, args.head, args.sect,
+             args.boot if args.boot else "built-in"))
     return 0
 
 

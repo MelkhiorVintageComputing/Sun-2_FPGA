@@ -26,6 +26,7 @@
 #   make phy                       check the RTL8211EG bring-up sequence
 #   make mbether                   check the MultiBus Ethernet board
 #   make xy450                     check the Xylogics 450's registers
+#   make xychain                   boot a 68010 program that drives real chains
 #   make scanout                   check the frame buffer scan-out
 #   make screenshot                render what the last FB=1 boot drew, as a PPM
 #
@@ -169,6 +170,25 @@ screenshot:
 		-testplusarg fb_ppm=screen.ppm -testplusarg fb_logo'
 	@echo "screenshot: $(SCREEN)"
 
+# --- chained IOPBs, driven from inside the machine -------------------------
+# tb_xy450 replays what the SunOS driver does against a memory model; this is
+# the other half.  tools/xychain is a 68010 program the boot PROM loads off the
+# disk, which builds chains in the DVMA window, drives them through the real
+# MMU and takes the real level 2 autovector interrupt -- the first thing in
+# this design to do any of those.  It needs an m68k cross-compiler, so it is
+# its own target rather than part of any sweep.
+XYCHAIN_BIN = $(abspath $(TOP)/build/disk/xychain.bin)
+XYCHAIN_IMG = $(abspath $(TOP)/build/disk/xychain.img)
+
+xychain: rom
+	$(MAKE) -C $(TOP)/tools xychain
+	$(TOP)/tools/mkxydisk -o $(XYCHAIN_IMG) --boot $(XYCHAIN_BIN) \
+		--label "xychain exerciser"
+	$(MAKE) xsim XY450=1 MEM_MIB=1 ROM=fast TIMEOUT_MS=8000 \
+		STOP_ON=xychain-finished \
+		XSIMARGS="-testplusarg blk_image=$(XYCHAIN_IMG) $(XSIMARGS)"
+	./check_console.sh $(BUILD)/xsim-$(MACHINE)-xy450/console.log $(MACHINE) xychain
+
 iverilog: rom
 	SUN2_DEFINES="$(DEFINES)" ./run_iverilog.sh $(PLUSARGS) $(IVSIMARGS)
 
@@ -190,4 +210,4 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: all rom xsim board board-check board-phy iverilog check clean
-.PHONY: clkgen adapter migddr3 dvma phy mbether xy450 scanout screenshot
+.PHONY: clkgen adapter migddr3 dvma phy mbether xy450 xychain scanout screenshot

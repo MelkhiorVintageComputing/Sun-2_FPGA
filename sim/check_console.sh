@@ -39,6 +39,8 @@ machine=${2:-multibus}
 #   mbether   a Sun-2 Ethernet board, which the machine must find and try to
 #             net boot from, exactly as the VME machine does with its on-board
 #             one.
+#   xychain   the same, but the boot program is tools/xychain -- a 68010
+#             exerciser that drives chained IOPBs and reports its own verdict.
 #   xy450     a Xylogics 450 and a disk, which auto-boot reaches *first* --
 #             `xy' is the first entry in the PROM's boottab[] -- so the machine
 #             boots and never prints a monitor prompt at all.
@@ -101,7 +103,7 @@ if [ "$fitted" = fb ]; then
 	fi
 elif grep -q '>' "$log"; then
 	echo "PASS: monitor prompt seen"
-elif [ "$fitted" = xy450 ]; then
+elif [ "$fitted" = xy450 ] || [ "$fitted" = xychain ]; then
 	# A machine that boots does not stop at a prompt, which is the point.
 	echo "note: no monitor prompt, because the disk booted"
 elif [ "$fitted" = mbether ]; then
@@ -209,6 +211,27 @@ if [ "$fitted" = xy450 ]; then
 		echo "PASS: the label was read and the boot block loaded and ran"
 	else
 		echo "FAIL: nothing was loaded from the disk"
+		rc=1
+	fi
+fi
+
+# The chained-IOPB exerciser, which grades itself: everything it checks is a
+# property of the controller that only shows up on the machine -- one interrupt
+# per chain rather than one per IOPB, IPND surviving as a level until the
+# handler writes it back, and a chain read through the MMU coming back byte for
+# byte as the program that issued it.
+if [ "$fitted" = xychain ]; then
+	if grep -q 'xychain: chained IOPBs' "$log"; then
+		echo "PASS: the exerciser loaded off the disk and ran"
+	else
+		echo "FAIL: the exerciser never started"
+		rc=1
+	fi
+
+	if grep -q 'xychain: PASS' "$log"; then
+		echo "PASS: $(grep -c 'interrupts taken' "$log") interrupt counts reported, all checks passed"
+	else
+		echo "FAIL: $(grep -m3 '^FAIL:' "$log" | tr '\n' ';')"
 		rc=1
 	fi
 fi

@@ -17,6 +17,7 @@
 
 TOP     = ..
 ROMDIR  = $(TOP)/build/rom
+DISKDIR = $(TOP)/build/disk
 PROM    = $(TOP)/Inputs/sun2-multi-rev-R.bin
 
 # The VME machine's PROM, for experimenting with a Sun 2/50 on hardware that is
@@ -96,3 +97,32 @@ clean:
 	rm -rf $(ROMDIR)
 
 .PHONY: all check clean
+
+# ---------------------------------------------------------------------------
+# The chained-IOPB exerciser
+# ---------------------------------------------------------------------------
+# A 68010 program that runs *on the machine*, loaded from disk by the boot
+# PROM, to drive the Xylogics 450 the way the SunOS kernel does -- real chains
+# through the real MMU, and a real level-2 interrupt.  See
+# tools/xychain/xychain.c.
+#
+# Deliberately not part of `all`: it needs an m68k cross-compiler, which
+# nothing else here does, and `make -C sim xsim` must keep working without one.
+M68K    ?= m68k-linux-gnu
+XYCFLAGS = -m68010 -ffreestanding -nostdlib -fno-pic -fomit-frame-pointer \
+	   -Os -Wall -Wextra
+
+$(DISKDIR)/xychain.bin: xychain/xychain.c xychain/xychain.ld
+	@command -v $(M68K)-gcc >/dev/null || { \
+		echo "$(M68K)-gcc not found: the on-machine exerciser needs an m68k"; \
+		echo "cross-compiler.  On Debian/Ubuntu: apt install gcc-m68k-linux-gnu"; \
+		exit 1; }
+	mkdir -p $(DISKDIR)
+	$(M68K)-gcc $(XYCFLAGS) -T xychain/xychain.ld -o $(DISKDIR)/xychain.elf \
+		xychain/xychain.c 2>&1 | grep -vE 'RWX|build-id' || true
+	$(M68K)-objcopy -O binary $(DISKDIR)/xychain.elf $@
+	@echo "xychain: $$(stat -c%s $@) bytes of 7680"
+
+xychain: $(DISKDIR)/xychain.bin
+
+.PHONY: xychain
