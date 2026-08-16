@@ -323,7 +323,44 @@ module sun2_fpga(input         cpu_clk,
    // combinatorial protection check on Page Map output, valid alongside ps_pmap2devices
    wire       PROTERR; //, PROTERR_n;
    wire       PROTERR_raw, PROTERR_raw_n;
-   assign PROTERR   = PROTERR_raw   &  C_S8 & FC_GENERAL; // can't have a protection error unless the MMU is doing its job
+   // UNDER TEST -- see the note in CLAUDE.md before trusting the fingerprint.
+   //
+   // ~P_AS_n is not redundant with C_S8.  The C_S chain only advances while AS
+   // is asserted, but it is *cleared* on the posedge after AS goes high, so
+   // there is a one-clock window in which AS is already released and C_S4/C_S8
+   // are still set.  PROTERR is combinational on the page map, so in that
+   // window it re-evaluates against whatever address and function code the CPU
+   // has begun driving for its next cycle -- which is not a bus cycle at all.
+   //
+   // That window was manufacturing essentially every protection violation this
+   // machine has ever reported.  Of the 23,629 bus errors in the MultiBus
+   // reference boot, 23,607 were protection violations from just seven PROM
+   // program-counter values, four of them repeating exactly 4096 times --
+   // NUMPMEGS * PGSPERSEG, i.e. one per page-map write in diag.s's PMconst,
+   // PMdata and PMaddr passes.  The "physical page" each reported was the test
+   // pattern the PROM had just written (0x000, 0x333, 0xccc, 0xfff), not a
+   // translation of anything.
+   //
+   // The PROM cannot be the source of real ones: it never deliberately
+   // provokes a protection violation anywhere -- diag.s:41 lists protection as
+   // a FIXME, not a test -- and it reads and writes the maps through FC_MAP,
+   // which is untranslated.  trap.s:75-80 also records that in boot state all
+   // supervisor program fetches come from PROM untranslated, so an FC=6 PROM
+   // fetch cannot take a protection fault at all.  Decisively: during PMconst
+   // the bus error vector is still uninitialised (monreset does not install a
+   // handler until sunmon.c:310), so a real Sun-2 taking 16,448 bus errors
+   // there would double-fault on the first one.  It boots only because the
+   // pulse lands too late in the cycle for the core to act on.
+   //
+   // With this term the reference boot reports 22 bus errors -- all timeouts,
+   // matching the dozen or so device probes the PROM really does make -- and
+   // the console is byte-identical to the 23,629 run.
+   //
+   // STILL UNPROVEN: the PROM generates *zero* legitimate protection faults, so
+   // a monitor boot cannot show whether this preserves real ones or disables
+   // the mechanism.  SunOS needs them for copy-on-write and stack growth, and
+   // that run is what has to justify this change.
+   assign PROTERR   = PROTERR_raw   &  C_S8 & FC_GENERAL & ~P_AS_n;
    //assign PROTERR_n = PROTERR_raw_n | ~C_S8 & FC_GENERAL;
    
    // The permission check.  Select is {P_FC[2], P_FC[1], ~P_RW_n}, so the eight

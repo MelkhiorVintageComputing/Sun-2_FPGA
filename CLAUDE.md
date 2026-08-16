@@ -207,6 +207,27 @@ copy from it rather than referencing it.
 
 ## Verification discipline
 
+**The 23,629 fingerprint is under revision, and most of it was a bug.** Of
+those errors 23,607 were protection violations, and all of them came from seven
+PROM program-counter values — four repeating exactly 4096 times, which is
+`NUMPMEGS * PGSPERSEG`, one per page-map write in `diag.s`'s `PMconst`,
+`PMdata` and `PMaddr` passes. The "physical page" each reported was the pattern
+the PROM had just written (`000/333/ccc/fff`). They are phantoms: `PROTERR` is
+combinational and the `C_S` chain is cleared only on the posedge *after* `AS`
+releases, so it re-evaluated against an address and function code that were not
+a bus cycle. The PROM cannot be the source of real ones — `diag.s:41` lists
+protection as a FIXME rather than a test, the map tests all go through the
+untranslated `FC_MAP` space, and during `PMconst` the bus error vector is still
+uninitialised, so a real Sun-2 would double-fault on the first of them.
+
+Gating `PROTERR` on `~P_AS_n` gives **22** bus errors, all timeouts, with a
+byte-identical console. That change is committed but **not yet justified**: the
+PROM raises zero legitimate protection faults, so a monitor boot cannot show
+whether the gate preserves real ones. SunOS needs them for copy-on-write and
+stack growth, and that boot is the test. Until it passes, treat both 23,629
+(un-gated) and 22 (gated) as recorded facts and re-baseline the `FB`,
+`MB_ETHER` and `XY450` deltas below only once the gate is settled.
+
 The MultiBus machine is the reference that must not regress. It boots to the
 prompt with **23,629 bus errors** at `MEM_MIB=1 ROM=fast`, with no cards, and
 the bus-error sequence should stay byte-identical — most of those errors are
