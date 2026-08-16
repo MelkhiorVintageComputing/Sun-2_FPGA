@@ -361,12 +361,14 @@ module sun2_xy450 #(
    localparam logic [4:0] E_SECT     = 5'd6;
    localparam logic [4:0] E_BLK_GO   = 5'd7;
    localparam logic [4:0] E_BLK_WAIT = 5'd8;
-   localparam logic [4:0] E_OUT_ADDR = 5'd9;
-   localparam logic [4:0] E_OUT_RD   = 5'd10;
+   localparam logic [4:0] E_OUT_ADDR = 5'd9;   // gather: point at a byte
+   localparam logic [4:0] E_OUT_RD   = 5'd10;  // gather: let the buffer settle
+   localparam logic [4:0] E_OUT_GET  = 5'd25;  // gather: take it
    localparam logic [4:0] E_OUT_REQ  = 5'd11;
    localparam logic [4:0] E_OUT_W    = 5'd12;
    localparam logic [4:0] E_IN_REQ   = 5'd13;
    localparam logic [4:0] E_IN_W     = 5'd14;
+   localparam logic [4:0] E_IN_PUT   = 5'd26;  // scatter into the buffer
    localparam logic [4:0] E_SECT_END = 5'd15;
    localparam logic [4:0] E_STATUS   = 5'd16;
    localparam logic [4:0] E_WB       = 5'd17;
@@ -414,25 +416,65 @@ module sun2_xy450 #(
    reg        do_chain;     // ... and whether CHEN said to believe it
    reg [6:0]  chain_cnt;
 
-   // Bus access: one byte at a time.  Word-at-a-time would halve the cycle
-   // count, but every access goes through sun2_dvma, which re-arbitrates for
-   // the bus per access anyway, so the saving would be one arbitration in two
-   // and the cost would be four more cases of the byte-lane algebra above.
-   // 512 DVMA cycles per sector at the real machine's 1.4 us average is the
-   // same order as the card it replaces.
+   // ------------------------------------------------------------------
+   // The bus port
+   // ------------------------------------------------------------------
+   // One transaction moves `bus_len` bytes, one to four, starting at
+   // bus_va[1:0] within the addressed longword.  The IOPB is fetched and
+   // written back a byte at a time, because its bytes are inverted
+   // individually and gathering them would only move that arithmetic
+   // somewhere less obvious; sector data moves four at a time.
+   //
+   // Four rather than two.  A 32-bit Wishbone access becomes at most two 68010
+   // cycles inside sun2_dvma, and it holds the bus request across both of them
+   // -- "we keep it across both halves of one Wishbone access rather than
+   // re-arbitrating between them" -- so the arbitration, which is the
+   // expensive half of a DVMA cycle, happens once per four bytes instead of
+   // once per byte.  That is 128 round trips per sector rather than 512.
+   //
+   // It is worth the byte-lane algebra.  Byte-at-a-time measured about 20 KB/s
+   // booting SunOS, which put the kernel load alone at some thirty seconds of
+   // simulated time and four hours of wall clock.
    reg        bus_req, bus_we;
    reg [23:0] bus_va;
-   reg [7:0]  bus_wd;
+   reg [2:0]  bus_len;      // bytes in this transaction, 1..4
+   reg [31:0] bus_wdat;     // already positioned in its lanes
+
+   // SEL is `bus_len` contiguous bytes starting at the lane bus_va[1:0].  Five
+   // bits wide on the way there because (1 << 4) - 1 is zero in four.
+   wire [4:0] bus_selmask = (5'd1 << bus_len) - 5'd1;
 
    assign wb_cyc_o = bus_req;
    assign wb_stb_o = bus_req;
    assign wb_we_o  = bus_we;
    assign wb_adr_o = bus_va[23:2];
-   assign wb_sel_o = 4'b0001 << bus_va[1:0];
-   assign wb_dat_o = {4{bus_wd}};
+   assign wb_sel_o = bus_selmask[3:0] << bus_va[1:0];
+   assign wb_dat_o = bus_wdat;
    assign wb_clr_o = clr_dvma;
 
+   // A single byte, for the IOPB.  Writes replicate across all four lanes so
+   // that whichever one SEL picks carries it.
    wire [7:0] bus_rd = wb_dat_i[8*bus_va[1:0] +: 8];
+
+   // ------------------------------------------------------------------
+   // Chunking a sector
+   // ------------------------------------------------------------------
+   // db is the offset of the *start* of the current chunk within the sector.
+   // A chunk runs to the end of the longword it starts in, or to the end of
+   // the sector, whichever comes first -- so an unaligned data address costs
+   // one short transaction at each end and nothing else.  SunOS's buffers come
+   // from the mainbus mapper and are page-aligned in practice, but the IOPB
+   // can name any address and this has to be right for all of them.
+   reg [2:0]  ck;           // byte index within the chunk
+   reg [31:0] rd_stage;     // a read chunk, waiting to be scattered
+
+   wire [23:0] chunk_va   = data_va + {14'h0, db};
+   wire [1:0]  chunk_lane = chunk_va[1:0];
+   wire [2:0]  chunk_room = 3'd4 - {1'b0, chunk_lane};
+   wire [9:0]  chunk_left = 10'd512 - db;
+   wire [2:0]  chunk_len  = (chunk_left >= {7'h0, chunk_room}) ? chunk_room
+                                                               : chunk_left[2:0];
+   wire        chunk_last = (chunk_left <= {7'h0, chunk_len});
 
    // Fields of the fetched IOPB, by controller byte number.
    wire       f_aud   = iopb[0][7];
@@ -496,6 +538,10 @@ module sun2_xy450 #(
         blk_busy   <= 1'b0;
         dma_buf_we <= 1'b0;
         dma_addr   <= 9'h0;
+        bus_len    <= 3'd1;
+        bus_wdat   <= 32'h0;
+        ck         <= 3'd0;
+        rd_stage   <= 32'h0;
         clr_dvma   <= 1'b0;
         cc         <= CC_OK;
         hard       <= 1'b0;
@@ -611,6 +657,7 @@ module sun2_xy450 #(
              // --- fetch the 24-byte IOPB, byte N at iopb_va + (N ^ 1) ---
              E_FETCH: begin
                 bus_va  <= iopb_va + {19'h0, ib ^ 5'd1};
+                bus_len <= 3'd1;
                 bus_we  <= 1'b0;
                 bus_req <= 1'b1;
                 est     <= E_FETCH_W;
@@ -743,15 +790,33 @@ module sun2_xy450 #(
                   end
                end
 
-             // --- Read: sector buffer out to memory, a byte at a time ---
-             // The buffer read is registered, so the address has to be
-             // standing for a clock before the data is good.
-             E_OUT_ADDR: begin dma_addr <= db[8:0]; est <= E_OUT_RD; end
-             E_OUT_RD:   est <= E_OUT_REQ;
+             // --- Read: sector buffer out to memory ---
+             // Gather the chunk out of the buffer first, then move it in one
+             // transaction.  The buffer read is registered and single-ported,
+             // so each byte costs an address cycle and a settling cycle -- but
+             // those are local, and what they save is a DVMA round trip.
+             E_OUT_ADDR: begin
+                ck       <= 3'd0;
+                dma_addr <= db[8:0];
+                est      <= E_OUT_RD;
+             end
+
+             E_OUT_RD: est <= E_OUT_GET;
+
+             E_OUT_GET: begin
+                bus_wdat[8*({1'b0, chunk_lane} + ck) +: 8] <= buf_q;
+                if (ck == chunk_len - 3'd1)
+                  est <= E_OUT_REQ;
+                else begin
+                   dma_addr <= db[8:0] + {6'h0, ck} + 9'd1;
+                   ck       <= ck + 3'd1;
+                   est      <= E_OUT_RD;
+                end
+             end
 
              E_OUT_REQ: begin
-                bus_va  <= data_va + {14'h0, db};
-                bus_wd  <= buf_q;
+                bus_va  <= chunk_va;
+                bus_len <= chunk_len;
                 bus_we  <= 1'b1;
                 bus_req <= 1'b1;
                 est     <= E_OUT_W;
@@ -763,15 +828,17 @@ module sun2_xy450 #(
                   cc <= CC_MADR; hard <= 1'b1; est <= E_STATUS;
                end else if (wb_ack_i) begin
                   bus_req <= 1'b0; bus_we <= 1'b0;
-                  if (db == 10'd511) est <= E_SECT_END;
-                  else begin db <= db + 10'd1; est <= E_OUT_ADDR; end
+                  db  <= db + {7'h0, chunk_len};
+                  est <= chunk_last ? E_SECT_END : E_OUT_ADDR;
                end
 
              // --- Write: memory in to the sector buffer ---
              E_IN_REQ: begin
-                bus_va  <= data_va + {14'h0, db};
+                bus_va  <= chunk_va;
+                bus_len <= chunk_len;
                 bus_we  <= 1'b0;
                 bus_req <= 1'b1;
+                ck      <= 3'd0;
                 est     <= E_IN_W;
              end
 
@@ -780,13 +847,25 @@ module sun2_xy450 #(
                   bus_req <= 1'b0;
                   cc <= CC_MADR; hard <= 1'b1; est <= E_STATUS;
                end else if (wb_ack_i) begin
-                  bus_req       <= 1'b0;
-                  dma_buf_we    <= 1'b1;
-                  dma_buf_wdata <= bus_rd;
-                  dma_addr      <= db[8:0];
-                  if (db == 10'd511) est <= E_BLK_GO;
-                  else begin db <= db + 10'd1; est <= E_IN_REQ; end
+                  bus_req  <= 1'b0;
+                  rd_stage <= wb_dat_i;
+                  est      <= E_IN_PUT;
                end
+
+             // One byte per cycle into the buffer.  The last one is still in
+             // flight when this leaves for E_BLK_GO -- dma_buf_we is high for
+             // the cycle after it is set, and blk_busy does not take the port
+             // until the end of that same cycle, so it lands.
+             E_IN_PUT: begin
+                dma_buf_we    <= 1'b1;
+                dma_addr      <= db[8:0] + {6'h0, ck};
+                dma_buf_wdata <= rd_stage[8*({1'b0, chunk_lane} + ck) +: 8];
+                if (ck == chunk_len - 3'd1) begin
+                   db  <= db + {7'h0, chunk_len};
+                   est <= chunk_last ? E_BLK_GO : E_IN_REQ;
+                end else
+                  ck <= ck + 3'd1;
+             end
 
              // --- advance the disk address and go round again ---
              E_SECT_END: begin
@@ -862,11 +941,12 @@ module sun2_xy450 #(
 
              // --- and write it back, status bytes first ---
              E_WB: begin
-                bus_va  <= iopb_va + {19'h0, ib ^ 5'd1};
-                bus_wd  <= iopb[ib];
-                bus_we  <= 1'b1;
-                bus_req <= 1'b1;
-                est     <= E_WB_W;
+                bus_va   <= iopb_va + {19'h0, ib ^ 5'd1};
+                bus_len  <= 3'd1;
+                bus_wdat <= {4{iopb[ib]}};   // SEL picks the lane
+                bus_we   <= 1'b1;
+                bus_req  <= 1'b1;
+                est      <= E_WB_W;
              end
 
              E_WB_W:
@@ -950,6 +1030,7 @@ module sun2_xy450 #(
                 bus_va  <= iopb_va + (ib == 5'd0 ? 24'h000001 :   // byte 00
                                       ib == 5'd1 ? 24'h000013 :   // byte 12
                                                    24'h000012);   // byte 13
+                bus_len <= 3'd1;
                 bus_we  <= 1'b0;
                 bus_req <= 1'b1;
                 est     <= E_ATTN_W;

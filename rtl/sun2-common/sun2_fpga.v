@@ -292,6 +292,8 @@ module sun2_fpga(input         cpu_clk,
 		.P_DIN(P_DIN),
 		.P_A(P_A),
 		.P_FC(P_FC),
+		.P_UDS_n(P_UDS_n),
+		.P_LDS_n(P_LDS_n),
 		/* timing signals */
 		.C_S4(C_S4),
 		.C_S6(C_S6),
@@ -587,13 +589,28 @@ module sun2_fpga(input         cpu_clk,
    // pair that has to *fail* at 0xEE48 for the monitor to report one
    // controller rather than two.
    //
-   // The monitor maps 64 KiB of this space at BUSIO_BASE, 32 pages, so five
-   // page bits are live and the top seven must be zero.  A cycle above 64 KiB
-   // cannot come from the monitor's own map, but a hand-built page-map entry
-   // could produce one, and it should time out rather than alias.
+   // MultiBus I/O is a **16-bit** space, so only five of the twelve page bits
+   // reach the bus and the other seven are not decoded at all.  The whole of
+   // TYPE 3 therefore aliases onto 64 KiB.
+   //
+   // This started out requiring the top seven bits to be zero, on the grounds
+   // that the monitor maps exactly 32 pages at BUSIO_BASE and anything above
+   // that "should time out rather than alias".  That was generalising the
+   // monitor's map into a property of the hardware, and SunOS 4.0.3 disproves
+   // it on the first disk access: its standalone boot maps the controller with
+   // the same all-ones idiom mon/h/video.h uses for the frame buffer --
+   // 0xFFFFE800 >> 11, page 0xFFD -- and reads the CSR at page 0xFFD offset
+   // 0x644, which is I/O address 0xEE44.  With the restriction in place that
+   // is a timeout and the boot dies with
+   //
+   //     Timeout Bus Error, addr: 00100644 at 240E66
+   //
+   // Nothing is made to answer by removing it: mbio_hit still comes from the
+   // card's own address comparator, so an empty cage times out exactly as
+   // before, and xyprobe()'s second address at 0xEE48 still has to fail for
+   // the monitor to report one controller rather than two.
    wire 			 MATCH_MBIO;
-   assign MATCH_MBIO     = (FC_GENERAL) & (TYPE == 3'h3) & C_S6 &
-                           (ma_pmap2devices[11:5] == 7'h0);
+   assign MATCH_MBIO     = (FC_GENERAL) & (TYPE == 3'h3) & C_S6;
    assign mbio_sel       = MATCH_MBIO;
    assign mbio_addr      = {ma_pmap2devices[4:0], P_A[10:1], 1'b0};
    assign mbio_we        = ~P_RW_n;

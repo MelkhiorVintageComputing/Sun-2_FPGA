@@ -41,7 +41,37 @@ module tb_sun2 #(
     // cpu_clk from STB to ACK (make -C sim migddr3 reports it).  That matters
     // now that the Ethernet competes for the same bus by DVMA, so run the VME
     // machine at 7 before trusting anything about Ethernet bandwidth.
-    parameter int    MEM_LATENCY = 0
+    parameter int    MEM_LATENCY = 0,
+    // The CPU clock, in Hz.  12.5 MHz is what a Sun-2 ran at and what every
+    // fingerprint in the tree was measured with, so it stays the default.
+    //
+    // It is here because raising it looks like the obvious way to shorten a
+    // long run and is not.  Measured, same machine, MEM_MIB=1 ROM=fast, boot
+    // to the monitor prompt:
+    //
+    //     12.5 MHz   1.63 s simulated   602 s wall
+    //     40   MHz   0.70 s simulated   807 s wall
+    //
+    // Both give 23629 bus errors and a byte-identical console, so the machine
+    // does behave the same -- bus timing is counted in CPU clocks and the
+    // timer and SCC still run from the 4.9152 MHz crystal.  It is simply
+    // slower to simulate.
+    //
+    // The argument for expecting a win was that clk40, fixed at 39.3216 MHz
+    // because the console's baud rate divides down from it, is the fastest
+    // clock here and its event count is proportional to simulated time.  True,
+    // but it clocks only the SCC.  What xsim actually spends its time on is
+    // the cpu_clk domain -- the 68010, the MMU, the whole machine -- and those
+    // edges went *up*, from 40.8M to 56.0M.  Wall clock followed them: +37%
+    // of edges for +34% of runtime.
+    //
+    // They went up because simulated time did not fall by 3.2x, only by 2.3x.
+    // About 270 ms of the boot is the PROM's own output at 9600 baud, which
+    // takes the same real time whatever the CPU runs at; a faster CPU just
+    // burns 3.2x as many cycles waiting for it.  Any part of a boot that is
+    // bounded by real time rather than by instructions costs more, not less,
+    // at a higher clock -- and a SunOS boot has more of that, not less.
+    parameter int    CPU_HZ = 12_500_000
 )();
 
    // ------------------------------------------------------------------
@@ -51,22 +81,40 @@ module tb_sun2 #(
    // divides down to an exact baud rate.
    localparam real CLK40_HALF = 12.71565755208333333;
 
-   // 12.5 MHz CPU clock, matching --cpu-clk-freq 12.5e6 in the LiteX build.
-   localparam real CPUCLK_HALF = 40.0;
+   // The CPU clock, from the CPU_HZ parameter; 12.5 MHz by default, matching
+   // --cpu-clk-freq 12.5e6 in the LiteX build.
+   localparam real CPUCLK_HALF = 1.0e9 / (2.0 * real'(CPU_HZ));
 
    // clk4m9152 is clk40 divided by 8 -> 4.9152 MHz.  This is the rate the SCC
    // must see: the PROM's own register table (WR4 x16 mode, time constant 14)
    // then yields 4915200 / (2 * 16 * 16) = 9600 baud on the console.  It is
    // also what the LiteX build constrains for the serial domain (period
    // 203.45052083 ns).  The old testbench used bit 3, i.e. clk40/16, which is
-   // half this.  Overridable with +clk4m_bit for experiments.
+   // half this.  Overridable with +clk4m_bit for experiments:
+   //
+   //     +clk4m_bit=2   4.9152 MHz    9600 baud   (the real machine)
+   //     +clk4m_bit=1   9.8304 MHz   19200 baud
+   //     +clk4m_bit=0  19.6608 MHz   38400 baud
+   //     +clk4m_bit=-1 39.3216 MHz   76800 baud   (clk40 with no divider)
+   //
+   // The console decoder has to be told as well, or the log is line noise:
+   // BAUD is an elaboration parameter, so it is `make -C sim xsim BAUD=38400`.
+   //
+   // This is not a console-only knob, and the reason is in sun2_fpga.v:637.
+   // clk4m9152 is also the Am9513's X2, because on the real machine the timer
+   // and the SCCs share one 4.9152 MHz crystal.  Raising it runs the machine's
+   // sense of real time at the same multiple -- the monitor's NMI clock, the
+   // kernel's hz, and every driver timeout counted in ticks, xywatch()'s
+   // four-second lost-interrupt check among them.  Nothing here needs the full
+   // four seconds, so it is safe, but it is a change to the machine and not
+   // just to how fast it talks.
    localparam int CLK4M_BIT_DEFAULT = 2;
 
    reg  clk40   = 1'b0;
    reg  cpu_clk = 1'b0;
    reg [3:0] clk4m_div = 4'h0;
    int  clk4m_bit = CLK4M_BIT_DEFAULT;
-   wire clk4m9152 = clk4m_div[clk4m_bit];
+   wire clk4m9152 = (clk4m_bit < 0) ? clk40 : clk4m_div[clk4m_bit[1:0]];
 
    always #(CLK40_HALF)  clk40   = ~clk40;
    always #(CPUCLK_HALF) cpu_clk = ~cpu_clk;
@@ -384,12 +432,36 @@ module tb_sun2 #(
          // machine with an MMU, and what actually decodes is the page map's
          // type field and physical page.  type 0 = memory, 1 = on-board I/O,
          // 2 = the system bus.
+         // On a protection fault the six permission bits are the whole
+         // story, so print them rather than making someone re-run with a
+         // waveform.  ps_pmap2devices[11:6] are, in order, PMP_SUP_READ,
+         // SUP_WRITE, SUP_EXECUTE, USER_READ, USER_WRITE and USER_EXECUTE --
+         // the names in sun2_fpga.v call the first one VALID, which it is
+         // not.  [5] is not wired to anything.  The pmeg and the two context
+         // registers say which entry was consulted to get there.
          $display("[%t] BUS ERROR #%0d: A=%06x FC=%0d %s -> type %0d page %03x  (%s)",
                   $realtime, n_berr, a, dut.P_FC,
                   dut.P_RW_n ? "read" : "write",
                   dut.sun2.TYPE, dut.sun2.ma_pmap2devices,
                   t ? "timeout, nothing answered"
                     : "protection violation from the page map");
+         if (!t)
+           $display("                perm SR=%0d SW=%0d SX=%0d UR=%0d UW=%0d UX=%0d (spare=%0d)  pmeg=%02x  ctx sup=%0d usr=%0d",
+                    dut.sun2.ps_pmap2devices[11], dut.sun2.ps_pmap2devices[10],
+                    dut.sun2.ps_pmap2devices[9],  dut.sun2.ps_pmap2devices[8],
+                    dut.sun2.ps_pmap2devices[7],  dut.sun2.ps_pmap2devices[6],
+                    dut.sun2.ps_pmap2devices[5],
+                    dut.sun2.ia_smap2pmap,
+                    dut.sun2.ctx_out[10:8], dut.sun2.ctx_out[2:0]);
+         // Who was driving, and was this even a live bus cycle?  A supervisor
+         // 68010 has no business emitting FC=2, and the only way it can is a
+         // `moves` with SFC/DFC set to FC_UP -- so record whether the CPU or
+         // the DVMA engine owned the bus, what the CPU's own FC lines said,
+         // and whether AS was actually asserted.
+         if (!t)
+           $display("                dvma=%0d cpu_fc=%0d p_fc=%0d AS_n=%0d C_S8=%0d ctrl=%0d gen=%0d",
+                    dut.dvma_active, dut.cpu_fc, dut.P_FC, dut.P_AS_n,
+                    dut.sun2.C_S8, dut.sun2.FC_CTRLLAYER, dut.sun2.FC_GENERAL);
          last_berr_a = a;
          last_berr_t = t;
       end
@@ -518,9 +590,10 @@ module tb_sun2 #(
       void'($value$plusargs("clk4m_bit=%d", clk4m_bit));
 
       $display("=== Sun-2 simulation ===");
-      $display("cpu_clk %0.4f MHz, clk40 %0.4f MHz, SCC clock %0.4f MHz (clk40 / %0d)",
+      $display("cpu_clk %0.4f MHz, clk40 %0.4f MHz, SCC/timer clock %0.4f MHz (clk40 / %0d)",
                500.0 / CPUCLK_HALF, 500.0 / CLK40_HALF,
-               (500.0 / CLK40_HALF) / real'(2 << clk4m_bit), 2 << clk4m_bit);
+               (500.0 / CLK40_HALF) / real'(clk4m_bit < 0 ? 1 : 2 << clk4m_bit),
+               clk4m_bit < 0 ? 1 : 2 << clk4m_bit);
       $display("timeout %0.1f ms of simulated time", timeout_ms);
       measure_clocks(100.0);
 

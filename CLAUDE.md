@@ -29,6 +29,7 @@ Simulation knobs that matter, all on `make -C sim xsim`:
 | `MB_ETHER=1` | MultiBus only: fit the Sun-2 Ethernet card in the cage. Off by default, because the 23,629 fingerprint is the machine *without* it |
 | `FB=1` | fit the frame buffer, either machine. Changes what the machine looks like — with a display the console goes to the screen and the serial port falls silent. On MultiBus it also builds the keyboard/mouse SCC, which is on the video board |
 | `XY450=1` | MultiBus only: fit the Xylogics 450 disk controller. Needs `MEM_MIB=1` or more and `-testplusarg blk_image=<abs path>`; `tools/mkxydisk` writes one |
+| `CPU_HZ=40000000` | run the CPU faster. Correct, and *slower* to simulate — see the trap below |
 | `TIMEOUT_MS=` | simulated milliseconds before giving up |
 | `XSIMARGS="-testplusarg trace_dvma=16"` | also `trace_irq`, `heartbeat_ms`, `crs_stuck`, `vcd_full` |
 
@@ -113,6 +114,17 @@ board decodes only A19/A12/A11 up there, so all three alias; `MATCH_FB` in
 `sun2_fpga.v` matches that. Everything from `sun2_wishbone_bridge` to the HDMI
 pins is shared and machine-independent.
 
+**The MMU has two context registers, not one.** `sys/sun2/mmu.h` puts the
+supervisor context at FC_MAP offset 6 and the user context at offset 7 — one
+16-bit word, supervisor in the even byte, user in the odd — and every writer of
+either is a `movsb` to its own byte. Supervisor accesses translate through the
+supervisor context and user accesses through the user context, which is what
+lets `sun2/locore.s` walk contexts 1..NCONTEXT-1 invalidating every segment
+while it goes on executing. `ctx_reg.v` must therefore honour UDS/LDS; a write
+that lands on both halves is invisible to the PROM, which always sets the two
+to the same value (`mon/kernel/trap.s:398-400`), and fatal to SunOS, which is
+the first thing to make them differ.
+
 **Two Ethernets, sharing only the 82586.** The VME machine's is on board and
 reaches main memory by DVMA through the MMU (`rtl/sun2-vme/sun2_dvma.v`). The MultiBus
 machine's is a card with its own memory and its own page map
@@ -144,6 +156,14 @@ second interrupt is read as the *next* chain completing. Note also that SunOS
 3.4 never uses the Attention protocol at all — `XY_ATTN`/`XY_ACK` appear in no
 C file in the tree — so AREQ/AACK exists here for 4.x and for not lying to a
 driver that does use it.
+
+Data moves **four bytes per DVMA transaction**, not one. The Wishbone port is
+32 bits and `sun2_dvma` holds the bus request across both halves of one access,
+so a longword is one arbitration and two 68010 cycles: 128 round trips per
+sector instead of 512. A chunk runs to the end of the longword it starts in or
+the end of the sector, so an unaligned `xy_bufoff` costs one short transaction
+at each end and nothing else — `tb_xy450.sv` section 10b covers all four
+alignments and checks the bytes either side of the buffer are untouched.
 
 Two more facts, about how it reaches memory. **The PROM remaps the DVMA window
 before every boot** — `FAKES1BOOT` is unconditional, so
@@ -232,6 +252,23 @@ IOPB came back with the driver's own zeroes in it, reading as success.
 
 ## Traps that have already cost time
 
+* **A faster CPU clock is a slower simulation.** `CPU_HZ=40000000` is a real
+  configuration — same 23,629 bus errors, byte-identical console — and boot to
+  the prompt costs **807 s of wall clock against 602 s** at 12.5 MHz, for 0.70 s
+  of simulated time against 1.63 s. xsim's cost tracks **cpu_clk edges**, not
+  simulated time, and clk40 (39.3216 MHz, fixed by the baud rate) clocks only
+  the SCC. Simulated time fell by 2.3x where the clock rose by 3.2x, because
+  ~270 ms of the boot is the PROM talking at 9600 baud and a faster CPU only
+  spins harder waiting for it — so cpu_clk edges rose 37% and wall clock 34%.
+  Anything bounded by real time rather than by instructions gets *worse*, and a
+  SunOS boot has more of that than a monitor boot, not less.
+* **A byte-addressed register pair needs byte strobes.** The two context
+  registers share a word, and `ctx_reg.v` wrote both halves on any write. A
+  68010 byte write drives the byte on *both* halves of the data bus, so
+  `setusercontext(1)` moved the supervisor context too and SunOS died about
+  0x48 bytes into `_start` — bus error on the instruction fetch, bus error on
+  the stack frame, double fault, CPU halted. Nothing caught it for the whole
+  life of the project because the PROM keeps the two contexts equal.
 * **`xvlog` is stricter than Verilator and Yosys about declaration order.** A
   wire declared after its first use compiles elsewhere and fails here.
 * **A clock that only *sometimes* gets a BUFG.** `clk50` drives the reset

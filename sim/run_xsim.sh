@@ -50,6 +50,15 @@ rundir_tag=""
 case " $SUN2_DEFINES " in *" SUN2_MB_ETHER "*) rundir_tag="$rundir_tag-mbether" ;; esac
 case " $SUN2_DEFINES " in *" SUN2_FB "*)       rundir_tag="$rundir_tag-fb" ;; esac
 case " $SUN2_DEFINES " in *" SUN2_XY450 "*)    rundir_tag="$rundir_tag-xy450" ;; esac
+# ... and the CPU clock, because it is a different snapshot: two runs sharing a
+# directory recompile it underneath each other.  Only when it is not the
+# default, so every path measured so far keeps its name.
+[ -n "${SUN2_CPU_HZ:-}" ] && [ "${SUN2_CPU_HZ}" != 12500000 ] && \
+	rundir_tag="$rundir_tag-cpu$((SUN2_CPU_HZ / 1000000))"
+# ... and the console rate, for the same reason: it is -generic_top BAUD, so a
+# 38400 run and a 9600 run are different snapshots.
+[ -n "${SUN2_BAUD:-}" ] && [ "${SUN2_BAUD}" != 9600 ] && \
+	rundir_tag="$rundir_tag-baud${SUN2_BAUD}"
 rundir="$top/build/sim/xsim${SUN2_MACHINE:+-$SUN2_MACHINE}$rundir_tag"
 mkdir -p "$rundir"
 
@@ -143,6 +152,7 @@ xelab -debug $debug -O3 --timescale 1ns/1ps \
 	-L sun2 -L unisim \
 	-generic_top "BAUD=${SUN2_BAUD:-9600}" \
 	-generic_top "MEM_LATENCY=${SUN2_MEM_LATENCY:-0}" \
+	-generic_top "CPU_HZ=${SUN2_CPU_HZ:-12500000}" \
 	sun2.tb_sun2 -s sun2_sim
 
 echo "== running =="

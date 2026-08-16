@@ -95,8 +95,29 @@ MEM_LATENCY ?= 0
 TIMEOUT_MS ?= 6000
 STOP_ON    ?= ">"
 
-# CPU clock for the board-level simulation; the core-level one has no MMCMs.
+# The CPU clock, for both the board-level and the core-level simulation.
+# 12.5 MHz is the real machine and every fingerprint in the tree.
+#
+# Raising it does not make a long run finish sooner, which is worth knowing
+# before spending an evening on it.  Boot to the monitor prompt, MEM_MIB=1
+# ROM=fast, identical console and the same 23629 bus errors either way:
+#
+#     12.5 MHz   1.63 s simulated   602 s wall
+#     40   MHz   0.70 s simulated   807 s wall
+#
+# xsim's cost tracks cpu_clk edges, not simulated time, and those went up --
+# simulated time fell by 2.3x while the clock rose by 3.2x, because a fixed
+# 270 ms of the boot is the PROM talking at 9600 baud and a faster CPU only
+# spins harder waiting for it.  tb_sun2.sv has the full arithmetic.
+#
+# It gets its own build/sim directory, so a 40 MHz run and a 12.5 MHz one can
+# be in flight at once.
 CPU_HZ ?= 12500000
+
+# Console rate.  The machine's is set by the SCC's clock, which +clk4m_bit
+# scales -- see tb_sun2.sv.  This tells the log decoder what to expect, and has
+# to be moved in step with it or the console comes out as line noise.
+BAUD ?= 9600
 
 PLUSARGS = -testplusarg timeout_ms=$(TIMEOUT_MS) -testplusarg stop_on=$(STOP_ON)
 
@@ -107,6 +128,7 @@ rom:
 
 xsim: rom
 	SUN2_DEFINES="$(DEFINES)" SUN2_MEM_LATENCY=$(MEM_LATENCY) \
+	SUN2_CPU_HZ=$(CPU_HZ) SUN2_BAUD=$(BAUD) \
 	SUN2_MACHINE=$(MACHINE) ./run_xsim.sh $(PLUSARGS) $(XSIMARGS)
 
 # --- board level: the Sun-2 as it will be on the Wukong --------------------

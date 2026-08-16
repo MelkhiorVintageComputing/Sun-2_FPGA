@@ -10,6 +10,10 @@ module sun2_mmu(input CLK,
 		input [15:0]  P_DIN,
 		input [23:1]  P_A,
 		input [2:0]   P_FC,
+		// The two context registers share a word and are written a byte
+		// at a time, so ctx_reg needs to know which half was selected.
+		input 	      P_UDS_n,
+		input 	      P_LDS_n,
 
 		/* timing signals */
 		input 	      C_S4,
@@ -29,6 +33,8 @@ module sun2_mmu(input CLK,
 	       .din(P_DIN),
 	       .USER_n(P_FC[2]),
 	       .WR(WR & MATCH_CTX & C_S4),
+	       .UDS_n(P_UDS_n),
+	       .LDS_n(P_LDS_n),
 	       .dout(ctx_out), // 16-bits output (3 lsb used in each byte)
 	       .cx(cx_ctx2smap) // 3-bits output (selected User:Supervisor by P_FC[2])
 	       );

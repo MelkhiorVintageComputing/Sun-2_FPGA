@@ -733,6 +733,43 @@ module tb_xy450;
       want(int_o == 1'b0, "writing 1 to IPND did not drop the interrupt");
 
       // ==================================================================
+      // 10b. Data addresses that are not longword aligned
+      // ==================================================================
+      // Sector data moves four bytes to a transaction, so a buffer that does
+      // not start on a longword costs one short transaction at each end.  The
+      // IOPB can name any address -- xy_bufoff comes from the mainbus mapper
+      // and carries whatever offset the user's buffer had -- so all four
+      // alignments have to be right, and the wrong lane mask is invisible
+      // until something reads the bytes back.
+      for (i = 0; i < 4; i++) begin
+         for (bad = 0; bad < 600; bad++) mem_put(BUF_VA + bad, 8'h00);
+         xycmd(8'h82, 8'h00, 8'h00, 8'h00, 16'h0, 16'h1,
+               DMADDR[15:0] + i[15:0], got);
+         want(got && iopb_get(3) == 8'h00,
+              $sformatf("a read to an offset-%0d buffer gave %02x", i, iopb_get(3)));
+         want({mem_byte(BUF_VA + i + 508),
+               mem_byte(BUF_VA + i + 509)} == 16'hDABE,
+              $sformatf("the label did not land at buffer offset %0d", i));
+         want(mem_byte(BUF_VA + i - 1) == 8'h00 || i == 0,
+              $sformatf("a transfer at offset %0d wrote the byte before it", i));
+         want(mem_byte(BUF_VA + i + 512) == 8'h00,
+              $sformatf("a transfer at offset %0d wrote the byte after it", i));
+      end
+
+      // And a write from an unaligned buffer, read back to a different one.
+      for (i = 0; i < 512; i++) mem_put(BUF_VA + 3 + i, 8'h96 ^ i[7:0]);
+      xycmd(8'h81, 8'h00, 8'd1, 8'd4, 16'd7, 16'h1, DMADDR[15:0] + 16'd3, got);
+      want(got && iopb_get(3) == 8'h00,
+           $sformatf("an unaligned Write gave %02x", iopb_get(3)));
+      for (i = 0; i < 512; i++) mem_put(BUF_VA + i, 8'h00);
+      xycmd(8'h82, 8'h00, 8'd1, 8'd4, 16'd7, 16'h1, DMADDR[15:0], got);
+      bad = 0;
+      for (i = 0; i < 512; i++)
+        if (mem_byte(BUF_VA + i) !== (8'h96 ^ i[7:0])) bad++;
+      want(bad == 0,
+           $sformatf("%0d of 512 bytes wrong writing from an unaligned buffer", bad));
+
+      // ==================================================================
       // 11. Chains
       // ==================================================================
       // The geometry from section 7 is still in force -- 4 heads, 32 sectors --
