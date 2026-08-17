@@ -53,7 +53,28 @@ A boot with `FB=1` writes `build/sim/xsim-vme-fb/fb.mem` — the aperture as raw
 32-bit Wishbone words. `make -C sim screenshot` replays it through the real
 `fb_scanout` and writes `build/sim/unit-scanout/screen.ppm`, which is the only
 thing that renders what the machine actually drew rather than reading it out of
-the memory model.
+the memory model. The PPM is the whole 1920x1080 HDMI frame; the Sun's
+1152x900 screen is centred in it, at offset (384, 90).
+
+**With a display fitted there is no serial console to read.** The PROM sets
+`g_outsink = OUTSCREEN` whenever `s2fbthere()` succeeds (`sunmon.c:396-401`)
+and there is no way to ask for both, so `console.log` stays empty and the only
+artefact is `fb.mem` — which `$finish` writes at the *end* of the run. For a
+SunOS boot that is a day of wall clock away, and killing the run loses it
+entirely, because the screen only ever existed inside the simulator.
+`+fb_dump_ms=<real>` rewrites the capture on a timer instead, rotating over
+`fb-live0.mem`..`fb-live2.mem` so a run of any length costs three files:
+
+```sh
+make -C sim xsim XY450=1 MB_ETHER=1 FB=1 MEM_MIB=4 ROM=fast \
+     XSIMARGS="-testplusarg fb_dump_ms=250 -testplusarg blk_image=$PWD/build/disk/small.img"
+make -C sim screenshot MACHINE=multibus MB_ETHER=1 FB=1 XY450=1 \
+     FBIMAGE=$PWD/build/sim/<rundir>/fb-live1.mem
+```
+
+Render the index written *before* the newest — the log says which was last —
+because a dump is an in-place rewrite with no rename available, so the newest
+file may be torn.
 
 The board testbench can also type at the monitor prompt (`tb/uart_console.sv`),
 which is how the PHY status register in device page 0xFE7 is checked

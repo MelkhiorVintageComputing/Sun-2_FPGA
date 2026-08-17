@@ -21,6 +21,9 @@
 //   +vcd                 dump the serial line to sun2.vcd
 //   +vcd_full            dump the whole design to sun2.vcd (very large)
 //   +clk4m_bit=<int>     clk40 divider bit for the SCC clock (default 2)
+//   +fb_dump_ms=<real>   with a display fitted, rewrite the frame buffer
+//                        capture this often so the screen can be rendered
+//                        during the run rather than only at the end
 //
 // The console rate and log file are parameters, not plusargs -- set them with
 // xelab -generic_top (sim/run_xsim.sh takes SUN2_BAUD) or iverilog -P.
@@ -386,6 +389,50 @@ module tb_sun2 #(
          $display("frame buffer written to %s (%0d words)", path, FB_WORDS);
       end
    endtask
+
+   // Mirror the screen to disk *while* the run is going, not only at the end.
+   //
+   // With a display fitted the PROM sends the console to the frame buffer and
+   // the serial port falls silent -- sunmon.c:396-401 sets g_outsink=OUTSCREEN
+   // whenever s2fbthere() succeeds, and there is no way to ask for both.  So
+   // console.log stays empty and the only readable artefact is fb.mem, which
+   // $finish writes at the end of the run.  For a SunOS boot that is a day of
+   // wall clock away, and killing the run loses it entirely -- the screen only
+   // ever existed inside the simulator.
+   //
+   // +fb_dump_ms=<real> rewrites it on a timer instead, so
+   //
+   //   make -C sim screenshot MACHINE=multibus MB_ETHER=1 FB=1 XY450=1
+   //
+   // renders whatever the last dump caught, at any point in the run.  Off by
+   // default; the cost when on is the whole aperture rewritten each time.
+   //
+   // The live dumps rotate over a fixed, small set of names rather than
+   // accumulating: a run of any length costs FB_DUMP_KEEP files and no more.
+   // They are separate from FBIMAGE, which $finish still writes and which
+   // `make screenshot' renders, so a completed run is unaffected.
+   //
+   // Rotating also solves a problem overwriting one file does not.  There is
+   // no rename in SystemVerilog, so a dump is an in-place rewrite and a render
+   // that lands in the middle of one gets a torn image.  With rotation the
+   // file written *before* the newest is always complete, so render that:
+   //
+   //   make -C sim screenshot MACHINE=multibus MB_ETHER=1 FB=1 XY450=1 \
+   //        FBIMAGE=$PWD/build/sim/<rundir>/fb-live1.mem
+   //
+   // and the log says which index was written last.
+   localparam int FB_DUMP_KEEP = 3;
+   real fb_dump_ms = 0.0;
+   int  fb_dump_idx = 0;
+   initial begin
+      void'($value$plusargs("fb_dump_ms=%f", fb_dump_ms));
+      if (fb_dump_ms > 0.0)
+        forever begin
+           #(fb_dump_ms * 1000000.0);
+           fb_dump($sformatf("fb-live%0d.mem", fb_dump_idx));
+           fb_dump_idx = (fb_dump_idx + 1) % FB_DUMP_KEEP;
+        end
+   end
 `endif
 
    // ------------------------------------------------------------------
