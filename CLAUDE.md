@@ -19,6 +19,7 @@ make -C syn bitstream [MACHINE=vme] [CPU_HZ=40000000] [BOARD=v3] [XY450=1]
 tools/mkxydisk -o build/disk/xy0.img       # a labelled, bootable disk image
 tools/ufsread IMG cat /vmunix -o OUT      # pull a file out of a 4.2BSD image
 tools/pcsym OUT 63c8e 40b6                # 68010 PCs -> kernel symbols
+tools/fbshot                              # render the screen mid-run (FB=1)
 ```
 
 Simulation knobs that matter, all on `make -C sim xsim`:
@@ -72,9 +73,21 @@ make -C sim screenshot MACHINE=multibus MB_ETHER=1 FB=1 XY450=1 \
      FBIMAGE=$PWD/build/sim/<rundir>/fb-live1.mem
 ```
 
-Render the index written *before* the newest — the log says which was last —
-because a dump is an in-place rewrite with no rename available, so the newest
-file may be torn.
+`tools/fbshot` does the rendering, and gets two things right that are easy to
+get wrong by hand: it picks the newest *complete* capture, by mtime rather than
+by parsing the log (the log lags the file, so reading it can select the oldest
+of the three, which renders blank and looks exactly like "nothing drawn yet");
+and it crops correctly. With no argument it finds the most recently written
+capture on its own.
+
+```sh
+tools/fbshot                                  # newest run, cropped PNG
+tools/fbshot <rundir> -o shot.png --ppm shot.ppm
+tools/fbshot --full                           # the whole HDMI frame
+```
+
+The PPM lands at `build/sim/unit-scanout/screen.ppm` and is overwritten by the
+next render, so pass `--ppm` to keep one.
 
 The board testbench can also type at the monitor prompt (`tb/uart_console.sv`),
 which is how the PHY status register in device page 0xFE7 is checked

@@ -1,0 +1,108 @@
+#!/bin/bash
+#
+# Render what the Sun's screen shows, from a run that is still going.
+#
+# A boot with FB=1 puts the console on the display and leaves the serial port
+# silent -- the PROM sets g_outsink = OUTSCREEN whenever s2fbthere() succeeds
+# (sunmon.c:396-401), and there is no way to ask for both.  So console.log
+# stays empty and the screen exists only inside the simulator.  Running the
+# machine with
+#
+#     XSIMARGS="-testplusarg fb_dump_ms=250 ..."
+#
+# makes tb_sun2 mirror the frame buffer to fb-live0.mem .. fb-live2.mem on a
+# timer, rotating so a run of any length costs three files.  This renders the
+# newest of them through the real fb_scanout and, if PIL is available, crops
+# out the 1152x900 Sun screen as a PNG.
+#
+# Usage:
+#   tools/fbshot [RUNDIR] [-o OUT.png] [--full] [--ppm OUT.ppm]
+#
+#   RUNDIR    a build/sim/xsim-* directory; default is the most recently
+#             written one that has a capture in it
+#   -o        where to write the PNG (default build/sim/unit-scanout/screen.png)
+#   --ppm     also copy the raw PPM here, since the next render overwrites it
+#   --full    keep the whole 1920x1080 HDMI frame instead of cropping
+#
+# Two things this gets right that are easy to get wrong by hand:
+#
+#   * It picks the newest *complete* capture.  A dump is an in-place rewrite --
+#     SystemVerilog has no rename -- so the newest file may be torn, and the one
+#     before it is the newest that is certainly whole.  Ordering by mtime rather
+#     than by parsing the log matters too: the log lags the file, so reading it
+#     can select the oldest of the three, which renders as a blank screen and
+#     looks exactly like "the machine has drawn nothing yet".
+#
+#   * The PPM is the whole HDMI frame with the Sun's 1152x900 screen centred in
+#     it, at (384, 90).  Cropping at the origin silently cuts the right-hand
+#     side off, losing the end of every line.
+#
+set -e -o pipefail
+
+here=$(cd "$(dirname "$0")" && pwd)
+top=$(cd "$here/.." && pwd)
+
+rundir=""
+out=""
+ppmout=""
+crop=1
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-o)      out="$2"; shift 2 ;;
+	--ppm)   ppmout="$2"; shift 2 ;;
+	--full)  crop=0; shift ;;
+	-h|--help) sed -n '2,30p' "$0" | sed 's/^# \?//'; exit 0 ;;
+	*)       rundir="$1"; shift ;;
+	esac
+done
+
+# Default to whichever run directory holds the most recently written capture.
+# Ask about the captures rather than the directories: a run writes its log
+# constantly, so directory mtime tracks the newest *run*, not the newest
+# screen, and a finished run would win over the one still going.
+if [ -z "$rundir" ]; then
+	newest=$(ls -t "$top"/build/sim/xsim-*/fb-live*.mem \
+	            "$top"/build/sim/xsim-*/fb.mem 2>/dev/null | head -1 || true)
+	[ -z "$newest" ] && { echo "no frame buffer capture under $top/build/sim -- boot with FB=1" >&2; exit 1; }
+	rundir=$(dirname "$newest")
+fi
+
+# Newest complete: second newest by mtime when the live dumps are rotating,
+# because the newest may still be being written.  With only one file, or with
+# just fb.mem from a finished run, take what there is.
+pick=$(ls -t "$rundir"/fb-live*.mem 2>/dev/null | sed -n 2p || true)
+[ -z "$pick" ] && pick=$(ls -t "$rundir"/fb-live*.mem 2>/dev/null | head -1 || true)
+[ -z "$pick" ] && pick=$(ls -t "$rundir"/fb.mem 2>/dev/null | head -1 || true)
+[ -z "$pick" ] && { echo "no fb-live*.mem or fb.mem in $rundir" >&2; exit 1; }
+
+# scanout, not screenshot: the screenshot target exists to work out the default
+# FBIMAGE from the machine and its cards, and we already know the file.
+make -s -C "$top/sim" scanout \
+	XSIMARGS="-testplusarg fb_image=$(cd "$(dirname "$pick")" && pwd)/$(basename "$pick") \
+	          -testplusarg fb_ppm=screen.ppm -testplusarg fb_logo" >/dev/null
+
+ppm="$top/build/sim/unit-scanout/screen.ppm"
+[ -f "$ppm" ] || { echo "fb_scanout wrote no PPM" >&2; exit 1; }
+[ -n "$ppmout" ] && cp "$ppm" "$ppmout"
+
+: "${out:=$top/build/sim/unit-scanout/screen.png}"
+if python3 -c "import PIL" 2>/dev/null; then
+	CROP=$crop python3 - "$ppm" "$out" <<-'PY'
+	import os, sys
+	from PIL import Image
+	im = Image.open(sys.argv[1])
+	if os.environ.get("CROP") == "1" and im.size == (1920, 1080):
+	    # the 1152x900 Sun screen is centred in the HDMI frame
+	    im = im.crop((384, 90, 384 + 1152, 90 + 900))
+	im.save(sys.argv[2])
+	PY
+else
+	out="(no PIL; PPM only)"
+fi
+
+sim=$(grep -o '\[[0-9]* ns\]' "$rundir/xsim.log" 2>/dev/null | tail -1)
+err=$(grep -c 'BUS ERROR' "$rundir/xsim.log" 2>/dev/null || echo 0)
+echo "$(basename "$rundir"): sim=${sim:-?} bus errors=$err"
+echo "  from $(basename "$pick") (mtime $(stat -c %y "$pick" | cut -d. -f1))"
+echo "  ppm $ppm"
+echo "  png $out"
