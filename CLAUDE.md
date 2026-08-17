@@ -26,7 +26,7 @@ Simulation knobs that matter, all on `make -C sim xsim`:
 | `MEM_MIB=1` | the first one to reach for — the PROM writes every installed byte, so 7 MiB costs seconds of simulated time and 1 MiB costs under half of one |
 | `ROM=fast` | shortens the PROM's RAM-init pass 64-fold (MultiBus only) |
 | `MEM_LATENCY=7` | memory as slow as the real DDR3 path; 0 (the default) is a one-cycle memory |
-| `MB_ETHER=1` | MultiBus only: fit the Sun-2 Ethernet card in the cage. Off by default, because the 23,629 fingerprint is the machine *without* it |
+| `MB_ETHER=1` | MultiBus only: fit the Sun-2 Ethernet card in the cage. Off by default, because the 22-error fingerprint is the machine *without* it |
 | `FB=1` | fit the frame buffer, either machine. Changes what the machine looks like — with a display the console goes to the screen and the serial port falls silent. On MultiBus it also builds the keyboard/mouse SCC, which is on the video board |
 | `XY450=1` | MultiBus only: fit the Xylogics 450 disk controller. Needs `MEM_MIB=1` or more and `-testplusarg blk_image=<abs path>`; `tools/mkxydisk` writes one |
 | `CPU_HZ=40000000` | run the CPU faster. Correct, and *slower* to simulate — see the trap below |
@@ -207,22 +207,19 @@ copy from it rather than referencing it.
 
 ## Verification discipline
 
-**The 23,629 fingerprint was almost entirely a bug, and the reference is now
-22.** Of those errors 23,607 were protection violations from seven PROM
-program-counter values, four repeating exactly 4096 times — `NUMPMEGS *
-PGSPERSEG`, one per page-map write in `diag.s`'s `PMconst`, `PMdata` and
-`PMaddr` passes — and the "physical page" each reported was the pattern the
-PROM had just written (`000/333/ccc/fff`). They were phantoms: `PROTERR` is
-combinational and the `C_S` chain is cleared only on the posedge *after* `AS`
-releases, so it re-evaluated against an address and function code that were not
-a bus cycle. The PROM cannot raise real ones — `diag.s:41` lists protection as
-a FIXME rather than a test, the map tests all go through untranslated `FC_MAP`,
-and during `PMconst` the bus error vector is still uninitialised, so a real
-Sun-2 would double-fault on the first. Gating `PROTERR` on `~P_AS_n` leaves
-**22**, all timeouts, matching the device probes the PROM really makes, with a
-byte-identical console.
+**The old 23,629 fingerprint was almost entirely a bug.** Of those errors
+23,607 were protection violations from seven PROM program-counter values, four
+repeating exactly 4096 times — `NUMPMEGS * PGSPERSEG`, one per page-map write in
+`diag.s`'s `PMconst`, `PMdata` and `PMaddr` passes — and the "physical page"
+each reported was the pattern the PROM had just written (`000/333/ccc/fff`).
+They were phantoms: `PROTERR` is combinational and the `C_S` chain is cleared
+only on the posedge *after* `AS` releases, so it re-evaluated against an address
+and function code that were not a bus cycle. The PROM cannot raise real ones —
+`diag.s:41` lists protection as a FIXME rather than a test, the map tests all go
+through untranslated `FC_MAP`, and during `PMconst` the bus error vector is
+still uninitialised, so a real Sun-2 would double-fault on the first.
 
-**And the permission bits were one bit high, which is what stopped SunOS.**
+**The permission bits were also one bit high, which is what stopped SunOS.**
 `struct pgmapent` in `sys/mon/s2map.h` is a valid bit then `PMP_SUP_READ`,
 `SUP_WRITE`, `SUP_EXECUTE`, `USER_READ`, `USER_WRITE`, `USER_EXECUTE` — entry
 bits 31 down to 25, i.e. `ps_pmap2devices[11:5]`. Supervisor program read is
@@ -230,47 +227,62 @@ bits 31 down to 25, i.e. `ps_pmap2devices[11:5]`. Supervisor program read is
 marks kernel text `PG_KR` = `SUP_READ|SUP_EXECUTE` (`sys/sun2/pte.h:52`), so the
 kernel could not execute its own text: protection fault at `_start+0xf8`,
 retried forever, each nested 68010 long frame walking the stack down until it
-wrapped past zero into a double fault. A comment here used to warn against
-shifting the bits because it took the boot from ~23,629 errors to ~28,000 —
-that measurement was worthless, since both numbers were counting phantoms and
-the shift only changed which phantom fired. `VALID` is now its own term too;
-before, only supervisor-data-read consulted it, so a *user* access to an
-invalid entry was not refused at all.
-
-Both changes together give a reference boot of **22 bus errors, all timeouts**,
-with the console byte-identical to the 23,629 one. The `FB`, `MB_ETHER` and
-`XY450` deltas below are stated against the old count and have not been
-re-measured yet.
+wrapped past zero into a double fault.
 
 The MultiBus machine is the reference that must not regress. It boots to the
-prompt with **23,629 bus errors** at `MEM_MIB=1 ROM=fast`, with no cards, and
-the bus-error sequence should stay byte-identical — most of those errors are
-the PROM's own page-map diagnostics, so the count is a sensitive fingerprint of
-MMU and bus behaviour. Check it after anything touching shared logic, not just
-after machine-specific work.
+prompt with **22 bus errors** at `MEM_MIB=1 ROM=fast`, with no cards, and the
+bus-error sequence should stay byte-identical. Check it after anything touching
+shared logic, not just after machine-specific work.
 
-Fitting a card changes the fingerprint, which is why the reference has none,
-and the changes add up: `FB=1` gives **23,628**, `MB_ETHER=1` gives **23,626**,
-and both together give **23,625**. Each missing error is a probe that used to
-time out -- one at `0xEC0000` for the display, three for the Ethernet card --
-so 23,629 - 1 - 3 is exactly the pair. A count that does not decompose that way
-is worth running down before anything else.
+Every one of those 22 is a device probe that timed out, which is the only kind
+of bus error a correct boot takes. Fitting a card removes its probe, and the
+changes add up:
 
-A disk changes it more, because a successful boot ends the run sooner than a
-failed one: `XY450=1` with an image, stopping at the boot block rather than at
-the prompt, gives **23,617** —
+| configuration | bus errors |
+|---|---|
+| no cards (the reference) | **22** |
+| `FB=1` | **21** |
+| `MB_ETHER=1` | **19** |
+| `FB=1 MB_ETHER=1` | **18** |
+| `XY450=1` with an image, stopping at the boot block | **10** |
+| `XY450=1 MB_ETHER=1 FB=1` with an image, `TIMEOUT_MS=8000` | **8** |
+
+One error for the display's probe at `0xEC0000`, three for the Ethernet card,
+twelve for the disk — so 22 - 1 - 3 is exactly the pair and 22 - 14 the trio. A
+count that does not decompose that way is worth running down before anything
+else. These were measured together after the `PROTERR` fixes, and every one is
+exactly **23,607** below the number it replaced: the phantom count was a
+constant, identical in all six, and no genuine error moved.
+
+The disk runs are:
 
 ```sh
 make -C sim xsim MEM_MIB=1 ROM=fast XY450=1 STOP_ON="running." \
      XSIMARGS="-testplusarg blk_image=$PWD/build/disk/xy0.img"
+make -C sim xsim MEM_MIB=1 ROM=fast XY450=1 MB_ETHER=1 FB=1 TIMEOUT_MS=8000 \
+     XSIMARGS="-testplusarg blk_image=$PWD/build/disk/xy0.img"
 ```
 
 and the stop string has to be one word, because `sim/Makefile` passes it to
-xsim unquoted.  A 2/120 with all three cards -- `XY450=1 MB_ETHER=1 FB=1` at
-`TIMEOUT_MS=8000` -- gives **23,615**, with the console on the screen and the
+xsim unquoted. The all-three run puts the console on the screen and leaves the
 serial port silent; `make -C sim screenshot MACHINE=multibus MB_ETHER=1 FB=1
 XY450=1` renders what it drew, which is the only artefact that shows the whole
 machine working at once.
+
+The VME 2/50 boots to the prompt with **11 bus errors** at `MEM_MIB=1`, all but
+one of them the same kind of probe — the frame buffer at `0xEC0000`, MBMEM at
+`0xF00000`, both Xylogics addresses, and two more, each probed twice. It runs a
+different PROM image (`rsun`), so it is an independent check on shared logic and
+worth running for that reason alone.
+
+**`make -C sim check` does not boot anything.** It is `check_console.sh` against
+whatever `console.log` is already in the run directory, so it will happily pass
+against a log from days ago — that cost a wrong "VME is fine" here. Run
+`make -C sim xsim MACHINE=vme MEM_MIB=1` first, then `check`.
+
+The one protection violation left on either machine is `A=EF00D2 FC=6` at about
+6.8 us, before reset has finished, with the page map still reading `type x page
+xxx`. It is a power-on artefact, identical on both machines, and not yet chased.
 
 Unit tests are expected to earn their keep: mutate the RTL, confirm the test
 fails, revert. `tb/tb_dvma.sv` was written this way and still missed a real
@@ -288,7 +300,7 @@ IOPB came back with the driver's own zeroes in it, reading as success.
 ## Traps that have already cost time
 
 * **A faster CPU clock is a slower simulation.** `CPU_HZ=40000000` is a real
-  configuration — same 23,629 bus errors, byte-identical console — and boot to
+  configuration — same bus-error count, byte-identical console — and boot to
   the prompt costs **807 s of wall clock against 602 s** at 12.5 MHz, for 0.70 s
   of simulated time against 1.63 s. xsim's cost tracks **cpu_clk edges**, not
   simulated time, and clk40 (39.3216 MHz, fixed by the baud rate) clocks only

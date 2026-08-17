@@ -564,7 +564,7 @@ arbitration — on the schematic the card passes `P1.BPRN` straight to
 
 `rtl/sun2-multibus/sun2_mb_ether.sv` is the card; `make -C sim xsim MB_ETHER=1` fits it. It
 is optional because a 2/120 with an empty cage is equally a real machine, and
-it is the one the 23,629-bus-error fingerprint describes.
+it is the one the 22-bus-error fingerprint describes.
 
 Two windows in MultiBus memory space, both jumpered on the real card:
 
