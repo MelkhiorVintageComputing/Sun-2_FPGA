@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+#
+# Turn 68010 program counters from a simulation log into SunOS kernel symbols.
+#
+# A simulation says "halted at 0x40fe" or "pc = 63c8e"; what matters is that
+# those are `seglp+0x74' in locore.s and `_poke+0x32' -- the second of which
+# says the kernel was inside its own protected device probe when it took the
+# fault, which is a completely different bug from the one the raw address
+# suggests.  Get the kernel out of the disk image with tools/ufsread first:
+#
+#   tools/ufsread build/disk/small.img cat /vmunix -o build/disk/vmunix
+#
+# Usage:
+#   tools/pcsym KERNEL 63c8e 68b5a 40b6      resolve these addresses
+#   tools/pcsym KERNEL --list                print the symbol table, sorted
+#   tools/pcsym KERNEL < xsim.log            annotate a log on the way past
+#
+# The annotating form rewrites the address forms the testbench and the kernel's
+# own panic handler emit -- `A=xxxxxx', `pc = xxxxx' and `Called from xxxxx' --
+# and leaves every other line alone, so it is safe to pipe a whole run through:
+#
+#   grep -E "alive:|Called from|pc = " xsim.log | tools/pcsym build/disk/vmunix
+#
+# ---------------------------------------------------------------------------
+# The file format
+# ---------------------------------------------------------------------------
+# A Sun-2 vmunix is a.out, big-endian, magic 0407 (OMAGIC).  The header is 32
+# bytes: a bitfield byte (a_dynamic:1, a_toolversion:7), a_machtype, a 16-bit
+# a_magic, then seven 32-bit words -- text, data, bss, syms, entry, trsize,
+# drsize.  The sizes are worth checking against what the standalone boot prints
+# ("Size: 604688+111664+171288 bytes"), because if they disagree the kernel on
+# the disk is not the one that booted.
+#
+# Sections follow in order: text, data, text relocation, data relocation,
+# symbols, strings.  A symbol is 12 bytes -- n_strx, n_type, n_other, n_desc,
+# n_value -- and the string table opens with its own 32-bit length, so a name
+# lives at stroff + n_strx.
+#
+# n_type has the section in bits 1..4 (2 absolute, 4 text, 6 data, 8 bss) with
+# bit 0 meaning external.  Anything with a bit set in 0xe0 is a debugger stab,
+# not a real symbol; those carry line numbers and source paths and would bury
+# the address lookup in noise, so they are dropped.
+#
+
+import argparse
+import bisect
+import re
+import signal
+import struct
+import sys
+
+# `--list | head' is the obvious way to use this; without it python turns the
+# closed pipe into a traceback.
+try:
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+except (AttributeError, ValueError):
+    pass
+
+SECTION = {0: "U", 2: "A", 4: "T", 6: "D", 8: "B"}
+
+
+def load(path):
+    d = open(path, "rb").read()
+    if len(d) < 32:
+        raise SystemExit("%s: too short to be an a.out" % path)
+    magic, = struct.unpack_from(">H", d, 2)
+    if magic not in (0o407, 0o410, 0o413):
+        raise SystemExit("%s: a_magic is 0%o, not an a.out I recognise" % (path, magic))
+    text, data, bss, syms, entry, trs, drs = struct.unpack_from(">7I", d, 4)
+    symoff = 32 + text + data + trs + drs
+    stroff = symoff + syms
+    if stroff > len(d):
+        raise SystemExit("%s: symbol table runs past the end of the file; the "
+                         "kernel was probably stripped" % path)
+    out = []
+    for k in range(syms // 12):
+        strx, ntype, _other, _desc, val = struct.unpack_from(">IBbhI", d, symoff + 12 * k)
+        if ntype & 0xE0:                       # a debugger stab, not a symbol
+            continue
+        end = d.index(b"\0", stroff + strx)
+        name = d[stroff + strx:end].decode("ascii", "replace")
+        if name:
+            out.append((val, name, SECTION.get(ntype & 0x1E, "?")))
+    out.sort()
+    return dict(text=text, data=data, bss=bss, entry=entry, syms=out)
+
+
+class Resolver:
+    def __init__(self, syms, text=0, data=0, bss=0):
+        # Only text and data can contain a program counter.  Keeping bss out
+        # matters: it is linked above them and would swallow every address.
+        #
+        # Zero-valued entries go too.  `__DYNAMIC' is a linker artefact sitting
+        # at 0, and leaving it in drops the floor to zero, so every stack and
+        # vector address in a log came back as `__DYNAMIC+0x3706'.  The kernel's
+        # text really starts at 0x4000.
+        self.s = sorted((v, n) for v, n, k in syms if k in "TD" and v)
+        self.v = [v for v, _ in self.s]
+        # Bounds, because a nearest-symbol-below lookup will happily answer for
+        # an address nowhere near the kernel.  A Sun-2 log is full of them:
+        # PROM space at 0xEF0000 came back as `_edata+0xe3f3ec' and a stack
+        # address below the text base as `__DYNAMIC+0x3706'.  Both are worse
+        # than saying nothing, because they read as real answers.
+        #
+        # The bound has to come from the section sizes, not from the symbol
+        # values.  The kernel carries *absolute* symbols for hardware addresses
+        # -- the PROM at 0xEF0000 among them -- so taking the largest symbol
+        # puts the ceiling above every address one would want rejected.
+        self.lo = self.v[0] if self.v else 0
+        self.hi = self.lo + text + data + bss
+
+    def __call__(self, pc):
+        if not self.v or pc < self.lo or pc > self.hi:
+            return None
+        i = bisect.bisect_right(self.v, pc) - 1
+        if i < 0:
+            return None
+        base, name = self.s[i]
+        return "%s+0x%x" % (name, pc - base) if pc != base else name
+
+
+PATTERNS = [re.compile(p) for p in (
+    r"\bA=([0-9a-fA-F]{4,8})\b",
+    r"\bpc = ([0-9a-fA-F]{4,8})\b",
+    r"\bCalled from ([0-9a-fA-F]{4,8})\b",
+)]
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(description="resolve 68010 PCs against a SunOS a.out kernel")
+    ap.add_argument("kernel")
+    ap.add_argument("addresses", nargs="*", help="hex, with or without 0x")
+    ap.add_argument("--list", action="store_true", help="print the symbol table instead")
+    args = ap.parse_args(argv[1:])
+
+    k = load(args.kernel)
+    look = Resolver(k["syms"], k["text"], k["data"], k["bss"])
+
+    if args.list:
+        print("# text=%d data=%d bss=%d entry=0x%x  (%d symbols)"
+              % (k["text"], k["data"], k["bss"], k["entry"], len(k["syms"])))
+        for v, n, kind in k["syms"]:
+            print("%08x %s %s" % (v, kind, n))
+        return 0
+
+    if args.addresses:
+        for a in args.addresses:
+            pc = int(a, 16)
+            print("  0x%06x  %s" % (pc, look(pc) or "(below the first symbol)"))
+        return 0
+
+    # Annotate a log on the way past.
+    for line in sys.stdin:
+        hits = []
+        for pat in PATTERNS:
+            for m in pat.finditer(line):
+                s = look(int(m.group(1), 16))
+                if s and s not in hits:
+                    hits.append(s)
+        line = line.rstrip("\n")
+        print("%s%s" % (line, ("    | " + " ".join(hits)) if hits else ""))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

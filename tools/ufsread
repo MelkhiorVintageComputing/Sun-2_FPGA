@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+#
+# Read files out of a 4.2BSD filesystem in a Sun disk image, without root and
+# without mounting anything.
+#
+# This exists because the only way to see what a SunOS boot is actually running
+# is to get the kernel out of the disk image it booted from.  `tools/pcsym'
+# then turns a program counter from a simulation log into a function name,
+# which is the difference between "it died at 0x63c8e" and "it died inside
+# poke(), the kernel's own protected device probe".
+#
+# Linux can mount these -- `mount -t ufs -o ufstype=sun' -- but that needs root
+# and a loop device, and neither is available in the flows here.
+#
+# Usage:
+#   tools/ufsread IMAGE ls  [PATH]        list a directory (default /)
+#   tools/ufsread IMAGE cat PATH [-o OUT] copy a file out
+#   tools/ufsread IMAGE label             print the Sun disk label
+#   ... with [-p LETTER] to pick a partition (default a)
+#
+# Example:
+#   tools/ufsread build/disk/small.img cat /vmunix -o build/disk/vmunix
+#
+# ---------------------------------------------------------------------------
+# The format, and the two things that are easy to get wrong
+# ---------------------------------------------------------------------------
+# Everything is big-endian, because the machine that wrote it was a 68000.
+#
+# A partition's filesystem starts at its first block; the superblock is 8 KiB
+# in, and carries magic 0x011954 at byte offset 1372.  Partition start comes
+# from the Sun label in block 0 of the whole disk -- `dkl_map[i].cylno' times
+# nhead times nsect -- the same structure tools/mkxydisk writes.
+#
+# 1. Inode numbers index the inode array *directly*, not off by one.  The 4.2BSD
+#    macros are itog(fs,x) = x / fs_ipg, itoo(fs,x) = x % INOPB(fs), and
+#    itod(fs,x) = cgimin(fs, itog(fs,x)) + blkstofrags(fs, (x % fs_ipg) / INOPB(fs)).
+#    Using x-1 anywhere in that reads the slot below the one wanted, and since
+#    inode 1 is reserved and empty, asking for the root gives a directory of
+#    zero entries rather than an error.  That cost a debugging pass here.
+#
+# 2. Block pointers in an inode are *fragment* numbers, not block numbers, so a
+#    byte offset is frag * fs_fsize -- not fs_bsize.  A file is stored in whole
+#    fs_bsize blocks except the tail, which may occupy fewer fragments.
+#
+# Directory entries are the original 4.2BSD `struct direct': u_long d_ino,
+# u_short d_reclen, u_short d_namlen, then the name.  No d_type byte -- that is
+# the later 4.4 layout and would misparse every name here.
+#
+
+import argparse
+import struct
+import sys
+
+SECSIZE = 512
+FS_MAGIC = 0x011954
+SBOFF = 8192
+DINODE_SIZE = 128
+NDADDR = 12
+NIADDR = 3
+
+
+def sun_label(f):
+    """The Sun disk label in block 0: geometry and the partition map."""
+    f.seek(0)
+    d = f.read(SECSIZE)
+    magic, = struct.unpack_from(">H", d, 508)
+    if magic != 0xDABE:
+        return None
+    (apc, gap1, gap2, intrlv, ncyl, acyl,
+     nhead, nsect, bhead, ppart) = struct.unpack_from(">10H", d, 424)
+    parts = []
+    for i in range(8):
+        cyl, nblk = struct.unpack_from(">II", d, 444 + 8 * i)
+        parts.append((cyl, nblk))
+    return dict(ascii=d[:128].split(b"\0")[0].decode("ascii", "replace"),
+                ncyl=ncyl, acyl=acyl, nhead=nhead, nsect=nsect,
+                bhead=bhead, ppart=ppart, parts=parts)
+
+
+class UFS:
+    def __init__(self, f, part_off=0):
+        self.f = f
+        self.base = part_off
+        sb = self._rd(self.base + SBOFF, 2048)
+        magic, = struct.unpack_from(">I", sb, 1372)
+        if magic != FS_MAGIC:
+            raise SystemExit("no 4.2BSD superblock at offset %d (magic %#x)"
+                             % (self.base + SBOFF, magic))
+        g = lambda o: struct.unpack_from(">i", sb, o)[0]
+        self.iblkno = g(16)
+        self.cgoffset, self.cgmask = g(24), g(28)
+        self.ncg = g(44)
+        self.bsize, self.fsize, self.frag = g(48), g(52), g(56)
+        self.nindir, self.inopb = g(116), g(120)
+        self.ipg, self.fpg = g(184), g(188)
+
+    def _rd(self, off, n):
+        self.f.seek(off)
+        return self.f.read(n)
+
+    def _frag_off(self, fr):
+        return self.base + fr * self.fsize
+
+    def _cgstart(self, c):
+        return self.fpg * c + self.cgoffset * (c & ~self.cgmask)
+
+    def inode(self, ino):
+        # itog / itod / itoo, and they take the inode number as-is.
+        cg = ino // self.ipg
+        base = self._cgstart(cg) + self.iblkno
+        fr = base + ((ino % self.ipg) // self.inopb) * self.frag
+        d = self._rd(self._frag_off(fr) + (ino % self.inopb) * DINODE_SIZE,
+                     DINODE_SIZE)
+        mode, = struct.unpack_from(">H", d, 0)
+        size, = struct.unpack_from(">Q", d, 8)
+        return dict(ino=ino, mode=mode, size=size,
+                    db=list(struct.unpack_from(">%di" % NDADDR, d, 40)),
+                    ib=list(struct.unpack_from(">%di" % NIADDR, d, 88)))
+
+    def _indirect(self, fr):
+        return list(struct.unpack(">%di" % self.nindir,
+                                  self._rd(self._frag_off(fr), self.bsize)))
+
+    def _blk(self, ino, i):
+        if i < NDADDR:
+            return ino["db"][i]
+        i -= NDADDR
+        if i < self.nindir:
+            return self._indirect(ino["ib"][0])[i] if ino["ib"][0] else 0
+        i -= self.nindir
+        if i < self.nindir * self.nindir:
+            if not ino["ib"][1]:
+                return 0
+            l1 = self._indirect(ino["ib"][1])[i // self.nindir]
+            return self._indirect(l1)[i % self.nindir] if l1 else 0
+        raise SystemExit("triple-indirect blocks are not implemented; that is "
+                         "a file over %d bytes" % (self.bsize * self.nindir ** 2))
+
+    def read(self, ino):
+        out = bytearray()
+        n = ino["size"]
+        i = 0
+        while len(out) < n:
+            fr = self._blk(ino, i)
+            want = min(self.bsize, n - len(out))
+            # A hole reads as zeroes rather than an error, as it would on a
+            # real read(2).
+            out += self._rd(self._frag_off(fr), want) if fr else bytes(want)
+            i += 1
+        return bytes(out[:n])
+
+    def listdir(self, ino):
+        d = self.read(ino)
+        off = 0
+        ents = []
+        while off + 8 <= len(d):
+            i, reclen, namlen = struct.unpack_from(">IHH", d, off)
+            if reclen < 8:
+                break
+            if i:
+                ents.append((d[off + 8:off + 8 + namlen].decode("ascii", "replace"), i))
+            off += reclen
+        return ents
+
+    def lookup(self, path):
+        cur = self.inode(2)                      # 2 is always the root
+        for part in [p for p in path.split("/") if p]:
+            if (cur["mode"] & 0o170000) != 0o040000:
+                raise SystemExit("%s: not a directory" % part)
+            for name, ino in self.listdir(cur):
+                if name == part:
+                    cur = self.inode(ino)
+                    break
+            else:
+                raise SystemExit("%s: not found" % path)
+        return cur
+
+
+def open_fs(image, letter):
+    f = open(image, "rb")
+    lab = sun_label(f)
+    off = 0
+    if lab:
+        idx = "abcdefgh".index(letter)
+        cyl, nblk = lab["parts"][idx]
+        if not nblk:
+            raise SystemExit("partition %s is empty in the label" % letter)
+        off = cyl * lab["nhead"] * lab["nsect"] * SECSIZE
+    return f, UFS(f, off), lab
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(description="read a 4.2BSD filesystem in a Sun disk image")
+    ap.add_argument("image")
+    ap.add_argument("command", choices=["ls", "cat", "label"])
+    ap.add_argument("path", nargs="?", default="/")
+    ap.add_argument("-p", "--partition", default="a", help="partition letter (default a)")
+    ap.add_argument("-o", "--output", help="write here instead of stdout")
+    args = ap.parse_args(argv[1:])
+
+    if args.command == "label":
+        lab = sun_label(open(args.image, "rb"))
+        if not lab:
+            raise SystemExit("no Sun label (magic 0xDABE) in block 0")
+        print("%s" % lab["ascii"])
+        print("  %d cyl + %d alt, %d heads, %d sectors"
+              % (lab["ncyl"], lab["acyl"], lab["nhead"], lab["nsect"]))
+        for i, (cyl, nblk) in enumerate(lab["parts"]):
+            if nblk:
+                print("  part %s: cyl %5d  %8d blocks  start block %d"
+                      % ("abcdefgh"[i], cyl, nblk, cyl * lab["nhead"] * lab["nsect"]))
+        return 0
+
+    f, fs, lab = open_fs(args.image, args.partition)
+
+    if args.command == "ls":
+        ino = fs.lookup(args.path)
+        if (ino["mode"] & 0o170000) == 0o040000:
+            for name, i in sorted(fs.listdir(ino)):
+                sub = fs.inode(i)
+                kind = "d" if (sub["mode"] & 0o170000) == 0o040000 else "-"
+                print("  %s%06o %8d %6d  %s" % (kind, sub["mode"] & 0o7777,
+                                                sub["size"], i, name))
+        else:
+            print("  -%06o %8d %6d  %s" % (ino["mode"] & 0o7777, ino["size"],
+                                           ino["ino"], args.path))
+        return 0
+
+    ino = fs.lookup(args.path)
+    data = fs.read(ino)
+    if args.output:
+        with open(args.output, "wb") as o:
+            o.write(data)
+        print("%s: %d bytes -> %s" % (args.path, len(data), args.output),
+              file=sys.stderr)
+    else:
+        sys.stdout.buffer.write(data)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

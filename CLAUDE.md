@@ -17,6 +17,8 @@ make -C sim board [BOARD_MEM=ddr3]        # the machine as it will be on the Wuk
 make -C syn ip [BOARD=v3]                 # generate the MIG DDR3 controller (once per board)
 make -C syn bitstream [MACHINE=vme] [CPU_HZ=40000000] [BOARD=v3] [XY450=1]
 tools/mkxydisk -o build/disk/xy0.img       # a labelled, bootable disk image
+tools/ufsread IMG cat /vmunix -o OUT      # pull a file out of a 4.2BSD image
+tools/pcsym OUT 63c8e 40b6                # 68010 PCs -> kernel symbols
 ```
 
 Simulation knobs that matter, all on `make -C sim xsim`:
@@ -201,6 +203,23 @@ both machines' page-map setup side by side, and `mon/h/buserr.h` documents
 register semantics no manual states. `m68k-linux-gnu-objdump -D -b binary -m
 m68k:68010 --adjust-vma=0xEF0000` disassembles the images (use
 `--start-address` to land on an instruction boundary).
+
+**A SunOS failure is an address until you resolve it.** `tools/ufsread` reads a
+4.2BSD filesystem out of a Sun disk image without root or a loop device, and
+`tools/pcsym` maps a program counter onto the kernel's a.out symbol table:
+
+```sh
+tools/ufsread build/disk/small.img cat /vmunix -o build/disk/vmunix
+tools/pcsym build/disk/vmunix 63c8e                     # -> _poke+0x32
+grep -E "alive:|Called from|pc = " xsim.log | tools/pcsym build/disk/vmunix
+```
+
+That is the difference between "it died at 0x63c8e" and "it died inside
+`poke()`, the kernel's own protected device probe, which means the probe's
+fault recovery did not work". Check the a.out's text/data/bss against what the
+standalone boot printed — if they disagree, the kernel on the disk is not the
+one that booted. Neither tool writes anything, and the extracted kernel belongs
+in `build/`, not in git.
 
 **`Old/` is the previous working implementation.** Not in git, never modified;
 copy from it rather than referencing it.
