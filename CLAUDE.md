@@ -207,26 +207,40 @@ copy from it rather than referencing it.
 
 ## Verification discipline
 
-**The 23,629 fingerprint is under revision, and most of it was a bug.** Of
-those errors 23,607 were protection violations, and all of them came from seven
-PROM program-counter values — four repeating exactly 4096 times, which is
-`NUMPMEGS * PGSPERSEG`, one per page-map write in `diag.s`'s `PMconst`,
-`PMdata` and `PMaddr` passes. The "physical page" each reported was the pattern
-the PROM had just written (`000/333/ccc/fff`). They are phantoms: `PROTERR` is
+**The 23,629 fingerprint was almost entirely a bug, and the reference is now
+22.** Of those errors 23,607 were protection violations from seven PROM
+program-counter values, four repeating exactly 4096 times — `NUMPMEGS *
+PGSPERSEG`, one per page-map write in `diag.s`'s `PMconst`, `PMdata` and
+`PMaddr` passes — and the "physical page" each reported was the pattern the
+PROM had just written (`000/333/ccc/fff`). They were phantoms: `PROTERR` is
 combinational and the `C_S` chain is cleared only on the posedge *after* `AS`
 releases, so it re-evaluated against an address and function code that were not
-a bus cycle. The PROM cannot be the source of real ones — `diag.s:41` lists
-protection as a FIXME rather than a test, the map tests all go through the
-untranslated `FC_MAP` space, and during `PMconst` the bus error vector is still
-uninitialised, so a real Sun-2 would double-fault on the first of them.
+a bus cycle. The PROM cannot raise real ones — `diag.s:41` lists protection as
+a FIXME rather than a test, the map tests all go through untranslated `FC_MAP`,
+and during `PMconst` the bus error vector is still uninitialised, so a real
+Sun-2 would double-fault on the first. Gating `PROTERR` on `~P_AS_n` leaves
+**22**, all timeouts, matching the device probes the PROM really makes, with a
+byte-identical console.
 
-Gating `PROTERR` on `~P_AS_n` gives **22** bus errors, all timeouts, with a
-byte-identical console. That change is committed but **not yet justified**: the
-PROM raises zero legitimate protection faults, so a monitor boot cannot show
-whether the gate preserves real ones. SunOS needs them for copy-on-write and
-stack growth, and that boot is the test. Until it passes, treat both 23,629
-(un-gated) and 22 (gated) as recorded facts and re-baseline the `FB`,
-`MB_ETHER` and `XY450` deltas below only once the gate is settled.
+**And the permission bits were one bit high, which is what stopped SunOS.**
+`struct pgmapent` in `sys/mon/s2map.h` is a valid bit then `PMP_SUP_READ`,
+`SUP_WRITE`, `SUP_EXECUTE`, `USER_READ`, `USER_WRITE`, `USER_EXECUTE` — entry
+bits 31 down to 25, i.e. `ps_pmap2devices[11:5]`. Supervisor program read is
+`SUP_EXECUTE`, `ps[8]`; we tested `ps[9]`, which is `SUP_WRITE`. `startup()`
+marks kernel text `PG_KR` = `SUP_READ|SUP_EXECUTE` (`sys/sun2/pte.h:52`), so the
+kernel could not execute its own text: protection fault at `_start+0xf8`,
+retried forever, each nested 68010 long frame walking the stack down until it
+wrapped past zero into a double fault. A comment here used to warn against
+shifting the bits because it took the boot from ~23,629 errors to ~28,000 —
+that measurement was worthless, since both numbers were counting phantoms and
+the shift only changed which phantom fired. `VALID` is now its own term too;
+before, only supervisor-data-read consulted it, so a *user* access to an
+invalid entry was not refused at all.
+
+Both changes together give a reference boot of **22 bus errors, all timeouts**,
+with the console byte-identical to the 23,629 one. The `FB`, `MB_ETHER` and
+`XY450` deltas below are stated against the old count and have not been
+re-measured yet.
 
 The MultiBus machine is the reference that must not regress. It boots to the
 prompt with **23,629 bus errors** at `MEM_MIB=1 ROM=fast`, with no cards, and

@@ -304,17 +304,38 @@ module sun2_fpga(input         cpu_clk,
 		.ps_pmap2devices(ps_pmap2devices)
 	    );
    
-   /* split the 12 protection/status bits by name */
-   wire VALID, PROT5, PROT4, PROT3, PROT2, PROT1, PROT0, ACC, MOD;
+   /* split the 12 protection/status bits by name.
+    *
+    * ps_pmap2devices[11:0] is page map entry bits 31..20 -- PMREALBITS is
+    * 0xFFF00FFF (sys/mon/s2map.h:116), so those twelve and the low twelve are
+    * the whole of what exists.  `struct pgmapent' in the same header gives the
+    * top as a valid bit followed by the six PMP_* permissions, most
+    * significant first:
+    *
+    *   bit 31  ps[11]  valid
+    *   bit 30  ps[10]  PMP_SUP_READ      0x20
+    *   bit 29  ps[ 9]  PMP_SUP_WRITE     0x10
+    *   bit 28  ps[ 8]  PMP_SUP_EXECUTE   0x08
+    *   bit 27  ps[ 7]  PMP_USER_READ     0x04
+    *   bit 26  ps[ 6]  PMP_USER_WRITE    0x02
+    *   bit 25  ps[ 5]  PMP_USER_EXECUTE  0x01
+    *
+    * SunOS's own constants corroborate it exactly (sys/sun2/pte.h:49-53):
+    * PG_KR 0x50000000 is SUP_READ|SUP_EXECUTE -- a kernel *text* page, readable
+    * and executable but not writable.  PG_KW 0x70000000 adds SUP_WRITE, and
+    * PG_URKR 0x58000000 adds USER_READ.  None of them decodes sensibly if the
+    * fields sit anywhere else.
+    */
+   wire VALID, SUP_READ, SUP_WRITE, SUP_EXEC, USR_READ, USR_WRITE, USR_EXEC, ACC, MOD;
    wire [2:0] TYPE;
-   
-   assign VALID = ps_pmap2devices[11];
-   assign PROT5 = ps_pmap2devices[10];
-   assign PROT4 = ps_pmap2devices[9];
-   assign PROT3 = ps_pmap2devices[8];
-   assign PROT2 = ps_pmap2devices[7];
-   assign PROT1 = ps_pmap2devices[6];
-   assign PROT0 = ps_pmap2devices[5];
+
+   assign VALID     = ps_pmap2devices[11];
+   assign SUP_READ  = ps_pmap2devices[10];
+   assign SUP_WRITE = ps_pmap2devices[9];
+   assign SUP_EXEC  = ps_pmap2devices[8];
+   assign USR_READ  = ps_pmap2devices[7];
+   assign USR_WRITE = ps_pmap2devices[6];
+   assign USR_EXEC  = ps_pmap2devices[5];
    assign TYPE  = ps_pmap2devices[4:2];
    assign ACC   = ps_pmap2devices[1];
    assign MOD   = ps_pmap2devices[0];
@@ -360,36 +381,46 @@ module sun2_fpga(input         cpu_clk,
    // a monitor boot cannot show whether this preserves real ones or disables
    // the mechanism.  SunOS needs them for copy-on-write and stack growth, and
    // that run is what has to justify this change.
-   assign PROTERR   = PROTERR_raw   &  C_S8 & FC_GENERAL & ~P_AS_n;
+   // An invalid entry must refuse every class, so VALID is a term in its own
+   // right.  It used to be reachable only as D4 below, which meant a *user*
+   // access to an invalid entry was not refused at all; after the shift below
+   // nothing would have checked it.  mon/h/buserr.h keeps the bit in the bus
+   // error register precisely so a handler can tell "not valid" from
+   // "protection refused it", which only makes sense if both raise the error.
+   assign PROTERR   = (PROTERR_raw | ~VALID) & C_S8 & FC_GENERAL & ~P_AS_n;
    //assign PROTERR_n = PROTERR_raw_n | ~C_S8 & FC_GENERAL;
    
    // The permission check.  Select is {P_FC[2], P_FC[1], ~P_RW_n}, so the eight
    // inputs are the eight access classes; D3 and D7 are writes to program
    // space, never permitted whatever the entry says.
    //
-   // Note D4: supervisor data read is checked against VALID, not PROT5, and
-   // the whole chain sits one bit high -- PROT0 is checked by nothing at all.
-   // Per the monitor's own page map layout (`struct pgmapent' in
-   // sys/mon/s2map.h, with PMREALBITS 0xFFF00FFF making ps_pmap2devices[11:0]
-   // exactly entry bits 31..20) the six PMP_* permissions are PROT5..PROT0 and
-   // supervisor read should be PROT5.
+   // The permission check.  Select is {P_FC[2], P_FC[1], ~P_RW_n}, so the eight
+   // inputs are the eight access classes; D3 and D7 are writes to program
+   // space, never permitted whatever the entry says.  Y is ~mux, so a selected
+   // bit of 1 means permitted and 0 raises the error.
    //
-   // Do not "fix" this without measuring.  Shifting the six inputs down one to
-   // match the header was tried: the MultiBus PROM still reached the prompt,
-   // but took ~28000 bus errors instead of ~23629, including a fresh one on
-   // every character of console output.  So the PROM does not write only
-   // PMP_ALL and zero, and this apparently-off-by-one wiring is what it
-   // expects.  Either the header's field order is not what it looks like, or
-   // the page map stores the entry differently than the read-back suggests --
-   // unresolved, and left alone because the machine boots.
-   ttl_74F151 gen_proterr(.D0(PROT3),  // user  data    read
-			  .D1(PROT2),  // user  data    write
-			  .D2(PROT1),  // user  program read
-			  .D3(1'b0),   // user  program write -- never
-			  .D4(VALID),  // super data    read   <-- see above
-			  .D5(PROT5),  // super data    write
-			  .D6(PROT4),  // super program read
-			  .D7(1'b0),   // super program write -- never
+   // These six used to sit one bit high: supervisor data read was checked
+   // against the valid bit, supervisor program read against SUP_WRITE, and
+   // USER_EXECUTE against nothing at all.  A comment here warned not to "fix"
+   // that without measuring, because shifting them down had once taken the boot
+   // from ~23629 bus errors to ~28000.  That measurement was worthless -- 23607
+   // of the 23629 were phantoms from the missing ~P_AS_n term above, so both
+   // numbers counted artefacts and the shift only changed which artefact fired.
+   //
+   // With the phantoms gone the real behaviour is visible and unambiguous.
+   // SunOS marks its own text PG_KR (SUP_READ|SUP_EXECUTE) in startup(), then
+   // could not execute it, because we tested SUP_WRITE -- which PG_KR clears.
+   // The kernel took a protection fault on its own instruction stream at
+   // _start+0xf8, retried it forever, and each nested 68010 long frame walked
+   // the stack down until it wrapped past zero and double-faulted.
+   ttl_74F151 gen_proterr(.D0(USR_READ),   // user  data    read
+			  .D1(USR_WRITE),  // user  data    write
+			  .D2(USR_EXEC),   // user  program read
+			  .D3(1'b0),       // user  program write -- never
+			  .D4(SUP_READ),   // super data    read
+			  .D5(SUP_WRITE),  // super data    write
+			  .D6(SUP_EXEC),   // super program read
+			  .D7(1'b0),       // super program write -- never
 			  .A(~P_RW_n),
 			  .B(P_FC[1]),
 			  .C(P_FC[2]),
