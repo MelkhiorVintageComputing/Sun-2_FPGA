@@ -33,6 +33,7 @@ Simulation knobs that matter, all on `make -C sim xsim`:
 | `FB=1` | fit the frame buffer, either machine. Changes what the machine looks like — with a display the console goes to the screen and the serial port falls silent. On MultiBus it also builds the keyboard/mouse SCC, which is on the video board |
 | `XY450=1` | MultiBus only: fit the Xylogics 450 disk controller. Needs `MEM_MIB=1` or more and `-testplusarg blk_image=<abs path>`; `tools/mkxydisk` writes one |
 | `CPU_HZ=40000000` | run the CPU faster. Correct, and *slower* to simulate — see the trap below |
+| `CPU=rd68011` | **experimental**: build with the RD68011 core from `../RD68011` instead of Suska. Changes no Sun-2 file — see below |
 | `TIMEOUT_MS=` | simulated milliseconds before giving up |
 | `XSIMARGS="-testplusarg trace_dvma=16"` | also `trace_irq`, `heartbeat_ms`, `crs_stuck`, `vcd_full` |
 
@@ -100,6 +101,16 @@ make -C sim board-phy   # boot, then map 0xFE7 and read it from the prompt
 Expect a full boot to take roughly 0.5 s of wall clock per simulated
 millisecond. `make -C sim board BOARD_MEM=ddr3` is ~1500x slower again and
 cannot reach the prompt — it is only good for showing MIG calibrate.
+
+**Swapping the CPU is a file-list choice, not a code change.**
+`rtl/experimental/rd68011_wf68k10.sv` presents Suska's `WF68K10_TOP` interface
+and implements it with the RD68011 core in `../RD68011`, so `CPU=rd68011`
+builds the machine from *the same* `top_fpga.v` and the same everything else —
+there is no second copy of the top to drift. It gets its own `build/sim`
+directory. The core is early and nothing about the Sun-2 should ever be changed
+on the strength of what it does; the two disagree on VPA (RD68011 models the
+real single pin, Suska splits it into `VPAn`/`AVECn`) and on pin enables
+(`_oe` per group against one `BUS_EN`), and the shim reconciles both.
 
 Vivado is expected at `/opt/Xilinx/2025.2/Vivado`; override `XILINX_VIVADO`.
 Neither `make` in `sim/` nor `syn/` needs `settings64.sh` sourced.

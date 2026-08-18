@@ -119,6 +119,13 @@ CPU_HZ ?= 12500000
 # to be moved in step with it or the console comes out as line noise.
 BAUD ?= 9600
 
+# Which MC68010 to build with.  `suska' is the Suska VHDL core the machine is
+# developed and measured against; `rd68011' swaps in the experimental core from
+# ../RD68011 through the pin-compatible shim in rtl/experimental/, changing no
+# Sun-2 file at all.  It gets its own build/sim directory, and nothing about
+# the machine should ever be changed on the strength of what it does.
+CPU ?= suska
+
 PLUSARGS = -testplusarg timeout_ms=$(TIMEOUT_MS) -testplusarg stop_on=$(STOP_ON)
 
 all: xsim
@@ -128,7 +135,7 @@ rom:
 
 xsim: rom
 	SUN2_DEFINES="$(DEFINES)" SUN2_MEM_LATENCY=$(MEM_LATENCY) \
-	SUN2_CPU_HZ=$(CPU_HZ) SUN2_BAUD=$(BAUD) \
+	SUN2_CPU_HZ=$(CPU_HZ) SUN2_BAUD=$(BAUD) SUN2_CPU=$(CPU) \
 	SUN2_MACHINE=$(MACHINE) ./run_xsim.sh $(PLUSARGS) $(XSIMARGS)
 
 # --- board level: the Sun-2 as it will be on the Wukong --------------------

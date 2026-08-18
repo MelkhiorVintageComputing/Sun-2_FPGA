@@ -101,7 +101,7 @@ else
 fi
 
 sim=$(grep -o '\[[0-9]* ns\]' "$rundir/xsim.log" 2>/dev/null | tail -1)
-err=$(grep -c 'BUS ERROR' "$rundir/xsim.log" 2>/dev/null || echo 0)
+err=$(grep -c 'BUS ERROR' "$rundir/xsim.log" 2>/dev/null; true)
 echo "$(basename "$rundir"): sim=${sim:-?} bus errors=$err"
 echo "  from $(basename "$pick") (mtime $(stat -c %y "$pick" | cut -d. -f1))"
 echo "  ppm $ppm"

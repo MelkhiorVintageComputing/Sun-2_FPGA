@@ -59,6 +59,10 @@ case " $SUN2_DEFINES " in *" SUN2_XY450 "*)    rundir_tag="$rundir_tag-xy450" ;;
 # 38400 run and a 9600 run are different snapshots.
 [ -n "${SUN2_BAUD:-}" ] && [ "${SUN2_BAUD}" != 9600 ] && \
 	rundir_tag="$rundir_tag-baud${SUN2_BAUD}"
+# ... and the CPU core.  An experimental core must never write over a run that
+# measured the real machine.
+[ -n "${SUN2_CPU:-}" ] && [ "${SUN2_CPU}" != suska ] && \
+	rundir_tag="$rundir_tag-${SUN2_CPU}"
 rundir="$top/build/sim/xsim${SUN2_MACHINE:+-$SUN2_MACHINE}$rundir_tag"
 mkdir -p "$rundir"
 
@@ -72,6 +76,33 @@ done
 
 cd "$rundir"
 
+if [ "${SUN2_CPU:-suska}" = rd68011 ]; then
+	# EXPERIMENTAL.  Swap the CPU for the RD68011 core, via the
+	# pin-compatible shim in rtl/experimental/.  Nothing else changes: the
+	# shim presents Suska's WF68K10_TOP interface, so top_fpga.v and every
+	# other Sun-2 file is the one the real build uses, byte for byte.
+	: "${RD68011:=$top/../RD68011}"
+	[ -d "$RD68011/rtl" ] || { echo "RD68011 not found at $RD68011 -- set RD68011=" >&2; exit 1; }
+	echo "== compiling the RD68011 MC68010 (SystemVerilog, EXPERIMENTAL) =="
+	# Order from that project's own Makefile: the two packages first, then
+	# the generated microcode, then the hand-written RTL.
+	xvlog --sv --work sun2 \
+		"$RD68011/rtl/rd68011_pkg.sv" \
+		"$RD68011/rtl/gen/rd68011_ucode_pkg.sv" \
+		"$RD68011"/rtl/gen/rd68011_decode_rom.sv \
+		"$RD68011"/rtl/gen/rd68011_loop_rom.sv \
+		"$RD68011"/rtl/gen/rd68011_ucode_rom.sv \
+		"$RD68011"/rtl/rd68011_dedge_ff.sv \
+		"$RD68011"/rtl/rd68011_sync.sv \
+		"$RD68011"/rtl/rd68011_alu.sv \
+		"$RD68011"/rtl/rd68011_shifter.sv \
+		"$RD68011"/rtl/rd68011_mul.sv \
+		"$RD68011"/rtl/rd68011_divider.sv \
+		"$RD68011"/rtl/rd68011_biu.sv \
+		"$RD68011"/rtl/rd68011_seq.sv \
+		"$RD68011"/rtl/rd68011_top.sv \
+		"$top/rtl/experimental/rd68011_wf68k10.sv"
+else
 echo "== compiling the Suska MC68010 (VHDL) =="
 # wf68k10_pkg first: everything else depends on it.
 # -2008 is required: the core connects `buffer` formals to `out` actuals, which
@@ -86,6 +117,7 @@ xvhdl -2008 --work sun2 \
 	"$top/Inputs/Suska_Configware/68K10/wf68k10_exception_handler.vhd" \
 	"$top/Inputs/Suska_Configware/68K10/wf68k10_opcode_decoder.vhd" \
 	"$top/Inputs/Suska_Configware/68K10/wf68k10_top.vhd"
+fi
 
 # The Sun-2 gateware is plain Verilog-2001 and relies on a couple of
 # use-before-declare wires that SystemVerilog rejects, so it is compiled in
