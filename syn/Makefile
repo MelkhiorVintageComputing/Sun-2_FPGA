@@ -8,6 +8,7 @@
 #   make bitstream BOARD=v3       for a Wukong V3 instead of a V1
 #   make bitstream FB=1           with the frame buffer on HDMI
 #   make bitstream XY450=1        with the Xylogics 450 disk controller
+#   make bitstream CPU=rd68011    the experimental core, EXPERIMENTAL
 #   make both               both CPU clocks
 #
 # Nothing here is committed; everything lands in ../build.  Vivado is run from
@@ -43,9 +44,16 @@ XY450 ?= 0
 # you can actually buy.
 BOARD ?= v1
 
+# Which MC68010.  `suska' is the VHDL core the machine is developed and
+# measured against; `rd68011' swaps in the experimental core from ../RD68011
+# through the pin-compatible shim in rtl/experimental/, changing no Sun-2 file.
+# It gets its own output directory, so an experimental result can never be
+# mistaken for a build of the real machine.
+CPU ?= suska
+
 IPDIR   = $(TOP)/build/ip/$(BOARD)/sun2_mig
 TAG     = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)
-OUTDIR  = $(TOP)/build/syn/$(BOARD)-$(MACHINE)$(TAG)-cpu$(shell expr $(CPU_HZ) / 1000000)
+OUTDIR  = $(TOP)/build/syn/$(BOARD)-$(MACHINE)$(TAG)-cpu$(shell expr $(CPU_HZ) / 1000000)$(if $(filter-out suska,$(CPU)),-$(CPU),)
 WORKDIR = $(TOP)/build/syn/work-$(BOARD)
 
 all: bitstream
@@ -70,7 +78,7 @@ inputs:
 
 bitstream: ip rom inputs | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
-		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB) $(XY450)
+		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB) $(XY450) $(CPU)
 	@echo "bitstream: $(OUTDIR)/sun2_wukong_$(BOARD).bit"
 
 both:

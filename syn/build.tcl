@@ -26,12 +26,18 @@ set mb_ether 0
 set board    v1
 set fb       0
 set xy450    0
+set cpu      suska
 if {[llength $argv] > 0} { set cpu_hz   [lindex $argv 0] }
 if {[llength $argv] > 1} { set machine  [lindex $argv 1] }
 if {[llength $argv] > 2} { set mb_ether [lindex $argv 2] }
 if {[llength $argv] > 3} { set board    [lindex $argv 3] }
 if {[llength $argv] > 4} { set fb       [lindex $argv 4] }
 if {[llength $argv] > 5} { set xy450    [lindex $argv 5] }
+if {[llength $argv] > 6} { set cpu      [lindex $argv 6] }
+if {$cpu ne "suska" && $cpu ne "rd68011"} {
+    puts "ERROR: CPU must be suska or rd68011, not '$cpu'"
+    exit 1
+}
 board_check $board
 
 switch -- $machine {
@@ -67,7 +73,7 @@ if {$xy450 == 1} {
 
 set part    [board_part $board]
 set ipdir   $top/build/ip/$board
-set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu[expr {$cpu_hz / 1000000}]
+set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu[expr {$cpu_hz / 1000000}][expr {$cpu ne "suska" ? "-$cpu" : ""}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir
@@ -78,7 +84,7 @@ if {![file isdirectory $migrtl]} {
     exit 1
 }
 
-puts "== Sun-2 for Wukong $board ($part), $machine, CPU clock $cpu_hz Hz =="
+puts "== Sun-2 for Wukong $board ($part), $machine, CPU clock $cpu_hz Hz, core $cpu =="
 
 # Set the part before reading anything.  read_ip validates the IP against the
 # current part, and in non-project mode that defaults to a Kintex device until
@@ -89,19 +95,50 @@ set_part $part
 # ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
-# The MC68010 is VHDL, and needs -2008: it connects `buffer` formals to `out`
-# actuals, which VHDL-93 forbids.
-read_vhdl -vhdl2008 [list \
-    $top/Inputs/Suska_Configware/68K10/wf68k10_pkg.vhd \
-    $top/Inputs/Suska_Configware/68K10/wf68k10_address_registers.vhd \
-    $top/Inputs/Suska_Configware/68K10/wf68k10_alu.vhd \
-    $top/Inputs/Suska_Configware/68K10/wf68k10_bus_interface.vhd \
-    $top/Inputs/Suska_Configware/68K10/wf68k10_control.vhd \
-    $top/Inputs/Suska_Configware/68K10/wf68k10_data_registers.vhd \
-    $top/Inputs/Suska_Configware/68K10/wf68k10_exception_handler.vhd \
-    $top/Inputs/Suska_Configware/68K10/wf68k10_opcode_decoder.vhd \
-    $top/Inputs/Suska_Configware/68K10/wf68k10_top.vhd \
-]
+# The MC68010.  Suska is VHDL and needs -2008: it connects `buffer` formals to
+# `out` actuals, which VHDL-93 forbids.  RD68011 is the experimental core from
+# ../RD68011, reached through the same pin-compatible shim the simulation uses,
+# so top_fpga.v and every other Sun-2 file is the one the real build uses --
+# see rtl/experimental/rd68011_wf68k10.sv.  It gets its own output directory.
+if {$cpu eq "rd68011"} {
+    set rd68011 [expr {[info exists env(RD68011)] ? $env(RD68011) : "$top/../RD68011"}]
+    if {![file isdirectory $rd68011/rtl]} {
+        puts "ERROR: RD68011 not found at $rd68011 -- set the RD68011 environment variable"
+        exit 1
+    }
+    puts "== EXPERIMENTAL: building with the RD68011 core from $rd68011 =="
+    # Order from that project's own Makefile: the two packages first, then the
+    # generated microcode, then the hand-written RTL.
+    read_verilog -sv [list \
+        $rd68011/rtl/rd68011_pkg.sv \
+        $rd68011/rtl/gen/rd68011_ucode_pkg.sv \
+        $rd68011/rtl/gen/rd68011_decode_rom.sv \
+        $rd68011/rtl/gen/rd68011_loop_rom.sv \
+        $rd68011/rtl/gen/rd68011_ucode_rom.sv \
+        $rd68011/rtl/rd68011_dedge_ff.sv \
+        $rd68011/rtl/rd68011_sync.sv \
+        $rd68011/rtl/rd68011_alu.sv \
+        $rd68011/rtl/rd68011_shifter.sv \
+        $rd68011/rtl/rd68011_mul.sv \
+        $rd68011/rtl/rd68011_divider.sv \
+        $rd68011/rtl/rd68011_biu.sv \
+        $rd68011/rtl/rd68011_seq.sv \
+        $rd68011/rtl/rd68011_top.sv \
+        $top/rtl/experimental/rd68011_wf68k10.sv \
+    ]
+} else {
+    read_vhdl -vhdl2008 [list \
+        $top/Inputs/Suska_Configware/68K10/wf68k10_pkg.vhd \
+        $top/Inputs/Suska_Configware/68K10/wf68k10_address_registers.vhd \
+        $top/Inputs/Suska_Configware/68K10/wf68k10_alu.vhd \
+        $top/Inputs/Suska_Configware/68K10/wf68k10_bus_interface.vhd \
+        $top/Inputs/Suska_Configware/68K10/wf68k10_control.vhd \
+        $top/Inputs/Suska_Configware/68K10/wf68k10_data_registers.vhd \
+        $top/Inputs/Suska_Configware/68K10/wf68k10_exception_handler.vhd \
+        $top/Inputs/Suska_Configware/68K10/wf68k10_opcode_decoder.vhd \
+        $top/Inputs/Suska_Configware/68K10/wf68k10_top.vhd \
+    ]
+}
 
 # The Sun-2 gateware is Verilog-2001 and must not be read as SystemVerilog:
 # it relies on a couple of constructs SV rejects.

@@ -15,7 +15,7 @@ make -C sim xsim MACHINE=vme              # boot the VME 2/50 instead
 make -C sim check MACHINE=vme             # pass/fail on the console log
 make -C sim board [BOARD_MEM=ddr3]        # the machine as it will be on the Wukong
 make -C syn ip [BOARD=v3]                 # generate the MIG DDR3 controller (once per board)
-make -C syn bitstream [MACHINE=vme] [CPU_HZ=40000000] [BOARD=v3] [XY450=1]
+make -C syn bitstream [MACHINE=vme] [CPU_HZ=40000000] [BOARD=v3] [XY450=1] [CPU=rd68011]
 tools/mkxydisk -o build/disk/xy0.img       # a labelled, bootable disk image
 tools/ufsread IMG cat /vmunix -o OUT      # pull a file out of a 4.2BSD image
 tools/pcsym OUT 63c8e 40b6                # 68010 PCs -> kernel symbols
@@ -110,8 +110,9 @@ cannot reach the prompt — it is only good for showing MIG calibrate.
 and implements it with the RD68011 core in `../RD68011`, so `CPU=rd68011`
 builds the machine from *the same* `top_fpga.v` and the same everything else —
 there is no second copy of the top to drift. It gets its own `build/sim`
-directory. The core is early and nothing about the Sun-2 should ever be changed
-on the strength of what it does; the two disagree on VPA (RD68011 models the
+directory, and so does `make -C syn bitstream CPU=rd68011`. The core is early
+and nothing about the Sun-2 should ever be changed on the strength of what it
+does; the two disagree on VPA (RD68011 models the
 real single pin, Suska splits it into `VPAn`/`AVECn`) and on pin enables
 (`_oe` per group against one `BUS_EN`), and the shim reconciles both.
 
@@ -123,6 +124,19 @@ recovering from each fault, which is exactly what the kernel asks for and what
 Suska does not do. That is an observation about the cores, not a licence to
 change anything here: the machine is the same file in both builds, and the
 MultiBus fingerprint is measured against Suska.
+
+**It does not clock anywhere near 40 MHz.** A full MultiBus V3 bitstream
+(Ethernet, frame buffer, disk) meets timing at **20 MHz with WNS 0.060 ns** and
+the critical path is inside the core, not in anything the Sun-2 contributes —
+`clk50` has 15.9 ns of slack and every MIG domain is comfortable. The path is
+`u_seq/upc_reg[2]_replica` to `u_biu/d_o_reg[4]`, rising edge to *falling*
+edge, so its requirement is a **half period**: 24.774 ns of delay against
+25.000 ns, 29 logic levels, 71% of it routing. The core is already being asked
+to do that stretch at 40 MHz at a 20 MHz clock. Suska on the same board and
+the same cards passed 40 MHz. 60 ps is inside the noise of a placement seed,
+so 16.667 MHz (VCO/60) is the next exact divisor to reach for if a number has
+to be dependable; `wukong_clkgen` `$fatal`s at elaboration on a `CPU_HZ` that
+does not divide the 1 GHz VCO exactly, so there is no silent rounding.
 
 Vivado is expected at `/opt/Xilinx/2025.2/Vivado`; override `XILINX_VIVADO`.
 Neither `make` in `sim/` nor `syn/` needs `settings64.sh` sourced.
