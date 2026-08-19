@@ -125,4 +125,22 @@ $(DISKDIR)/xychain.bin: xychain/xychain.c xychain/xychain.ld
 
 xychain: $(DISKDIR)/xychain.bin
 
-.PHONY: xychain
+# The bus error frame reproducer.  SunOS dies the first time startup() probes
+# DVMA bus space, and getting there costs eight seconds of simulated time
+# because the kernel has to be read off the disk first.  This provokes the same
+# fault from a boot block in about 1.6 s, and prints the exception frame the
+# CPU pushed -- which is the part the kernel's panic dump cannot show.
+$(DISKDIR)/beprobe.bin: beprobe/beprobe.c beprobe/beprobe.ld
+	@command -v $(M68K)-gcc >/dev/null || { \
+		echo "$(M68K)-gcc not found: the on-machine exerciser needs an m68k"; \
+		echo "cross-compiler.  On Debian/Ubuntu: apt install gcc-m68k-linux-gnu"; \
+		exit 1; }
+	mkdir -p $(DISKDIR)
+	$(M68K)-gcc $(XYCFLAGS) -T beprobe/beprobe.ld -o $(DISKDIR)/beprobe.elf \
+		beprobe/beprobe.c 2>&1 | grep -vE 'RWX|build-id' || true
+	$(M68K)-objcopy -O binary $(DISKDIR)/beprobe.elf $@
+	@echo "beprobe: $$(stat -c%s $@) bytes of 7680"
+
+beprobe: $(DISKDIR)/beprobe.bin
+
+.PHONY: xychain beprobe

@@ -20,6 +20,7 @@ tools/mkxydisk -o build/disk/xy0.img       # a labelled, bootable disk image
 tools/ufsread IMG cat /vmunix -o OUT      # pull a file out of a 4.2BSD image
 tools/pcsym OUT 63c8e 40b6                # 68010 PCs -> kernel symbols
 tools/fbshot                              # render the screen mid-run (FB=1)
+make -C tools beprobe                     # a boot block that measures a bus error frame
 ```
 
 Simulation knobs that matter, all on `make -C sim xsim`:
@@ -36,6 +37,8 @@ Simulation knobs that matter, all on `make -C sim xsim`:
 | `CPU=rd68011` | **experimental**: build with the RD68011 core from `../RD68011` instead of Suska. Changes no Sun-2 file — see below |
 | `TIMEOUT_MS=` | simulated milliseconds before giving up |
 | `XSIMARGS="-testplusarg trace_dvma=16"` | also `trace_irq`, `heartbeat_ms`, `crs_stuck`, `vcd_full` |
+| `XSIMARGS="-testplusarg watch_addr=5b6"` | print every bus cycle, CPU or DVMA, touching one address |
+| `XSIMARGS="-testplusarg trace_abort=1"` | ring the SCC accesses and dump them when the monitor aborts; `=2` prints them live |
 
 Unit tests (seconds to minutes, unlike a boot):
 
@@ -111,6 +114,15 @@ directory. The core is early and nothing about the Sun-2 should ever be changed
 on the strength of what it does; the two disagree on VPA (RD68011 models the
 real single pin, Suska splits it into `VPAn`/`AVECn`) and on pin enables
 (`_oe` per group against one `BUS_EN`), and the shim reconciles both.
+
+It is nevertheless the only thing that has taken SunOS past `startup()`. With
+`XY450=1` and no video board it boots 4.0.3 to the VM page-pool
+initialisation, and its 138 bus errors decompose as ten device probes plus 128
+repeats of `A=701000` — `poke()` walking every page of the DVMA bus window and
+recovering from each fault, which is exactly what the kernel asks for and what
+Suska does not do. That is an observation about the cores, not a licence to
+change anything here: the machine is the same file in both builds, and the
+MultiBus fingerprint is measured against Suska.
 
 Vivado is expected at `/opt/Xilinx/2025.2/Vivado`; override `XILINX_VIVADO`.
 Neither `make` in `sim/` nor `syn/` needs `settings64.sh` sourced.
@@ -266,6 +278,29 @@ standalone boot printed — if they disagree, the kernel on the disk is not the
 one that booted. Neither tool writes anything, and the extracted kernel belongs
 in `build/`, not in git.
 
+**Reproduce a kernel fault from a boot block, not from the kernel.** Reaching
+`poke()` through SunOS costs eight seconds of simulated time, most of a day of
+wall clock, because the kernel has to come off the disk first.
+`tools/beprobe/` does the same thing in about 1.6 s: it is a freestanding
+68010 boot program that maps the page the kernel's probe faulted on
+(`0x701000`, page map entry `0xF0800000`, TYPE 2), stores to it, catches the
+bus error and prints the exception frame the CPU pushed. It exists because
+that frame is the one thing the kernel cannot show us, and it was written to
+settle whether the special status word describes the cycle. It does not:
+Suska pushes `if=1 rw=1 fc=6` for a supervisor data *write* at FC 5.
+
+```sh
+make -C tools beprobe
+tools/mkxydisk -o build/disk/beprobe.img --boot build/disk/beprobe.bin
+make -C sim xsim XY450=1 MEM_MIB=1 ROM=fast STOP_ON=beprobe-finished \
+     XSIMARGS="-testplusarg blk_image=$PWD/build/disk/beprobe.img"
+```
+
+Its handler recovers with a saved PC as well as a saved SP, deliberately.
+`probe_write` is static and gets inlined, so there is no return address at
+that stack pointer and an `rts` popped a string constant and jumped into
+`.rodata` — which looked exactly like a machine fault and was not one.
+
 **`Old/` is the previous working implementation.** Not in git, never modified;
 copy from it rather than referencing it.
 
@@ -380,6 +415,42 @@ IOPB came back with the driver's own zeroes in it, reading as success.
   0x48 bytes into `_start` — bus error on the instruction fetch, bus error on
   the stack frame, double fault, CPU halted. Nothing caught it for the whole
   life of the project because the PROM keeps the two contexts equal.
+* **An unconnected input on a device model is an X in a status register.** The
+  console SCC left `ctsa_n`, `dcda_n`, `synca_n` and all of channel B open, and
+  RR0 bits 5, 4 and 3 are exactly those pins — so every read of it came back
+  `00xxx100` while the keyboard SCC, which ties all of them, read `00000100`.
+  Nothing on the board drives them (Architecture Manual 6.7, "Control lines are
+  not used", and no drivers fitted), so the fix is to hold them deasserted, as
+  the keyboard instance always had. The asymmetry inside one file is what gave
+  it away; grep any new device instance for empty port connections on *inputs*.
+  This is what caused the spurious `Abort' that ends a SunOS boot from nowhere
+  — measured, not argued: the same run aborts at 3.259 s with the pins open and
+  does not abort through 5 s with them tied, nothing else changed.
+* **The monitor's abort is one byte, and it is at 0x5B6.** `g_debounce`. The
+  NMI handler reads the console SCC's RR0 every tick, masks it with
+  `ZSRR0_BREAK`, and `ef043c: cmpb 0x5b6,%d0 / beqs / moveb %d0,0x5b6 / beqs
+  abort`. `d0.b` is `RR0 & 0x80` and bit 7 is clean, so the second branch is
+  *always* taken once the first falls through: the machine aborts to the
+  monitor exactly when that byte is not zero. An `Abort at <pc>` out of nowhere
+  is therefore a byte-value question, not an interrupt question, and
+  `+watch_addr=5b6 +abort_pc=ef0452` is the instrument for it: reads of that
+  byte come `from ef0440` and writes `from ef0446`, which is how you tell the
+  debounce apart from anything else touching it.
+
+  Do not conclude from "the X bits are 5, 4 and 3 and `ZSRR0_BREAK` is 0x80"
+  that the floating pins cannot reach this. That argument is wrong — the
+  experiment above falsifies it — and the path by which the X reaches the
+  branch condition has not been pinned down. Consecutive ticks store 0x80 and
+  then 0x00 into `g_debounce` when `RR0 & 0x80` should be steady, which is what
+  an indeterminate value in the compare looks like from outside. Treat an X
+  anywhere near a status register as able to reach any conditional derived from
+  it, whatever the mask says.
+* **A kernel trap dump early in boot costs more simulated time than the boot.**
+  `showregs+0x29a` is `32000000 >> _cpudelay` iterations of a busy loop, and
+  `_cpudelay` is still 0 that early in `startup()` — about 17 s of simulated
+  time at 40 MHz, hours of wall clock, spent between two printed lines. It
+  looks exactly like a hang. Check the PC against `showregs` before killing a
+  run that has stopped producing output.
 * **`xvlog` is stricter than Verilator and Yosys about declaration order.** A
   wire declared after its first use compiles elsewhere and fails here.
 * **A clock that only *sometimes* gets a BUFG.** `clk50` drives the reset

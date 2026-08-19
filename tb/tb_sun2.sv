@@ -21,6 +21,12 @@
 //   +vcd                 dump the serial line to sun2.vcd
 //   +vcd_full            dump the whole design to sun2.vcd (very large)
 //   +clk4m_bit=<int>     clk40 divider bit for the SCC clock (default 2)
+//   +trace_abort=1       ring-buffer the SCC accesses and print them when
+//                        the monitor commits to an abort, which says which
+//                        of trap.s's two roads to `abort' was taken
+//   +abort_pc=<hex>      address of _abortent, to make +trace_abort exact
+//   +watch_addr=<hex>    print every bus cycle, CPU or DVMA, that touches
+//                        this address -- 5b6 is the monitor's g_debounce
 //   +fb_dump_ms=<real>   with a display fitted, rewrite the frame buffer
 //                        capture this often so the screen can be rendered
 //                        during the run rather than only at the end
@@ -594,6 +600,144 @@ module tb_sun2 #(
                 dut.P_RW_n ? dut.P_DOUT : dut.P_DIN,
                 dut.sun2.TYPE, dut.sun2.ma_pmap2devices);
 
+   // ---------------------------------------------------------------------
+   // Why the monitor decided to abort.  +trace_abort
+   // ---------------------------------------------------------------------
+   // The NMI handler has two roads to `abort' (msun/mon/kernel/trap.s), and
+   // the console shows neither -- the machine simply arrives at `Abort at
+   // <pc>'.  With a Sun-2 keyboard fitted it first polls the keyboard SCC for
+   // RX_READY and hands any character to keypress() (trap.s:503-535); only if
+   // that finds nothing does it fall through to the serial BREAK debounce,
+   // which declares an abort on any 1->0 change of the BREAK bit between
+   // ticks (trap.s:585-604).  Both read RR0 of an SCC whose receive line is
+   // tied to mark, so neither should ever fire.
+   //
+   // Both are ruled out by the trace as it stands -- the keyboard SCC reads
+   // 00000100 and the console SCC 00xxx100, whose X bits are 5, 4 and 3 and so
+   // are masked away by ZSRR0_BREAK (0x80).  What is left is g_debounce, the
+   // byte the debounce compares against, which the PROM keeps at 0x5B6
+   // (ef043c: cmpb 0x5b6,%d0).  d0.b is RR0 & 0x80 and bit 7 is clean, so the
+   // second branch is always taken and the abort fires exactly when that byte
+   // is not zero -- which makes `+watch_addr=5b6' the interesting instrument.
+   //
+   // Keep a ring of the last accesses to either SCC and print it when the
+   // monitor commits.  _abortent begins `movw #EVEC_ABORT,sp@(i_vor)' -- a
+   // word write of 0x0081 -- which, qualified by a level-7 acknowledge in the
+   // last 500 us, is a precise enough trigger to catch without knowing where
+   // the PROM put the label.  Unqualified it fires in the self test.
+   // Roughly where the CPU is.  The last instruction fetch is not the PC -- the
+   // 68010 prefetches two words ahead -- but it is near enough to say which
+   // routine a data cycle came from, which is the difference between "something
+   // wrote this byte" and "this instruction wrote this byte".
+   logic [23:0] last_ifetch = 24'h0;
+   logic        ifetch_seen = 1'b0;
+
+   always @(posedge dut.C100) begin
+      if (dut.P_AS_n)
+        ifetch_seen <= 1'b0;
+      else if (!ifetch_seen && !dut.P_DTACK_n && !dut.dvma_active
+               && dut.P_RW_n && dut.P_FC == 3'h6) begin
+         ifetch_seen <= 1'b1;
+         last_ifetch <= {dut.P_A, 1'b0};
+      end
+   end
+
+   localparam int SCCLOG = 96;
+
+   int  trace_abort = 0;
+   initial void'($value$plusargs("trace_abort=%d", trace_abort));
+
+   real         scc_t  [SCCLOG];
+   logic [23:0] scc_a  [SCCLOG];
+   logic [15:0] scc_d  [SCCLOG];
+   logic        scc_rw [SCCLOG];
+   logic        scc_kb [SCCLOG];
+   real         last_iack7 = -1.0e30;
+   // Where _abortent is, if you know: on the MultiBus rev R PROM it is
+   // ef0452, `movew #EVEC_ABORT,sp@(i_vor)'.  A prefetch can fetch that word
+   // without executing it, but it cannot perform the write, so a 0x0081 write
+   // with the fetch pointer inside the routine is exact.  Without it the
+   // trigger falls back to "an NMI was acknowledged recently", which on a
+   // machine whose NMI ticks every 2.5 ms is barely a qualification at all --
+   // it reported 36 aborts in a run that took none.
+   int          abort_pc = 0;
+   initial void'($value$plusargs("abort_pc=%h", abort_pc));
+   int          scc_n = 0;
+   logic        scc_seen = 1'b0;
+   logic        abt_seen = 1'b0;
+
+   always @(posedge dut.C100) begin
+      if (dut.P_AS_n) begin
+         scc_seen <= 1'b0;
+         abt_seen <= 1'b0;
+      end else if (trace_abort != 0 && !dut.P_DTACK_n && !dut.dvma_active) begin
+         if (!scc_seen && (dut.sun2.MATCH_SERIAL || dut.sun2.MATCH_KBM)) begin
+            scc_seen                 <= 1'b1;
+            scc_t [scc_n % SCCLOG]   <= $realtime;
+            scc_a [scc_n % SCCLOG]   <= {dut.P_A, 1'b0};
+            scc_d [scc_n % SCCLOG]   <= dut.P_RW_n ? dut.P_DOUT : dut.P_DIN;
+            scc_rw[scc_n % SCCLOG]   <= dut.P_RW_n;
+            scc_kb[scc_n % SCCLOG]   <= dut.sun2.MATCH_KBM;
+            scc_n                    <= scc_n + 1;
+            // +trace_abort=2 prints every access as it happens, in binary,
+            // which is what shows an X in an individual RR0 bit rather than
+            // the whole byte going to X in a hex display.
+            if (trace_abort > 1)
+              $display("[%t]  scc %-8s A=%06x %s data=%8b",
+                       $realtime, dut.sun2.MATCH_KBM ? "keyboard" : "console",
+                       {dut.P_A, 1'b0}, dut.P_RW_n ? "read " : "write",
+                       dut.P_RW_n ? dut.P_DOUT[15:8] : dut.P_DIN[15:8]);
+         end
+         // The abort commit itself.
+         if (!abt_seen && !dut.P_RW_n && !dut.P_UDS_n && !dut.P_LDS_n
+             && dut.P_DIN == 16'h0081
+             && ((abort_pc > 0)
+                 ? (last_ifetch >= abort_pc && last_ifetch < abort_pc + 24'h10)
+                 : (($realtime - last_iack7) < 500000.0))) begin
+            abt_seen <= 1'b1;
+            scc_dump();
+         end
+      end
+   end
+
+   // Every bus cycle touching one word, CPU or DVMA.  g_debounce is the reason
+   // it exists, but nothing about it is specific to that: a monitor variable
+   // that changes when nothing should have written it is a shape of bug this
+   // machine has no other way to see.
+   int watch_addr = -1;
+   logic watch_seen = 1'b0;
+   initial void'($value$plusargs("watch_addr=%h", watch_addr));
+
+   always @(posedge dut.C100) begin
+      if (dut.P_AS_n)
+        watch_seen <= 1'b0;
+      else if (watch_addr >= 0 && !watch_seen && !dut.P_DTACK_n
+               && {dut.P_A, 1'b0} == (watch_addr & 24'hFFFFFE)) begin
+         watch_seen <= 1'b1;
+         $display("[%t] WATCH %06x %s FC=%0d uds=%0d lds=%0d data=%16b from %06x%s",
+                  $realtime, {dut.P_A, 1'b0}, dut.P_RW_n ? "read " : "write",
+                  dut.P_FC, ~dut.P_UDS_n, ~dut.P_LDS_n,
+                  dut.P_RW_n ? dut.P_DOUT : dut.P_DIN, last_ifetch,
+                  dut.dvma_active ? "  <- DVMA" : "");
+      end
+   end
+
+   task automatic scc_dump();
+      int i, first;
+      begin
+         $display("[%t] ABORT COMMIT (EVEC_ABORT written) -- last %0d SCC accesses:",
+                  $realtime, (scc_n < SCCLOG) ? scc_n : SCCLOG);
+         first = (scc_n < SCCLOG) ? 0 : scc_n - SCCLOG;
+         for (i = first; i < scc_n; i++)
+           $display("    %12.0f ns  %-8s A=%06x %s  data=%8b",
+                    scc_t[i % SCCLOG],
+                    scc_kb[i % SCCLOG] ? "keyboard" : "console",
+                    scc_a[i % SCCLOG],
+                    scc_rw[i % SCCLOG] ? "read " : "write",
+                    scc_d[i % SCCLOG][15:8]);
+      end
+   endtask
+
    always @(negedge dut.HALT_OUTn)
      $display("[%t] CPU HALTED (double bus fault) with A=%06x", $realtime, {dut.P_A, 1'b0});
 
@@ -611,6 +755,101 @@ module tb_sun2 #(
    end
 
    // ------------------------------------------------------------------
+   // Which interrupts a run actually took
+   // ------------------------------------------------------------------
+   // An interrupt acknowledge is a CPU-space cycle (FC=7) with the level on
+   // A3..A1, so counting those by level answers "did this boot exercise
+   // anything besides the NMI clock?" without having to reason from the PROM
+   // source about which devices it polls.  Always on: it is a counter per bus
+   // cycle and costs nothing.
+   int iack_count[8];
+   reg iack_seen = 1'b0;
+
+   always @(posedge dut.C100) begin
+      if (dut.P_AS_n) begin
+         iack_seen <= 1'b0;
+      end else if (!iack_seen && dut.P_FC == 3'h7 &&
+                   (!dut.P_DTACK_n || !dut.P_BERR_n || !dut.P_VPA_n)) begin
+         iack_seen <= 1'b1;
+         iack_count[dut.P_A[3:1]] <= iack_count[dut.P_A[3:1]] + 1;
+         // +trace_abort needs to know when the NMI handler last started: the
+         // only road to `abort' runs through it, and a bare word write of
+         // 0x0081 is common enough elsewhere to trigger on noise without this.
+         if (dut.P_A[3:1] == 3'h7) last_iack7 <= $realtime;
+      end
+   end
+
+   task automatic iack_report();
+      int total = 0;
+      for (int l = 0; l < 8; l++) total += iack_count[l];
+      if (total == 0) begin
+         $display("[iack] no interrupts were acknowledged");
+      end else begin
+         $display("[iack] %0d interrupts acknowledged", total);
+         for (int l = 0; l < 8; l++)
+           if (iack_count[l] > 0)
+             $display("         level %0d: %0d", l, iack_count[l]);
+      end
+   endtask
+
+   // ------------------------------------------------------------------
+   // Bus cycle trace
+   // ------------------------------------------------------------------
+   // +trace_bus_from=<ms> logs every 68010 bus cycle from that simulated time,
+   // with the address, function code, direction, strobes, the data actually on
+   // the bus, and which of DTACK / BERR / VPA ended it.  Off unless asked for:
+   // a boot is millions of cycles.
+   //
+   // The point of logging VPA and FC together is that P_VPA_n is combinational
+   // on the function code (`sun2_fpga.v:195', ~(P_FC == 7)), so anything that
+   // leaves FC stale between cycles leaves VPA asserted with it.  A trace that
+   // shows FC and VPA per cycle settles that in one read rather than by
+   // argument.
+   // Read data is reported at two sampling points, because which one is right
+   // is not obvious and getting it wrong invents data that never existed.  d0
+   // is the bus at the clock the termination is first seen; d1 is one clock
+   // later, still inside the cycle.  On a write they are the same value the
+   // CPU is driving.  When d0 and d1 differ on a read, d1 is the one the CPU
+   // latched -- d0 catches the mux before the slave has driven.
+   real trace_bus_from = -1.0;
+   reg  trace_seen = 1'b0;
+   reg         tr_pend = 1'b0;
+   reg [23:0]  tr_a;
+   reg [2:0]   tr_fc;
+   reg         tr_rw, tr_uds, tr_lds, tr_dtack, tr_berr, tr_vpa;
+   reg [15:0]  tr_d0;
+
+   always @(posedge dut.C100) begin
+      if (trace_bus_from >= 0.0 && $realtime >= trace_bus_from * 1000000.0) begin
+         if (tr_pend) begin
+            tr_pend <= 1'b0;
+            $display("[%t] BUS A=%06x FC=%0d %s uds=%0d lds=%0d d0=%04x d1=%04x  %s%s%s",
+                     $realtime, tr_a, tr_fc, tr_rw ? "rd" : "wr",
+                     tr_uds, tr_lds, tr_d0,
+                     tr_rw ? dut.P_DOUT : dut.P_DIN,
+                     tr_dtack ? "DTACK " : "", tr_berr ? "BERR " : "",
+                     tr_vpa ? "VPA" : "");
+         end
+         if (dut.P_AS_n) begin
+            trace_seen <= 1'b0;
+         end else if (!trace_seen &&
+                      (!dut.P_DTACK_n || !dut.P_BERR_n || !dut.P_VPA_n)) begin
+            trace_seen <= 1'b1;
+            tr_pend  <= 1'b1;
+            tr_a     <= {dut.P_A, 1'b0};
+            tr_fc    <= dut.P_FC;
+            tr_rw    <= dut.P_RW_n;
+            tr_uds   <= ~dut.P_UDS_n;
+            tr_lds   <= ~dut.P_LDS_n;
+            tr_d0    <= dut.P_RW_n ? dut.P_DOUT : dut.P_DIN;
+            tr_dtack <= ~dut.P_DTACK_n;
+            tr_berr  <= ~dut.P_BERR_n;
+            tr_vpa   <= ~dut.P_VPA_n;
+         end
+      end
+   end
+
+   // ------------------------------------------------------------------
    // Run control
    // ------------------------------------------------------------------
    real timeout_ms = 1000.0;
@@ -623,6 +862,7 @@ module tb_sun2 #(
       if (n_dvma > 0) $display("%0d DVMA cycles in total", n_dvma);
       console_mon.report();
       ram.report();
+      iack_report();
 `ifdef SUN2_FB
       fb_report();
       fb_dump(FBIMAGE);
@@ -635,6 +875,7 @@ module tb_sun2 #(
 
       void'($value$plusargs("timeout_ms=%f", timeout_ms));
       void'($value$plusargs("clk4m_bit=%d", clk4m_bit));
+      void'($value$plusargs("trace_bus_from=%f", trace_bus_from));
 
       $display("=== Sun-2 simulation ===");
       $display("cpu_clk %0.4f MHz, clk40 %0.4f MHz, SCC/timer clock %0.4f MHz (clk40 / %0d)",

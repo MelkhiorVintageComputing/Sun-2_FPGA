@@ -818,24 +818,39 @@ module sun2_fpga(input         cpu_clk,
 			  .intack_n(1'b1),      // Interrupt acknowledge
 			  
 			  // Channel A Serial Interface
-			  .rxca(),          // Receive clock A
-			  .txca(),          // Transmit clock A
+			  //
+			  // The modem inputs are held deasserted, not left open, and
+			  // that is not tidiness.  RR0 bits 5, 4 and 3 are CTS,
+			  // Sync/Hunt and DCD taken straight off these pins, so an
+			  // unconnected input puts an X in the status byte -- and the
+			  // monitor's NMI handler reads RR0 on every tick to debounce
+			  // a serial BREAK, ANDs it and compares it with g_debounce
+			  // (msun/mon/kernel/trap.s:585-604).  An X there eventually
+			  // resolves as "the break bit went 1->0" and the machine
+			  // aborts to the monitor out of nowhere, in the middle of
+			  // whatever it was doing.  The keyboard SCC below has always
+			  // tied these; this one had not, which is why only it read
+			  // back XX.  Nothing on the board drives them either: section
+			  // 6.7, "Control lines are not used", and no drivers fitted.
+			  .rxca(1'b0),      // Receive clock A (BRG_SRC_A, so unused)
+			  .txca(1'b0),      // Transmit clock A (likewise)
 			  .rxda(RxDA),          // Receive data A
 			  .txda(TxDA),          // Transmit data A
-			  .ctsa_n(),        // Clear to send A (active low)
-			  .dcda_n(),        // Data carrier detect A (active low)
-			  .synca_n(),       // Sync A (async-mode input -> RR0[4], active low)
+			  .ctsa_n(1'b1),    // Clear to send A (active low)
+			  .dcda_n(1'b1),    // Data carrier detect A (active low)
+			  .synca_n(1'b1),   // Sync A (async-mode input -> RR0[4], active low)
 			  .rtsa_n(),        // Request to send A (active low)
 			  .dtra_n(),        // Data terminal ready A (active low)
 			  
-			  // Channel B Serial Interface
-			  .rxcb(),          // Receive clock B
-			  .txcb(),          // Transmit clock B
-			  .rxdb(),          // Receive data B
+			  // Channel B Serial Interface.  Same treatment: the PROM
+			  // programs both channels and reads RR0 of either.
+			  .rxcb(1'b0),      // Receive clock B
+			  .txcb(1'b0),      // Transmit clock B
+			  .rxdb(1'b1),      // Receive data B -- idle mark
 			  .txdb(),          // Transmit data B
-			  .ctsb_n(),        // Clear to send B (active low)
-			  .dcdb_n(),        // Data carrier detect B (active low)
-			  .syncb_n(),       // Sync B (async-mode input -> RR0[4], active low)
+			  .ctsb_n(1'b1),    // Clear to send B (active low)
+			  .dcdb_n(1'b1),    // Data carrier detect B (active low)
+			  .syncb_n(1'b1),   // Sync B (async-mode input -> RR0[4], active low)
 			  .rtsb_n(),        // Request to send B (active low)
 			  .dtrb_n()         // Data terminal ready B (active low)
 			  );
