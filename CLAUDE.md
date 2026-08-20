@@ -21,6 +21,7 @@ tools/ufsread IMG cat /vmunix -o OUT      # pull a file out of a 4.2BSD image
 tools/pcsym OUT 63c8e 40b6                # 68010 PCs -> kernel symbols
 tools/fbshot                              # render the screen mid-run (FB=1)
 make -C tools beprobe                     # a boot block that measures a bus error frame
+make -C tools clkprobe                    # ... and one that arms the level 5 clock SunOS uses
 ```
 
 Simulation knobs that matter, all on `make -C sim xsim`:
@@ -326,6 +327,35 @@ Its handler recovers with a saved PC as well as a saved SP, deliberately.
 `probe_write` is static and gets inlined, so there is no return address at
 that stack pointer and an `rts` popped a string constant and jumped into
 `.rodata` — which looked exactly like a machine fault and was not one.
+
+**SunOS runs on a different timer from the monitor, and it works.**
+`tools/clkprobe/` is the same kind of boot block for the Am9513. Every boot in
+this project proves counter 1 — `TIMER_NMI`, level 7, the monitor's clock — and
+only that one. SunOS uses counter 2, `TIMER_MISC`, **level 5**
+(`msun/sys/mon/suntimer.h:16`), armed by `startrtclock()` in `main()` *after*
+autoconfig, so nothing reached it until a SunOS boot got that far. The command
+sequence differs from the monitor's too: the monitor points the data pointer
+once with `CLK_ACC_MODE` and lets it auto-increment into the load register,
+then starts with `CLK_LOAD_ARM`; the kernel points it again with `CLK_LLOAD`
+and starts with a bare `CLK_ARM`, no load (`sun/sys/sun2/clock.c:57`).
+
+```sh
+make -C tools clkprobe
+tools/mkxydisk -o build/disk/clkprobe.img --boot build/disk/clkprobe.bin
+make -C sim xsim XY450=1 MEM_MIB=1 ROM=fast STOP_ON=clkprobe-finished \
+     XSIMARGS="-testplusarg blk_image=$PWD/build/disk/clkprobe.img"
+```
+
+Measured on Suska with the kernel's own sequence and its own `CLK_HZ(100)` =
+3072: mode and load both read back as written, **60 terminal counts and 60
+level-5 interrupts**; with load 16, 10,598. So the counter, the mode decode,
+`CLK_LLOAD`, bare `CLK_ARM` and the wiring of OUT2 to `INT5_n` are all sound —
+which is worth knowing mainly as an elimination, since an idle SunOS looks
+exactly like a dead clock from outside. It reports in three separable parts —
+registers read back, then the output pin watched through the status register
+with interrupts masked, then the interrupt itself — so a failure says which
+half is broken, and it repeats the whole thing with the monitor's sequence as
+a control.
 
 **`Old/` is the previous working implementation.** Not in git, never modified;
 copy from it rather than referencing it.

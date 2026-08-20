@@ -143,4 +143,17 @@ $(DISKDIR)/beprobe.bin: beprobe/beprobe.c beprobe/beprobe.ld
 
 beprobe: $(DISKDIR)/beprobe.bin
 
-.PHONY: xychain beprobe
+$(DISKDIR)/clkprobe.bin: clkprobe/clkprobe.c clkprobe/clkprobe.ld
+	@command -v $(M68K)-gcc >/dev/null || { \
+		echo "$(M68K)-gcc not found: the on-machine exerciser needs an m68k"; \
+		echo "cross-compiler.  On Debian/Ubuntu: apt install gcc-m68k-linux-gnu"; \
+		exit 1; }
+	mkdir -p $(DISKDIR)
+	$(M68K)-gcc $(XYCFLAGS) -T clkprobe/clkprobe.ld -o $(DISKDIR)/clkprobe.elf \
+		clkprobe/clkprobe.c 2>&1 | grep -vE 'RWX|build-id' || true
+	$(M68K)-objcopy -O binary $(DISKDIR)/clkprobe.elf $@
+	@echo "clkprobe: $$(stat -c%s $@) bytes of 7680"
+
+clkprobe: $(DISKDIR)/clkprobe.bin
+
+.PHONY: xychain beprobe clkprobe
