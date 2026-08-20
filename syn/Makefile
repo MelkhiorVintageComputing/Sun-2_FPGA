@@ -8,7 +8,7 @@
 #   make bitstream BOARD=v3       for a Wukong V3 instead of a V1
 #   make bitstream FB=1           with the frame buffer on HDMI
 #   make bitstream XY450=1        with the Xylogics 450 disk controller
-#   make bitstream CPU=rd68011    the experimental core, EXPERIMENTAL
+#   make bitstream CPU=rd68011    with the RD68011 core instead of Suska
 #   make both               both CPU clocks
 #
 # Nothing here is committed; everything lands in ../build.  Vivado is run from
@@ -45,10 +45,10 @@ XY450 ?= 0
 BOARD ?= v1
 
 # Which MC68010.  `suska' is the VHDL core the machine is developed and
-# measured against; `rd68011' swaps in the experimental core from ../RD68011
-# through the pin-compatible shim in rtl/experimental/, changing no Sun-2 file.
-# It gets its own output directory, so an experimental result can never be
-# mistaken for a build of the real machine.
+# measured against; `rd68011' is the SystemVerilog core in Inputs/RD68011,
+# which top_fpga.v instantiates as the alternative under SUN2_CPU_RD68011.
+# It gets its own output directory, so a result from one core can never be
+# mistaken for a build with the other.
 CPU ?= suska
 
 IPDIR   = $(TOP)/build/ip/$(BOARD)/sun2_mig

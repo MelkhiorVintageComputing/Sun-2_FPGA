@@ -236,7 +236,7 @@ module top(input         cpu_clk,
    // protected identically to CPU cycles, so a DVMA cycle is a supervisor-data
    // CPU cycle as far as anything past this point can tell.
    //
-   // dvma_active is only ever asserted after the Suska core has granted the bus
+   // dvma_active is only ever asserted after the CPU core has granted the bus
    // *and* dropped BUS_EN, so the two never drive together.
    //
    assign P_A     = dvma_active ? dvma_a     : ADR_OUT[23:1];
@@ -249,13 +249,112 @@ module top(input         cpu_clk,
 
    // Two-wire arbitration, as on the 2/50: BGACK is tied high and a master
    // holds BR for as long as it wants the bus.  MC68000UM section 5.2 requires
-   // BGACK pulled high for this, and the Suska core's arbiter handles it in its
-   // GRANT state.  Deliberate, not a stub.
+   // BGACK pulled high for this, and the core's arbiter handles it -- Suska in
+   // its GRANT state.  Deliberate, not a stub.
    assign P_BGACK_n = 1'b1;
 
    wire        P_RMC_n; // unused
    wire [31:0] PC;
    
+   //
+   // The CPU.  Two cores build this machine and `SUN2_CPU_RD68011' picks
+   // which; everything downstream of the wires below is the same either way.
+   //
+   // Suska (Inputs/Suska_Configware/68K10) is VHDL, and is the core every
+   // measured fingerprint in this project was taken against.  RD68011
+   // (Inputs/RD68011) is a SystemVerilog MC68010 written alongside it.  They
+   // are wired here as alternatives rather than through a wrapper because
+   // their pin conventions genuinely differ -- see below -- and reconciling
+   // that in the file that owns the wiring keeps it visible.  Neither core is
+   // allowed to change the machine: what one of them does that the other does
+   // not is an observation about the cores.
+   //
+`ifdef SUN2_CPU_RD68011
+   //
+   // RD68011 splits every three-state pin into _i / _o / _oe (doc/pinout.md),
+   // where Suska has DATA_EN and a single BUS_EN covering "ADR, ASn, UDSn,
+   // LDSn, RWn, RMCn and FC".  The group enables are asserted and released
+   // together, so the address enable stands for all of them.
+   //
+   // VPA is the substantive difference.  A real 68010 has one VPA pin doing
+   // two jobs -- 6800-style peripheral cycles, and autovectoring an interrupt
+   // acknowledge -- and RD68011 models that pin.  Suska splits it into VPAn
+   // and AVECn, which is why the branch below has to put the Sun-2's VPA on
+   // AVECn and tie VPAn high.  Here there is nothing to split: the Sun-2
+   // asserts VPA for every CPU-space cycle, i.e. every IACK, and has no 6800
+   // peripherals for which an E/VMA cycle would be started.
+   //
+   // rst_n is not an MC68010 pin at all -- it is the core's asynchronous init
+   // -- and takes the board reset, the same signal Suska sees as RESET_INn.
+   //
+   // RMC and DBEN have no equivalent; top_fpga.v uses neither.
+   //
+   wire [23:1] cpu_a;
+   wire        cpu_a_oe, cpu_as_oe, cpu_rw_oe, cpu_ds_oe, cpu_fc_oe;
+   wire        cpu_reset_n_o, cpu_reset_n_oe, cpu_halt_n_o, cpu_halt_n_oe;
+   wire        cpu_e, cpu_vma_n, cpu_vma_oe;
+
+   rd68011_top cpu_68k10(.clk(C100),
+			 .rst_n(RESET_INn), // async init; not a 68010 pin
+
+			 .a_o(cpu_a),
+			 .a_oe(cpu_a_oe),
+
+			 .d_i(P_DOUT),      // IN for CPU, OUT for sun2
+			 .d_o(cpu_dout),
+			 .d_oe(DATA_EN),
+
+			 .as_n_o(cpu_as_n),
+			 .as_oe(cpu_as_oe),
+			 .rw_o(cpu_rw_n),   // high = read, as RWn
+			 .rw_oe(cpu_rw_oe),
+			 .uds_n_o(cpu_uds_n),
+			 .lds_n_o(cpu_lds_n),
+			 .ds_oe(cpu_ds_oe),
+			 .dtack_n_i(P_DTACK_n),
+
+			 .br_n_i(P_BR_n),
+			 .bg_n_o(P_BG_n),
+			 .bgack_n_i(P_BGACK_n),
+
+			 .ipl_n_i({IPL2_n, IPL1_n, IPL0_n}),
+
+			 .berr_n_i(P_BERR_n),
+			 .reset_n_i(RESET_INn),
+			 .reset_n_o(cpu_reset_n_o),
+			 .reset_n_oe(cpu_reset_n_oe),
+			 .halt_n_i(HALT_INn),
+			 .halt_n_o(cpu_halt_n_o),
+			 .halt_n_oe(cpu_halt_n_oe),
+
+			 // the one real pin doing both of Suska's jobs
+			 .e_o(cpu_e),
+			 .vpa_n_i(P_VPA_n),
+			 .vma_n_o(cpu_vma_n),
+			 .vma_oe(cpu_vma_oe),
+
+			 .fc_o(cpu_fc),
+			 .fc_oe(cpu_fc_oe)
+			 );
+
+   // The DVMA mux above takes the 32-bit address Suska hands over; the Sun-2
+   // uses [23:1] of it either way.
+   assign ADR_OUT   = {8'h00, cpu_a, 1'b0};
+   assign BUS_EN    = cpu_a_oe;
+
+   // Open drain, and the two describe it differently: RD68011 gives an _oe
+   // that means "driving low", Suska a level.  RESET_OUT is active high in
+   // Suska's naming, HALT_OUTn active low.  Both are unused below, as they
+   // are with Suska.
+   assign RESET_OUT = cpu_reset_n_oe;
+   assign HALT_OUTn = ~cpu_halt_n_oe;
+   assign P_RMC_n   = 1'b1;
+
+   // Silence unused: pins the Sun-2 has nothing to do with.
+   wire _unused_cpu = &{1'b0, cpu_as_oe, cpu_rw_oe, cpu_ds_oe, cpu_fc_oe,
+			cpu_reset_n_o, cpu_halt_n_o,
+			cpu_e, cpu_vma_n, cpu_vma_oe, 1'b0};
+`else
    WF68K10_TOP suska_68k10(.CLK(C100),
 			   .DATA_IN(P_DOUT), // IN for CPU, OUT for sun2
 			   .BERRn(P_BERR_n),
@@ -303,6 +402,7 @@ module top(input         cpu_clk,
 			   .BGn(P_BG_n)
 			   //,.PC(PC)
 			   );
+`endif
 
    //
    // DVMA bus master.  Nothing requests through it yet -- the 82586 goes in

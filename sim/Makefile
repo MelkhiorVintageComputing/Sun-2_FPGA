@@ -9,6 +9,7 @@
 #   make xsim MB_ETHER=1   fit the MultiBus Ethernet board (MultiBus only)
 #   make xsim FB=1         fit the frame buffer (either machine)
 #   make xsim XY450=1      fit the Xylogics 450 disk controller (MultiBus only)
+#   make xsim CPU=rd68011  build with the RD68011 core instead of Suska
 #   make iverilog          the open-source flow (GHDL-converted CPU), best effort
 #   make check             assert the console reached the monitor prompt
 #                          (pass the same MACHINE= as the run it is checking)
@@ -17,6 +18,7 @@
 #
 #   make board                     behavioural RAM and clocks, boots to prompt
 #   make board BOARD_MEM=ddr3      real MIG plus Micron's DDR3 model
+#   make board CPU=rd68011         with the RD68011 core instead of Suska
 #   make board-check               assert that boot reached the prompt
 #   make board-phy                 ... then type at the prompt and read the
 #                                  PHY status register in device page 0xFE7
@@ -120,10 +122,11 @@ CPU_HZ ?= 12500000
 BAUD ?= 9600
 
 # Which MC68010 to build with.  `suska' is the Suska VHDL core the machine is
-# developed and measured against; `rd68011' swaps in the experimental core from
-# ../RD68011 through the pin-compatible shim in rtl/experimental/, changing no
-# Sun-2 file at all.  It gets its own build/sim directory, and nothing about
-# the machine should ever be changed on the strength of what it does.
+# developed and measured against; `rd68011' is the SystemVerilog core in
+# Inputs/RD68011, which top_fpga.v instantiates as the alternative under
+# SUN2_CPU_RD68011 -- so the machine either core plugs into is the same file.
+# It gets its own build/sim directory, and nothing about the machine should
+# ever be changed on the strength of what one core does and the other does not.
 CPU ?= suska
 
 PLUSARGS = -testplusarg timeout_ms=$(TIMEOUT_MS) -testplusarg stop_on=$(STOP_ON)
@@ -141,18 +144,24 @@ xsim: rom
 # --- board level: the Sun-2 as it will be on the Wukong --------------------
 #   make board                     behavioural RAM and clocks, boots to prompt
 #   make board BOARD_MEM=ddr3      real MIG plus Micron's DDR3 model
+#   make board CPU=rd68011         with the RD68011 core instead of Suska
 BOARD_MEM ?= fast
 
 # Which Wukong revision.  The board RTL is shared between V1 and V3, so this
 # only selects which MIG IP the ddr3 configuration picks up.
 BOARD ?= v1
 
+# The CPU core tags the run directory, as it does for `make xsim'; board-check
+# has to build the same name, so CPUTAG is shared between the two.
+CPUTAG = $(if $(filter-out suska,$(CPU)),-$(CPU),)
+
 board: rom
 	SUN2_DEFINES="$(DEFINES)" BOARD=$(BOARD) BOARD_MEM=$(BOARD_MEM) SUN2_CPU_HZ=$(CPU_HZ) \
+	SUN2_CPU=$(CPU) \
 	SUN2_MACHINE=$(MACHINE) ./run_xsim_board.sh $(PLUSARGS) $(XSIMARGS)
 
 board-check:
-	./check_console.sh $(BUILD)/board-$(BOARD)-$(BOARD_MEM)-$(MACHINE)/console.log $(MACHINE)
+	./check_console.sh $(BUILD)/board-$(BOARD)-$(BOARD_MEM)-$(MACHINE)$(CPUTAG)/console.log $(MACHINE)
 
 # Boot the board, then type at the monitor prompt and read the PHY status
 # register in device page 0xFE7 -- see "Asking the machine what the PHY did" in

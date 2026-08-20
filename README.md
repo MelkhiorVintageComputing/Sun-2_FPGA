@@ -43,6 +43,14 @@ The sources under `Inputs/`:
   which already carries the three fixes the Sun-2 needs (exception-handler
   `BUSY_EXH` timing, `MOVES` function-code selection, and FC = supervisor data
   during the reset vector fetch).
+* `RD68011` — [MelkhiorVintageComputing/RD68011](https://github.com/MelkhiorVintageComputing/RD68011),
+  a SystemVerilog MC68010 written alongside this project and the second core
+  the machine can be built with. `top_fpga.v` instantiates it as the
+  alternative to Suska under `` `ifdef SUN2_CPU_RD68011 ``, which `CPU=rd68011`
+  sets on any of `make -C sim xsim`, `make -C sim board` and
+  `make -C syn bitstream`; nothing else about the machine changes, and each
+  core builds into its own directory. It is early, and nothing here is ever changed on the strength of
+  what one core does and the other does not.
 * `z8530_scc` — [vz50938/z8530_scc](https://github.com/vz50938/z8530_scc), the
   SCC used for the serial console. Its bus clock and serial clock are separate,
   so the CPU clock is free — the Suska SCC constrains it far too tightly. Feed

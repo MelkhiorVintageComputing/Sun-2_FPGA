@@ -12,6 +12,7 @@
 #   SUN2_DEFINES    extra `define's, e.g. "MEM_PAGES=512 ROM_FASTBOOT"
 #   SUN2_BAUD       console decode rate (default 9600)
 #   SUN2_CPU_HZ     CPU clock (default 12500000)
+#   SUN2_CPU        suska (default) | rd68011 -- which MC68010 to build
 #
 # Arguments are passed through to xsim, so plusargs work.
 #
@@ -42,8 +43,12 @@ fi
 
 # Per machine as well as per memory mode: two runs sharing a snapshot
 # directory clobber each other and xsim dies with a kernel fatal that looks
-# like a design fault.
-rundir="$top/build/sim/board-$BOARD-$BOARD_MEM${SUN2_MACHINE:+-$SUN2_MACHINE}"
+# like a design fault.  Per CPU core too, for the same reason and one more: a
+# run with the second core must never write over one that measured the machine
+# as it is developed.  sim/Makefile's board-check builds the same name.
+cputag=""
+[ -n "${SUN2_CPU:-}" ] && [ "${SUN2_CPU}" != suska ] && cputag="-$SUN2_CPU"
+rundir="$top/build/sim/board-$BOARD-$BOARD_MEM${SUN2_MACHINE:+-$SUN2_MACHINE}$cputag"
 mkdir -p "$rundir"
 
 make -s -C "$top/tools"
@@ -81,17 +86,10 @@ echo "== BOARD=$BOARD, BOARD_MEM=$BOARD_MEM, clock generation: $BOARD_CLKGEN =="
 
 cd "$rundir"
 
-echo "== compiling the Suska MC68010 (VHDL) =="
-xvhdl -2008 --work sun2 \
-	"$top/Inputs/Suska_Configware/68K10/wf68k10_pkg.vhd" \
-	"$top/Inputs/Suska_Configware/68K10/wf68k10_address_registers.vhd" \
-	"$top/Inputs/Suska_Configware/68K10/wf68k10_alu.vhd" \
-	"$top/Inputs/Suska_Configware/68K10/wf68k10_bus_interface.vhd" \
-	"$top/Inputs/Suska_Configware/68K10/wf68k10_control.vhd" \
-	"$top/Inputs/Suska_Configware/68K10/wf68k10_data_registers.vhd" \
-	"$top/Inputs/Suska_Configware/68K10/wf68k10_exception_handler.vhd" \
-	"$top/Inputs/Suska_Configware/68K10/wf68k10_opcode_decoder.vhd" \
-	"$top/Inputs/Suska_Configware/68K10/wf68k10_top.vhd"
+# The MC68010 itself, and the define that says which one top_fpga.v builds.
+# Shared with run_xsim.sh so the file lists exist once.
+. "$here/compile_cpu.sh"
+compile_cpu
 
 echo "== compiling the Sun-2 gateware (Verilog) =="
 xvlog --work sun2 "${defargs[@]}" \

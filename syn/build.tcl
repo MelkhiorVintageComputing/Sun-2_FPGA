@@ -71,6 +71,12 @@ if {$xy450 == 1} {
     lappend defines SUN2_XY450
 }
 
+# Which MC68010 to build.  top_fpga.v instantiates both cores and this define
+# picks; the file list further down supplies the sources for the one chosen.
+if {$cpu eq "rd68011"} {
+    lappend defines SUN2_CPU_RD68011
+}
+
 set part    [board_part $board]
 set ipdir   $top/build/ip/$board
 set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu[expr {$cpu_hz / 1000000}][expr {$cpu ne "suska" ? "-$cpu" : ""}]
@@ -96,17 +102,19 @@ set_part $part
 # Sources
 # ---------------------------------------------------------------------------
 # The MC68010.  Suska is VHDL and needs -2008: it connects `buffer` formals to
-# `out` actuals, which VHDL-93 forbids.  RD68011 is the experimental core from
-# ../RD68011, reached through the same pin-compatible shim the simulation uses,
-# so top_fpga.v and every other Sun-2 file is the one the real build uses --
-# see rtl/experimental/rd68011_wf68k10.sv.  It gets its own output directory.
+# `out` actuals, which VHDL-93 forbids.  RD68011 is the SystemVerilog core in
+# Inputs/RD68011.  top_fpga.v carries both instantiations and picks between
+# them on SUN2_CPU_RD68011, added to the defines above, so this is a file list
+# and one define -- every other Sun-2 source is the one the Suska build uses.
+# It gets its own output directory.
 if {$cpu eq "rd68011"} {
-    set rd68011 [expr {[info exists env(RD68011)] ? $env(RD68011) : "$top/../RD68011"}]
+    set rd68011 $top/Inputs/RD68011
     if {![file isdirectory $rd68011/rtl]} {
-        puts "ERROR: RD68011 not found at $rd68011 -- set the RD68011 environment variable"
+        puts "ERROR: RD68011 not found at $rd68011"
+        puts "       run: git submodule update --init Inputs/RD68011"
         exit 1
     }
-    puts "== EXPERIMENTAL: building with the RD68011 core from $rd68011 =="
+    puts "== building with the RD68011 core from $rd68011 =="
     # Order from that project's own Makefile: the two packages first, then the
     # generated microcode, then the hand-written RTL.
     read_verilog -sv [list \
@@ -124,7 +132,6 @@ if {$cpu eq "rd68011"} {
         $rd68011/rtl/rd68011_biu.sv \
         $rd68011/rtl/rd68011_seq.sv \
         $rd68011/rtl/rd68011_top.sv \
-        $top/rtl/experimental/rd68011_wf68k10.sv \
     ]
 } else {
     read_vhdl -vhdl2008 [list \

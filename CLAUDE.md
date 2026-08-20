@@ -13,7 +13,7 @@ V1 or V3 (XC7A100T, FGG676) with DDR3 main memory.
 make sim                                  # boot the MultiBus 2/120 (= make -C sim xsim)
 make -C sim xsim MACHINE=vme              # boot the VME 2/50 instead
 make -C sim check MACHINE=vme             # pass/fail on the console log
-make -C sim board [BOARD_MEM=ddr3]        # the machine as it will be on the Wukong
+make -C sim board [BOARD_MEM=ddr3] [CPU=rd68011]   # as it will be on the Wukong
 make -C syn ip [BOARD=v3]                 # generate the MIG DDR3 controller (once per board)
 make -C syn bitstream [MACHINE=vme] [CPU_HZ=40000000] [BOARD=v3] [XY450=1] [CPU=rd68011]
 tools/mkxydisk -o build/disk/xy0.img       # a labelled, bootable disk image
@@ -34,7 +34,7 @@ Simulation knobs that matter, all on `make -C sim xsim`:
 | `FB=1` | fit the frame buffer, either machine. Changes what the machine looks like — with a display the console goes to the screen and the serial port falls silent. On MultiBus it also builds the keyboard/mouse SCC, which is on the video board |
 | `XY450=1` | MultiBus only: fit the Xylogics 450 disk controller. Needs `MEM_MIB=1` or more and `-testplusarg blk_image=<abs path>`; `tools/mkxydisk` writes one |
 | `CPU_HZ=40000000` | run the CPU faster. Correct, and *slower* to simulate — see the trap below |
-| `CPU=rd68011` | **experimental**: build with the RD68011 core from `../RD68011` instead of Suska. Changes no Sun-2 file — see below |
+| `CPU=rd68011` | build with the RD68011 core from `Inputs/RD68011` instead of Suska. Same machine, one define — see below |
 | `TIMEOUT_MS=` | simulated milliseconds before giving up |
 | `XSIMARGS="-testplusarg trace_dvma=16"` | also `trace_irq`, `heartbeat_ms`, `crs_stuck`, `vcd_full` |
 | `XSIMARGS="-testplusarg watch_addr=5b6"` | print every bus cycle, CPU or DVMA, touching one address |
@@ -105,16 +105,28 @@ Expect a full boot to take roughly 0.5 s of wall clock per simulated
 millisecond. `make -C sim board BOARD_MEM=ddr3` is ~1500x slower again and
 cannot reach the prompt — it is only good for showing MIG calibrate.
 
-**Swapping the CPU is a file-list choice, not a code change.**
-`rtl/experimental/rd68011_wf68k10.sv` presents Suska's `WF68K10_TOP` interface
-and implements it with the RD68011 core in `../RD68011`, so `CPU=rd68011`
-builds the machine from *the same* `top_fpga.v` and the same everything else —
-there is no second copy of the top to drift. It gets its own `build/sim`
-directory, and so does `make -C syn bitstream CPU=rd68011`. The core is early
-and nothing about the Sun-2 should ever be changed on the strength of what it
-does; the two disagree on VPA (RD68011 models the
-real single pin, Suska splits it into `VPAn`/`AVECn`) and on pin enables
-(`_oe` per group against one `BUS_EN`), and the shim reconciles both.
+**Two cores, one machine.** `top_fpga.v` instantiates Suska
+(`Inputs/Suska_Configware/68K10`, VHDL) and RD68011 (`Inputs/RD68011`,
+SystemVerilog) as alternatives under `` `ifdef SUN2_CPU_RD68011 ``, and
+`CPU=rd68011` on `make -C sim xsim`, `make -C sim board` or `make -C syn
+bitstream` sets that define and reads that core's file list —
+`sim/compile_cpu.sh` holds both lists for the two simulation flows, so adding
+a file to a core is one edit. Everything else — every other Sun-2
+source, and the whole of `top_fpga.v` below the instantiation — is shared, so
+there is no second copy of the top to drift. Each core gets its own `build/sim`
+and `build/syn` directory so a result from one can never be read as the other.
+
+The two disagree on exactly two things, both reconciled at the instantiation.
+**VPA**: RD68011 models the real single pin, Suska splits it into
+`VPAn`/`AVECn`, which is why the Suska arm has to put the Sun-2's VPA on
+`AVECn` and tie `VPAn` high while the RD68011 arm just connects it. **Pin
+enables**: `_oe` per group against one `BUS_EN`, and since the groups assert
+and release together the address enable stands for all of them. There used to
+be a shim in `rtl/experimental/` presenting Suska's interface; it is gone, and
+the reconciliation now lives where the wiring does.
+
+RD68011 is early, and nothing about the Sun-2 should ever be changed on the
+strength of what one core does and the other does not.
 
 It is nevertheless the only thing that has taken SunOS past `startup()`. With
 `XY450=1` and no video board it boots 4.0.3 to the VM page-pool
@@ -122,8 +134,8 @@ initialisation, and its 138 bus errors decompose as ten device probes plus 128
 repeats of `A=701000` — `poke()` walking every page of the DVMA bus window and
 recovering from each fault, which is exactly what the kernel asks for and what
 Suska does not do. That is an observation about the cores, not a licence to
-change anything here: the machine is the same file in both builds, and the
-MultiBus fingerprint is measured against Suska.
+change anything here: the machine below the instantiation is the same file in
+both builds, and the MultiBus fingerprint is measured against Suska.
 
 **It does not clock anywhere near 40 MHz.** A full MultiBus V3 bitstream
 (Ethernet, frame buffer, disk) meets timing at **20 MHz with WNS 0.060 ns** and

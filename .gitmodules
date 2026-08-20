@@ -19,3 +19,6 @@
 [submodule "Inputs/Wish5380"]
 	path = Inputs/Wish5380
 	url = git@github.com:MelkhiorVintageComputing/Wish5380.git
+[submodule "Inputs/RD68011"]
+	path = Inputs/RD68011
+	url = git@github.com:MelkhiorVintageComputing/RD68011.git
