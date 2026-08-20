@@ -225,13 +225,17 @@ xychain: rom
 	$(MAKE) xsim XY450=1 MEM_MIB=1 ROM=fast TIMEOUT_MS=8000 \
 		STOP_ON=xychain-finished \
 		XSIMARGS="-testplusarg blk_image=$(XYCHAIN_IMG) $(XSIMARGS)"
-	./check_console.sh $(BUILD)/xsim-$(MACHINE)-xy450/console.log $(MACHINE) xychain
+	./check_console.sh $(BUILD)/xsim-$(MACHINE)-xy450$(CPUTAG)/console.log $(MACHINE) xychain
 
 iverilog: rom
 	SUN2_DEFINES="$(DEFINES)" ./run_iverilog.sh $(PLUSARGS) $(IVSIMARGS)
 
 # Must match the run directory run_xsim.sh chooses, which composes the two.
-RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)
+# CPUTAG goes last because run_xsim.sh appends it last; without it `make check
+# CPU=rd68011' reads the Suska run's log and passes on it.  Note this still
+# does not carry CPU_HZ or BAUD, which also tag a run directory -- pass
+# FBIMAGE= or the log path by hand for those.
+RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)$(CPUTAG)
 # What check_console.sh should expect, in order of what wins.  A display wins
 # outright: with one fitted the console moves to the screen and there is no
 # serial output left to check, whatever else is in the cage.  A disk beats an
