@@ -125,8 +125,9 @@ BAUD ?= 9600
 # developed and measured against; `rd68011' is the SystemVerilog core in
 # Inputs/RD68011, which top_fpga.v instantiates as the alternative under
 # SUN2_CPU_RD68011 -- so the machine either core plugs into is the same file.
-# It gets its own build/sim directory, and nothing about the machine should
-# ever be changed on the strength of what one core does and the other does not.
+# It gets its own build/sim directory.  Neither core is a reference for the
+# other: run short experiments -- boot blocks, unit tests, device probes --
+# with both, and report both.
 CPU ?= suska
 
 PLUSARGS = -testplusarg timeout_ms=$(TIMEOUT_MS) -testplusarg stop_on=$(STOP_ON)

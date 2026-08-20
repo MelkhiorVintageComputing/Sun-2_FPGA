@@ -126,17 +126,28 @@ and release together the address enable stands for all of them. There used to
 be a shim in `rtl/experimental/` presenting Suska's interface; it is gone, and
 the reconciliation now lives where the wiring does.
 
-RD68011 is early, and nothing about the Sun-2 should ever be changed on the
-strength of what one core does and the other does not.
+**Short experiments run on both cores.** Neither is a reference for the other:
+Suska gets instruction restart wrong -- the bus error frame it pushes does not
+describe the cycle -- and RD68011 gets further into the kernel because of it,
+so a result from one alone says as much about the core as about the machine.
+Anything cheap enough to repeat -- a boot block like `tools/beprobe` or
+`tools/clkprobe`, a unit test, a probe of one device -- is run with
+`CPU=suska` *and* `CPU=rd68011`, and both numbers are reported. Where they
+disagree, that disagreement is the finding and neither number is thrown away.
+
+What has not changed is the regression baseline: the MultiBus fingerprint of
+22 bus errors and a byte-identical console is measured with Suska, because
+that is what every recorded number was taken against, and a full boot is too
+expensive to duplicate for every change.
 
 It is nevertheless the only thing that has taken SunOS past `startup()`. With
 `XY450=1` and no video board it boots 4.0.3 to the VM page-pool
 initialisation, and its 138 bus errors decompose as ten device probes plus 128
 repeats of `A=701000` — `poke()` walking every page of the DVMA bus window and
 recovering from each fault, which is exactly what the kernel asks for and what
-Suska does not do. That is an observation about the cores, not a licence to
-change anything here: the machine below the instantiation is the same file in
-both builds, and the MultiBus fingerprint is measured against Suska.
+Suska does not do -- an observation about the cores, and the reason neither is
+trusted alone: the machine below the instantiation is the same file in both
+builds.
 
 **It does not clock anywhere near 40 MHz.** A full MultiBus V3 bitstream
 (Ethernet, frame buffer, disk) meets timing at **20 MHz with WNS 0.060 ns** and
@@ -346,7 +357,7 @@ make -C sim xsim XY450=1 MEM_MIB=1 ROM=fast STOP_ON=clkprobe-finished \
      XSIMARGS="-testplusarg blk_image=$PWD/build/disk/clkprobe.img"
 ```
 
-Measured on Suska with the kernel's own sequence and its own `CLK_HZ(100)` =
+Measured with the kernel's own sequence and its own `CLK_HZ(100)` =
 3072: mode and load both read back as written, **60 terminal counts and 60
 level-5 interrupts**; with load 16, 10,598. So the counter, the mode decode,
 `CLK_LLOAD`, bare `CLK_ARM` and the wiring of OUT2 to `INT5_n` are all sound —

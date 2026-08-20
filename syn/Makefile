@@ -48,7 +48,7 @@ BOARD ?= v1
 # measured against; `rd68011' is the SystemVerilog core in Inputs/RD68011,
 # which top_fpga.v instantiates as the alternative under SUN2_CPU_RD68011.
 # It gets its own output directory, so a result from one core can never be
-# mistaken for a build with the other.
+# mistaken for a build with the other.  Neither is a reference for the other.
 CPU ?= suska
 
 IPDIR   = $(TOP)/build/ip/$(BOARD)/sun2_mig

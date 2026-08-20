@@ -49,8 +49,10 @@ The sources under `Inputs/`:
   alternative to Suska under `` `ifdef SUN2_CPU_RD68011 ``, which `CPU=rd68011`
   sets on any of `make -C sim xsim`, `make -C sim board` and
   `make -C syn bitstream`; nothing else about the machine changes, and each
-  core builds into its own directory. It is early, and nothing here is ever changed on the strength of
-  what one core does and the other does not.
+  core builds into its own directory. Neither core is a reference for the
+  other — Suska gets instruction restart wrong, and RD68011 gets further into
+  SunOS because of it — so short experiments are run with both and both
+  results reported.
 * `z8530_scc` — [vz50938/z8530_scc](https://github.com/vz50938/z8530_scc), the
   SCC used for the serial console. Its bus clock and serial clock are separate,
   so the CPU clock is free — the Suska SCC constrains it far too tightly. Feed
