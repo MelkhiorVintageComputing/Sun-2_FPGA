@@ -357,16 +357,19 @@ make -C sim xsim XY450=1 MEM_MIB=1 ROM=fast STOP_ON=clkprobe-finished \
      XSIMARGS="-testplusarg blk_image=$PWD/build/disk/clkprobe.img"
 ```
 
-Measured with the kernel's own sequence and its own `CLK_HZ(100)` =
-3072: mode and load both read back as written, **60 terminal counts and 60
-level-5 interrupts**; with load 16, 10,598. So the counter, the mode decode,
-`CLK_LLOAD`, bare `CLK_ARM` and the wiring of OUT2 to `INT5_n` are all sound —
-which is worth knowing mainly as an elimination, since an idle SunOS looks
-exactly like a dead clock from outside. It reports in three separable parts —
-registers read back, then the output pin watched through the status register
-with interrupts masked, then the interrupt itself — so a failure says which
-half is broken, and it repeats the whole thing with the monitor's sequence as
-a control.
+With the kernel's own sequence and its own `CLK_HZ(100)` = 3072, mode and load
+read back as written and every terminal count arrives as a level-5 interrupt,
+on both cores. So the counter, the mode decode, `CLK_LLOAD`, bare `CLK_ARM`
+and the wiring of OUT2 to `INT5_n` are all sound — worth knowing mainly as an
+elimination, since an idle SunOS looks exactly like a dead clock from outside.
+
+It reports in three separable parts — registers read back, then the output pin
+watched through the status register with interrupts masked, then the interrupt
+itself — so a failure says which half is broken; it repeats the whole thing
+with the monitor's `CLK_LOAD_ARM` sequence as a control; and it starts by
+reading counter 1 back before writing anything, which is what the monitor's
+own initialisation left there. That last one found a real bug — see the trap
+below.
 
 **`Old/` is the previous working implementation.** Not in git, never modified;
 copy from it rather than referencing it.
@@ -518,6 +521,31 @@ IOPB came back with the driver's own zeroes in it, reading as success.
   time at 40 MHz, hours of wall clock, spent between two printed lines. It
   looks exactly like a hang. Check the PC against `showregs` before killing a
   run that has stopped producing output.
+* **A device model clocked on a strobe *level* acts once per clock, not once
+  per bus cycle.** `ttl_am9513.v` had `assign write = ~WR_n & ~CS_n;` with
+  `always @(posedge clk) if (write)`, and `sun2_fpga.v` drives `WR` for the
+  whole data-strobe portion of a 68010 cycle with `CS_n` tied low — so one CPU
+  write ran the body three times and the Am9513's data pointer auto-incremented
+  under it. The monitor's own NMI setup (`sunmon.c:481`: one `CLK_ACC_MODE`,
+  then mode and load written back to back) therefore left `0x0C22` in counter
+  1's mode, load **and** hold registers, the load value 7680 never arrived, and
+  the NMI ran at 98.9 Hz instead of 40 for the whole life of the project.
+  SunOS's own clock escaped it because `startrtclock()` re-points with
+  `CLK_LLOAD` before writing the load value; only the auto-increment idiom is
+  hit, which is why nothing noticed. Measured two independent ways:
+  `tools/clkprobe` reading counter 1 back from a boot block under both cores,
+  and the level-7 count of a SunOS boot — 1199 acknowledgements in 12.0 s is
+  99.9 Hz against the 98.9 the corrupted load value predicts. The fix is one
+  edge detector, acting on the *leading* edge because the 68010 drives data in
+  S3 and asserts the strobes in S4. Grep any device model for a level-sensitive
+  strobe used inside a clocked block; this is the second bug of the shape in
+  this file.
+
+  Correcting it changes the NMI rate and therefore the interrupt counts in
+  every recorded run — the MultiBus reference went from 13 level-7
+  acknowledgements to 5 — while the bus error count, its sequence and the
+  console text are all untouched. Measured, not assumed.
+
 * **`xvlog` is stricter than Verilator and Yosys about declaration order.** A
   wire declared after its first use compiles elsewhere and fails here.
 * **A clock that only *sometimes* gets a BUFG.** `clk50` drives the reset

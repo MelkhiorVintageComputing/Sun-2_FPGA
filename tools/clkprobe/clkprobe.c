@@ -120,6 +120,7 @@ struct am9513 {
 #define CLK_CLEAR       0xFFE0      /* + counter number */
 #define CLK_ACC_MODE    0xFF00      /* + counter number */
 #define CLK_ACC_LOAD    0xFF08      /* + counter number */
+#define CLK_ACC_HOLD    0xFF10      /* + counter number */
 
 #define CLKTIMER        2                       /* TIMER_MISC, level 5 */
 #define CLKBIT          (1 << (CLKTIMER - 1))
@@ -143,6 +144,61 @@ static u16 read_load(int c)
 {
     CLK->clk_cmd = CLK_ACC_LOAD + c;
     return CLK->clk_data;
+}
+
+static u16 read_hold(int c)
+{
+    CLK->clk_cmd = CLK_ACC_HOLD + c;
+    return CLK->clk_data;
+}
+
+/* ------------------------------------------------------------------------ */
+/* What the monitor left in counter 1                                       */
+/* ------------------------------------------------------------------------ */
+/*
+ * Read-only, and first, before this program has written a single timer
+ * register -- so what comes back is what the boot monitor's own
+ * initialisation put there and nothing else.
+ *
+ * The monitor arms the NMI clock like this (msun/mon/kernel/sunmon.c:481):
+ *
+ *      TIMER_BASE->clk_cmd  = CLK_CLEAR + TIMER_NMI;
+ *      TIMER_BASE->clk_cmd  = CLK_ACC_MODE + TIMER_NMI;
+ *      TIMER_BASE->clk_data = NMIMODE;                 // 0x0C22
+ *      TIMER_BASE->clk_data = CLK_BASIC/(NMIFREQ*NMIDIVISOR);   // 7680
+ *      TIMER_BASE->clk_cmd  = CLK_LOAD_ARM + CLK_BIT(TIMER_NMI);
+ *
+ * -- one pointer command and two data writes, the second relying on the data
+ * pointer having auto-incremented from the mode register into the load
+ * register.  So the load register must read back 0x1E00, and the hold register
+ * must be untouched.
+ *
+ * If instead load reads back 0x0C22, the mode word reached it: the write
+ * landed in more than one register, which is what a data write applied on
+ * every clock of a multi-clock bus cycle rather than once per cycle would do,
+ * and the monitor's clock has been running at the wrong rate since the
+ * beginning.  Hold would carry the same value for the same reason.
+ *
+ * This is the measurement that separates a real fault in the machine from an
+ * artefact of this program running three passes that share pointer state.
+ */
+static void dump_counter1(void)
+{
+    u16 mode = read_mode(1);
+    u16 load = read_load(1);
+    u16 hold = read_hold(1);
+
+    puts_("\n  counter 1 as the monitor left it (NMI, level 7):\n");
+    puts_("    mode ");  puthex(mode, 4);  puts_(" expected 0c22\n");
+    puts_("    load ");  puthex(load, 4);  puts_(" expected 1e00 = 7680, 40 Hz from F2\n");
+    puts_("    hold ");  puthex(hold, 4);  puts_(" expected untouched\n");
+
+    if (load == 0x1E00)
+        puts_("    -> the monitor's two data writes landed one per register\n");
+    else if (load == mode)
+        puts_("    -> the mode word reached the load register: one write, several registers\n");
+    else
+        puts_("    -> neither: the load register holds something else again\n");
 }
 
 /* ------------------------------------------------------------------------ */
@@ -304,6 +360,9 @@ static void pass(const char *what, void (*arm)(u16), u16 load, u32 spins)
 int main(void)
 {
     puts_("\nclkprobe: Am9513 counter 2, the level 5 clock SunOS arms\n");
+
+    /* First, before anything here writes a timer register. */
+    dump_counter1();
 
     *(volatile u32 *)vec_level5_addr = (u32)irq_stub;
 

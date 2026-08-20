@@ -208,8 +208,33 @@ module ttl_am9513 #(parameter TRACE = 0) (
       end
    endfunction
 
+   // One bus cycle is one register access, which needs saying because WR is a
+   // level and this model is clocked.  sun2_fpga.v drives WR for the whole
+   // data-strobe portion of a 68010 cycle and ties CS_n low, so `write' stands
+   // for several clocks of C100 -- and `if (write)' inside a clocked block ran
+   // the body once per clock.  A single write therefore stored its value in
+   // one register after another as the data pointer auto-incremented under it:
+   // the monitor's own NMI setup (one CLK_ACC_MODE, then mode and load written
+   // back to back, sunmon.c:481) left 0x0C22 in the mode, load *and* hold
+   // registers of counter 1, so the load value 7680 never arrived and the NMI
+   // ran at about 99 Hz instead of 40.  Measured from a boot block with
+   // tools/clkprobe, identically under both CPU cores.
+   //
+   // The leading edge is the one to act on rather than the trailing edge the
+   // real chip latches on: the 68010 drives data in S3 and asserts the data
+   // strobes in S4, so data is already valid when `write' rises, while at the
+   // falling edge it is being released.
+   reg 	      write_d;
+   wire       write_stb;
+   assign write_stb = write & ~write_d;
+
    always @(posedge clk) begin
+     // Before the reset arm, so reset still wins: a later non-blocking
+     // assignment to the same reg would override it.
+     write_d <= write;
+
      if (~reset_n) begin
+	write_d <= 1'b0;
 	for (i = 1; i <= 5; i = i + 1)
 	  begin
 	     ctr_mode[i] <= 0;
@@ -227,8 +252,8 @@ module ttl_am9513 #(parameter TRACE = 0) (
 	output_bits <= 8'h0;
 	mm <= 16'h0;
      end
-   
-     if (write) begin
+
+     if (write_stb) begin
 	if (CD_n)   // command write
 	  begin
 	     if (TRACE) $display("am9513: cmd write; %b", data_in[7:0]);
@@ -327,7 +352,7 @@ module ttl_am9513 #(parameter TRACE = 0) (
 	  end
      end
    
-     if (write) begin
+     if (write_stb) begin
 	if (~CD_n)   // data write
 	  begin
 	     if (TRACE) $display("am9513: data write; group %d element %d", group, element);
