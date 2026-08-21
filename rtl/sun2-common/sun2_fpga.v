@@ -504,11 +504,30 @@ module sun2_fpga(input         cpu_clk,
 
    // System Enable register
    wire [7:0] 			 sys_out;
+   //
+   // Cleared by the board reset, not by POR_n.  BOOT_n lives in this register,
+   // so what clears it decides whether a reset puts the machine back into boot
+   // state -- and the boot PROM states the contract in _hardreset: "A hardware
+   // reset would clear the enable register, but if this is a software reset,
+   // we have to get into boot state explicitly this way."
+   //
+   // POR_n is an `initial' block with # delays.  Simulation runs it and the
+   // register is cleared at time zero; synthesis ignores the delays, so on a
+   // board nothing cleared this register ever.  Power-up worked by luck -- a
+   // Xilinx flip-flop configures to 0, so BOOT_n came up 0 -- but once the PROM
+   // left boot state, the reset button could not put it back: the machine
+   // restarted with BOOT_n = 1, its reset vector fetch went through a stale
+   // page map instead of the PROM, and the cycle hung with no bus error,
+   // because memory is exempt from the bus timeout.  Measured on the board as
+   // the heartbeat still ticking with only seen_stall lit, and reproduced here
+   // with +reset_at_ms=1300, which has to be after en_boot drops to prove
+   // anything.
+   //
    gen8bit_reg sys(.CLK(CLK),
 		   .din(P_DIN[7:0]),
 		   .WR(WR & MATCH_SYSEN & C_S4),
 		   .dout(sys_out),
-		   .CLR_n(POR_n)
+		   .CLR_n(~sys_reset)
 		   );
    /* split the 8 system bits by name */
    wire 			 EN_PAR, EN_INT1, EN_INT2, EN_INT3, EN_PARERR, EN_DVMA, EN_INT;
@@ -1205,6 +1224,26 @@ module sun2_fpga(input         cpu_clk,
    assign INT6_n = serial_int_n;
    assign INT7_n = ~timer_int[1];
 
+   //
+   // todebug goes to the second LED header on the board
+   // (boards/Wukong/wukong_top.sv drives extra_leds0 straight from it), so
+   // every bit here has to be a level that stays put or a latched "this has
+   // happened at least once".  It used to carry AS, RW, DTACK and a decode
+   // match, all of which move at cpu_clk: on an LED that is a dim blur at
+   // best, and "too fast to see" cannot be told apart from "never happened",
+   // which is the only question worth asking when the front panel is frozen.
+   //
+   // Read left to right as a ladder.  Bit 7 not blinking: no CPU clock, and
+   // nothing else on the header means anything.  Blinking with bit 6 lit:
+   // held in reset -- and on a board that is usually init_calib_complete,
+   // which wukong_top folds into sys_reset_raw.  Bit 6 out but bit 5 dark:
+   // out of reset and the core still never drives AS.  Bit 5 without bit 4:
+   // fetching, but never from the boot PROM, so boot-mode decode or the map.
+   // Bit 4 without bit 3: the PROM is addressed and nothing ever answers,
+   // with bit 2 saying the cycles are timing out.  Bit 3 without bit 1: the
+   // machine runs but the diagnostic register write never decodes, which
+   // makes the front panel lie rather than the machine be dead.
+   //
    reg 		       seen_mem_timeout;
    always @(posedge cpu_clk)
      begin
