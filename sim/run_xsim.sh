@@ -50,6 +50,9 @@ rundir_tag=""
 case " $SUN2_DEFINES " in *" SUN2_MB_ETHER "*) rundir_tag="$rundir_tag-mbether" ;; esac
 case " $SUN2_DEFINES " in *" SUN2_FB "*)       rundir_tag="$rundir_tag-fb" ;; esac
 case " $SUN2_DEFINES " in *" SUN2_XY450 "*)    rundir_tag="$rundir_tag-xy450" ;; esac
+# ... and the experiment that powers the maps up as zeros rather than X, which
+# is a different machine at time zero and must not write over a reference run.
+case " $SUN2_DEFINES " in *" SRAM_POWERUP_ZERO "*) rundir_tag="$rundir_tag-mapszero" ;; esac
 # ... and the CPU clock, because it is a different snapshot: two runs sharing a
 # directory recompile it underneath each other.  Only when it is not the
 # default, so every path measured so far keeps its name.

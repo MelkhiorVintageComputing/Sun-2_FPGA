@@ -27,6 +27,12 @@
 //   +abort_pc=<hex>      address of _abortent, to make +trace_abort exact
 //   +watch_addr=<hex>    print every bus cycle, CPU or DVMA, that touches
 //                        this address -- 5b6 is the monitor's g_debounce
+//   +reset_at_ms=<t>     press the reset button once, t simulated ms in, to
+//                        see what a warm reset does that a cold one does not
+//
+//   +cycle_from=<ns>     print every clock edge, both edges, between these
+//   +cycle_to=<ns>       two times: the whole state of one bus cycle
+//
 //   +fb_dump_ms=<real>   with a display fitted, rewrite the frame buffer
 //                        capture this often so the screen can be rendered
 //                        during the run rather than only at the end
@@ -155,8 +161,24 @@ module tb_sun2 #(
    // Reset
    // ------------------------------------------------------------------
    reg sys_reset = 1'b1;
+   real reset_at_ms = 0.0;
+   initial void'($value$plusargs("reset_at_ms=%f", reset_at_ms));
    initial begin
       #2000 sys_reset = 1'b0;
+
+      // +reset_at_ms=<t>: press the reset button once, t simulated
+      // milliseconds in.  A warm reset is not a cold one: the segment and page
+      // maps are RAM and survive it, and so does anything the gateware fails
+      // to clear.  Pressing it before the PROM has left boot state proves
+      // nothing -- BOOT_n is still 0 and there is nothing to get wrong -- so
+      // this has to fire well after en_boot drops, around 1.16 s on MultiBus.
+      if (reset_at_ms > 0.0) begin
+         #(reset_at_ms * 1000000.0 - 2000.0);
+         $display("[%t] === reset asserted ===", $realtime);
+         sys_reset = 1'b1;
+         #10000 sys_reset = 1'b0;
+         $display("[%t] === reset released ===", $realtime);
+      end
    end
 
    // ------------------------------------------------------------------
@@ -453,6 +475,55 @@ module tb_sun2 #(
    // trace can be lined up against the console output.
    always @(diag_leds)
      $display("[%t] diag_leds = %02x (boot=%0d)", $realtime, diag_leds, en_boot);
+
+   // Every clock edge over a window, for pinning down the timing of one bus
+   // cycle: +cycle_from=<ns> +cycle_to=<ns>.  Both edges, because the 68000
+   // bus runs on both -- the odd C_S are clocked on negedge and the even on
+   // posedge, matching Motorola's half-state numbering, and DTACK is sampled
+   // on the falling edge that ends S4.  Sampling only posedges hides exactly
+   // the half-cycle that matters; that cost a wrong reading of section 5.8
+   // here once.
+   //
+   // This is the instrument that found the RESET-instruction stall: three
+   // consecutive PROM fetches, two completing and the third not, with the
+   // machine's DTACK identical in all three.
+   real cyc_from = 0.0, cyc_to = 0.0;
+   initial begin
+      void'($value$plusargs("cycle_from=%f", cyc_from));
+      void'($value$plusargs("cycle_to=%f", cyc_to));
+   end
+   // Both edges: the 68000 bus uses them -- the odd C_S are clocked on negedge
+   // and the even on posedge, matching Motorola's half-state numbering, and
+   // DTACK is sampled on the falling edge that ends S4.
+   always @(posedge dut.C100 or negedge dut.C100)
+     if (cyc_to > 0.0 && $realtime >= cyc_from && $realtime <= cyc_to)
+       $display("[%t] %s A=%06x AS=%0d DTACK=%0d BERR=%0d | S3=%0d S4=%0d S5=%0d S6=%0d S7=%0d S8=%0d | MPB=%0d VALID=%0d PROT=%0d ERR=%0d",
+                $realtime, dut.C100 ? "^" : "v", {dut.P_A, 1'b0},
+                ~dut.P_AS_n, ~dut.P_DTACK_n, ~dut.P_BERR_n,
+                dut.sun2.C_S3, dut.sun2.C_S4, dut.sun2.C_S5, dut.sun2.C_S6,
+                dut.sun2.C_S7, dut.sun2.C_S8,
+                dut.sun2.MATCH_PROM_BOOT, dut.sun2.VALID,
+                dut.sun2.PROTERR, dut.sun2.ERR);
+
+`ifdef SUSKA_PEEK
+   // Suska's own view of the same cycle -- EXTRA_DEFINES=SUSKA_PEEK, and only
+   // with CPU=suska, since it reaches into that core by hierarchical name.
+   //
+   // DTACK_In is the core's registered copy, taken on the falling edge;
+   // WAITSTATES is consulted only while the core is in its own slice S3, and
+   // RESET_OUT_I outranks DTACK_In in that expression unless
+   // patches/Suska_Configware/0001 is applied.  Printing the four together is
+   // what separated "the machine acknowledged late" from "the core ignored the
+   // acknowledgement".
+   always @(posedge dut.C100 or negedge dut.C100)
+     if (cyc_to > 0.0 && $realtime >= cyc_from && $realtime <= cyc_to)
+       $display("[%t] %s   suska: DTACK_In=%b WAITSTATES=%b SLICE_CNT_P=%b RESET_OUT=%b",
+                $realtime, dut.C100 ? "^" : "v",
+                dut.suska_68k10.I_BUS_IF.DTACK_In,
+                dut.suska_68k10.I_BUS_IF.WAITSTATES,
+                dut.suska_68k10.I_BUS_IF.SLICE_CNT_P,
+                dut.suska_68k10.I_BUS_IF.RESET_OUT_I);
+`endif
 
    // Bus errors.  A PROM written for different hardware tends to fail by
    // touching something that does not answer, so say where and why rather than

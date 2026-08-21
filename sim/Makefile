@@ -84,6 +84,22 @@ ifeq ($(XY450),1)
 DEFINES += SUN2_XY450
 endif
 
+# Power the segment and page map RAMs up as zeros, the way a 7-series block RAM
+# comes out of configuration, instead of leaving them X as the model otherwise
+# does.  An experiment rather than a default: it is what the board really does,
+# and the boot's first bus cycle -- the reset vector fetch, a supervisor *data*
+# access, so translated rather than served from the PROM -- reads an entry that
+# software has not written yet.
+# Anything else to `define, for one-off experiments: EXTRA_DEFINES="FOO BAR".
+# It does not tag the run directory, so use it only for things that change what
+# is printed rather than what the machine does.
+DEFINES += $(EXTRA_DEFINES)
+
+MAPS_ZERO ?= 0
+ifeq ($(MAPS_ZERO),1)
+DEFINES += SRAM_POWERUP_ZERO
+endif
+
 # Simulated milliseconds before giving up, and the console string that means
 # we got there: the Rev R monitor prompt.  A full boot needs a bit over four
 # simulated seconds, nearly all of it the PROM's map diagnostics and the pass

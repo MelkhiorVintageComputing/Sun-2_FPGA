@@ -33,6 +33,8 @@ module tb_wukong #(
    // ------------------------------------------------------------------
    reg clk50     = 1'b0;
    reg cpu_reset = 1'b0;          // button, active low: 0 = held in reset
+   real reset_at_us = 0.0;
+   initial void'($value$plusargs("reset_at_us=%f", reset_at_us));
 
    always #10.0 clk50 = ~clk50;   // 50 MHz
 
@@ -265,6 +267,18 @@ module tb_wukong #(
 
       // Hold the button down briefly, as a person would.
       #2000 cpu_reset = 1'b1;
+
+      // +reset_at_us=<t>: press the board's reset button once, t microseconds
+      // in.  A warm reset is not the same machine as a cold one -- the maps are
+      // RAM and survive it, and so does anything the gateware fails to clear --
+      // and that difference is only visible from a running machine, which is
+      // why it needs to be provoked rather than waited for.
+      if (reset_at_us > 0.0) begin
+         #(reset_at_us * 1000.0 - 2000.0);
+         $display("[%t] === reset button pressed ===", $realtime);
+         cpu_reset = 1'b0;
+         #10000 cpu_reset = 1'b1;   // 10 us, far longer than a debounce
+      end
 
       #(timeout_ms * 1000000.0);
       wrap_up("TIMEOUT");
