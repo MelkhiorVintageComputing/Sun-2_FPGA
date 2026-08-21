@@ -75,6 +75,7 @@ rom:
 inputs:
 	$(TOP)/tools/patch_inputs.sh Wish82586
 	$(TOP)/tools/patch_inputs.sh Wish5380
+	$(TOP)/tools/patch_inputs.sh Suska_Configware
 
 bitstream: ip rom inputs | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \

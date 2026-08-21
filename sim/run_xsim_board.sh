@@ -28,6 +28,7 @@ top=$(cd "$here/.." && pwd)
 
 "$top/tools/patch_inputs.sh" Wish82586
 "$top/tools/patch_inputs.sh" Wish5380
+"$top/tools/patch_inputs.sh" Suska_Configware
 
 if [ ! -x "$XILINX_VIVADO/bin/xvlog" ]; then
 	echo "xsim not found under $XILINX_VIVADO -- set XILINX_VIVADO" >&2

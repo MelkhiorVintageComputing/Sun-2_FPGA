@@ -48,7 +48,12 @@ compile_cpu() {
 			"$rd/rtl/rd68011_top.sv"
 		;;
 	suska)
-		local sk="${SUSKA_DIR:-$top/Inputs/Suska_Configware/68K10}"
+		# From the patched copy under build/inputs/, never from Inputs/
+		# itself: patches/Suska_Configware/ carries the fixes this
+		# machine needs, and tools/patch_inputs.sh rebuilds the copy
+		# whenever a patch or a source file moves.
+		"$top/tools/patch_inputs.sh" Suska_Configware
+		local sk="${SUSKA_DIR:-$top/build/inputs/Suska_Configware/68K10}"
 		if [ ! -e "$sk/wf68k10_top.vhd" ]; then
 			echo "no Suska MC68010 at $sk" >&2
 			return 1

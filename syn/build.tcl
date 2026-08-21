@@ -135,15 +135,15 @@ if {$cpu eq "rd68011"} {
     ]
 } else {
     read_vhdl -vhdl2008 [list \
-        $top/Inputs/Suska_Configware/68K10/wf68k10_pkg.vhd \
-        $top/Inputs/Suska_Configware/68K10/wf68k10_address_registers.vhd \
-        $top/Inputs/Suska_Configware/68K10/wf68k10_alu.vhd \
-        $top/Inputs/Suska_Configware/68K10/wf68k10_bus_interface.vhd \
-        $top/Inputs/Suska_Configware/68K10/wf68k10_control.vhd \
-        $top/Inputs/Suska_Configware/68K10/wf68k10_data_registers.vhd \
-        $top/Inputs/Suska_Configware/68K10/wf68k10_exception_handler.vhd \
-        $top/Inputs/Suska_Configware/68K10/wf68k10_opcode_decoder.vhd \
-        $top/Inputs/Suska_Configware/68K10/wf68k10_top.vhd \
+        $top/build/inputs/Suska_Configware/68K10/wf68k10_pkg.vhd \
+        $top/build/inputs/Suska_Configware/68K10/wf68k10_address_registers.vhd \
+        $top/build/inputs/Suska_Configware/68K10/wf68k10_alu.vhd \
+        $top/build/inputs/Suska_Configware/68K10/wf68k10_bus_interface.vhd \
+        $top/build/inputs/Suska_Configware/68K10/wf68k10_control.vhd \
+        $top/build/inputs/Suska_Configware/68K10/wf68k10_data_registers.vhd \
+        $top/build/inputs/Suska_Configware/68K10/wf68k10_exception_handler.vhd \
+        $top/build/inputs/Suska_Configware/68K10/wf68k10_opcode_decoder.vhd \
+        $top/build/inputs/Suska_Configware/68K10/wf68k10_top.vhd \
     ]
 }
 

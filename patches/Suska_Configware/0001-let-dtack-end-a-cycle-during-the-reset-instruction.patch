@@ -1,0 +1,49 @@
+Let a DTACK end the bus cycle during the RESET instruction.
+
+WAITSTATES tests RESET_OUT_I before DTACK_In, so while the core is executing a
+RESET instruction it ignores an acknowledgement and holds the bus cycle open
+for the instruction's whole 124-clock assertion.  A real MC68010 does not: the
+RESET instruction runs no bus cycle of its own, and a prefetch already in
+flight terminates normally.
+
+The Sun-2 hits this at its very first instruction.  The VME boot PROM executes
+`reset' at 0xEF00CC, immediately before _hardreset's body:
+
+    ef00cc:  4e70            reset
+    ef00ce:  3e7c 0003       moveaw #3,%sp
+    ef00d2:  4e7b f001       movec %sp,%dfc
+
+The prefetch of 0xEF00D2 is in flight when RESET_OUT_I asserts.  The machine
+acknowledges it at its C_S4, DTACK_In duly latches low on the next falling
+edge -- and WAITSTATES stays 1 anyway, so AS is never negated.  Measured, both
+cycles side by side, the only difference being this signal:
+
+    ef00d0  DTACK_In=0 WAITSTATES=0 SLICE=010 RESET_OUT=0   -> cycle ends
+    ef00d2  DTACK_In=0 WAITSTATES=1 SLICE=001 RESET_OUT=1   -> cycle never ends
+
+Holding AS asserted leaves the Sun-2's bus timing chain counting, and at C_S8
+its protection check fires against a page map entry software has not written
+yet.  The CPU takes the bus error, pushes the frame onto a stack in the same
+unwritten map, faults again and double-faults.  On real hardware every map
+entry is zero at power-up, so this is deterministic: the machine halts before
+it writes its front panel, which is exactly how it presents on a board.
+
+Moving the test below the three legitimate terminations preserves what the
+comment says it is for -- with nothing acknowledging, the '1' is still returned
+before BUS_FLT is reached, so there is still no bus fault during RESET -- while
+letting a cycle that was acknowledged finish.
+
+--- a/68K10/wf68k10_bus_interface.vhd	2026-08-21 17:13:25.507455314 +0200
++++ b/68K10/wf68k10_bus_interface.vhd	2026-08-21 17:13:49.952174348 +0200
+@@ -556,10 +556,10 @@
+     OPCODE_TO_CORE <= OBUFFER;
+ 
+     WAITSTATES <= '0' when T_SLICE /= S3 else
+-                  '1' when RESET_OUT_I = '1' else -- No bus fault during RESET instruction.
+                   '0' when SYNCn = '0' else -- For synchronous bus cycles.
+                   '0' when DTACK_In = '0' else -- For asynchronous bus cycles.
+                   '0' when ADR_IN_P(19 downto 16) = x"F" and AVEC_In = '0' else -- Interrupt acknowledge space cycle.
++                  '1' when RESET_OUT_I = '1' else -- No bus fault during RESET instruction.
+                   '0' when BUS_FLT = '1' else -- In case of a bus error;
+                   '0' when RESET_CPU_I = '1' else '1'; -- A CPU reset terminates the current bus cycle.
+ 

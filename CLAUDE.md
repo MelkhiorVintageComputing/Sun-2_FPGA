@@ -441,8 +441,8 @@ serial port silent; `make -C sim screenshot MACHINE=multibus MB_ETHER=1 FB=1
 XY450=1` renders what it drew, which is the only artefact that shows the whole
 machine working at once.
 
-The VME 2/50 boots to the prompt with **11 bus errors** at `MEM_MIB=1`, all but
-one of them the same kind of probe — the frame buffer at `0xEC0000`, MBMEM at
+The VME 2/50 boots to the prompt with **10 bus errors** at `MEM_MIB=1`, all of
+them the same kind of probe — the frame buffer at `0xEC0000`, MBMEM at
 `0xF00000`, both Xylogics addresses, and two more, each probed twice. It runs a
 different PROM image (`rsun`), so it is an independent check on shared logic and
 worth running for that reason alone.
@@ -460,9 +460,18 @@ whatever `console.log` is already in the run directory, so it will happily pass
 against a log from days ago — that cost a wrong "VME is fine" here. Run
 `make -C sim xsim MACHINE=vme MEM_MIB=1` first, then `check`.
 
-The one protection violation left on either machine is `A=EF00D2 FC=6` at about
-6.8 us, before reset has finished, with the page map still reading `type x page
-xxx`. It is a power-on artefact, identical on both machines, and not yet chased.
+It was **11** until `patches/Suska_Configware/0001` landed, the extra one being
+the protection violation at `A=EF00D2 FC=6` at 6.8 us that this file carried
+for a long time as an unchased power-on artefact. It was not an artefact. The
+PROM executes `reset` at `0xEF00CC`, Suska's `WAITSTATES` tested `RESET_OUT_I`
+ahead of `DTACK_In` and so ignored the acknowledgement for the prefetch already
+in flight, `AS` stayed asserted into `C_S8`, and the protection check fired
+against a page map entry software had not written. The X in that map was the
+only thing making it survivable: with the maps powered up as zeros, as they are
+on a board, the exception's own stack push faults too and the machine
+double-faults before it writes its front panel. That is how it presented on
+hardware. The patch removes the error; every other one is unchanged, in the
+same order.
 
 Unit tests are expected to earn their keep: mutate the RTL, confirm the test
 fails, revert. `tb/tb_dvma.sv` was written this way and still missed a real
