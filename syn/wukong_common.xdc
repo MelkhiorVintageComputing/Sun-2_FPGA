@@ -57,6 +57,21 @@ set_property -dict {PACKAGE_PIN G7 IOSTANDARD LVCMOS33} [get_ports {diag_leds0[5
 set_property -dict {PACKAGE_PIN G6 IOSTANDARD LVCMOS33} [get_ports {diag_leds0[6]}]
 set_property -dict {PACKAGE_PIN G8 IOSTANDARD LVCMOS33} [get_ports {diag_leds0[7]}]
 
+# The second LED header, carrying sun2_fpga.v's todebug.  Pins from the old
+# working design's V1 constraints (Old/qmtech_wukong_V1_0.xdc, extra_leds0),
+# and shared between revisions on the same evidence as J10 above: both
+# schematics list this connector's balls in one identical run --
+#   ... J6 J5 L8 K8 J4 H4 K7 K6 G4 F4 G5 F5 E5 D5 D4 C4 B5 A5 B4 A4 ...
+# line for line in the V1 and V3 hardware PDFs.
+set_property -dict {PACKAGE_PIN J4 IOSTANDARD LVCMOS33} [get_ports {extra_leds0[0]}]
+set_property -dict {PACKAGE_PIN H4 IOSTANDARD LVCMOS33} [get_ports {extra_leds0[1]}]
+set_property -dict {PACKAGE_PIN G4 IOSTANDARD LVCMOS33} [get_ports {extra_leds0[2]}]
+set_property -dict {PACKAGE_PIN F4 IOSTANDARD LVCMOS33} [get_ports {extra_leds0[3]}]
+set_property -dict {PACKAGE_PIN B4 IOSTANDARD LVCMOS33} [get_ports {extra_leds0[4]}]
+set_property -dict {PACKAGE_PIN A4 IOSTANDARD LVCMOS33} [get_ports {extra_leds0[5]}]
+set_property -dict {PACKAGE_PIN B5 IOSTANDARD LVCMOS33} [get_ports {extra_leds0[6]}]
+set_property -dict {PACKAGE_PIN A5 IOSTANDARD LVCMOS33} [get_ports {extra_leds0[7]}]
+
 # ---------------------------------------------------------------------------
 # HDMI -- the 2/50's frame buffer, bank 35.  Identical on V1 and V3.
 # ---------------------------------------------------------------------------

@@ -45,6 +45,7 @@ module wukong_top #(
 
     output wire [1:0]  user_led,      // active low on this board
     output wire [7:0]  diag_leds0,    // Sun-2 front panel, on the PMOD
+    output wire [7:0]  extra_leds0,   // sun2_fpga's todebug, on the second header
     input  wire        user_btn,
 
     //
@@ -247,7 +248,18 @@ module wukong_top #(
    );
 
    // Wukong LEDs are active low: lit means running.
-   assign user_led[0] = sys_reset;
+   //
+   // From sys_reset_raw rather than sys_reset, deliberately.  sys_reset is the
+   // synchronised copy, and reset_sync releases it on a cpu_clk edge -- so if
+   // cpu_clk is not running (no clk50, an MMCM that never locked, a CPU_CLK_HZ
+   // the MMCM cannot make) the synchroniser never clocks and this LED stays at
+   // its reset value whatever the board is doing.  That is precisely the case
+   // where the LED is the only instrument there is, and it would be lying.
+   // sys_reset_raw is combinational from board_reset, mmcm_locked, the hold
+   // counter and init_calib_complete, so it goes out as soon as those clear
+   // and separates "the reset conditions never cleared" from "they cleared and
+   // the machine still is not running".
+   assign user_led[0] = sys_reset_raw;
    // Until DRAM is calibrated that is the interesting question; after it, the
    // Ethernet link is.  Active low, so 0 is lit.
    assign user_led[1] = phy_cfg_done ? ~phy_link : ~init_calib_complete;
@@ -260,6 +272,23 @@ module wukong_top #(
    wire [31:0] wb_dat_m2s, wb_dat_s2m;
    wire [3:0]  wb_sel;
    wire [7:0]  todebug;
+
+   // Whatever sun2_fpga.v is reporting on todebug, straight out to the second
+   // LED header.  Same convention as diag_leds0: driven as-is, so a 1 lights
+   // the LED on the module those headers take.
+   //
+   // Not inside `ifdef BOARD_MEM_FAST, where this first went by mistake --
+   // extra_leds0 is a real pin in every build, unlike the wb_*, cpu_clk_o and
+   // sys_reset_o ports that arm carries, and the bitstream is the only thing
+   // that has LEDs at all.  And here rather than up with the other LED
+   // assignments, because todebug is declared below them and xvlog rejects a
+   // wire used before its declaration.
+   //
+   // An LED cannot show a bus signal.  Anything moving at cpu_clk -- AS, DTACK,
+   // a decode match -- is a blur at best and dark at worst, so what belongs on
+   // todebug is levels and latched "this has happened at least once" flags.
+   // See the comment on todebug in rtl/sun2-common/sun2_fpga.v.
+   assign extra_leds0 = todebug;
    wire        en_boot;
 
    //

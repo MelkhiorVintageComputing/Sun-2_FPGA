@@ -168,9 +168,24 @@ does not divide the 1 GHz VCO exactly, so there is no silent rounding.
 Vivado is expected at `/opt/Xilinx/2025.2/Vivado`; override `XILINX_VIVADO`.
 Neither `make` in `sim/` nor `syn/` needs `settings64.sh` sourced.
 
-Nothing here has run on a board. `BRINGUP.md` holds the staged hardware
-procedure and the debugging tooling deferred until something misbehaves — the
-ILA among it. Add to that list rather than building diagnostics speculatively.
+**It runs on a board.** A MultiBus V3 build with `CPU=rd68011` and the Ethernet
+card auto-boots on a Wukong and puts correctly formed ND packets on a real
+network — nothing answers them yet, so the boot times out, but the whole chain
+from the CPU through the MMU, the boot PROM, the MultiBus Ethernet card, the
+82586, the MII path and the PHY is proved in hardware rather than in
+simulation. A minimalist VME build with Suska, on the same gateware, halts
+before it writes its front panel; that is the RESET-instruction stall
+`patches/Suska_Configware/0001` fixes, diagnosed from the LED panel and
+confirmed by simulation.
+
+What the board has taught, and how: the `todebug` LED ladder in `sun2_fpga.v`
+is the instrument, and it works — it predicted `seen_err` with function code 6
+for the VME failure before the bitstream was built, and the board returned
+exactly that. Every bit on it is a level or a latch, because a signal moving at
+`cpu_clk` is invisible on an LED and "too fast to see" cannot be told from
+"never happened". `BRINGUP.md` holds the staged procedure and the debugging
+tooling deferred until something misbehaves — the ILA among it. Add to that
+list rather than building diagnostics speculatively.
 
 ## Architecture
 

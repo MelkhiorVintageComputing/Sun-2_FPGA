@@ -476,6 +476,13 @@ module tb_sun2 #(
    always @(diag_leds)
      $display("[%t] diag_leds = %02x (boot=%0d)", $realtime, diag_leds, en_boot);
 
+   // todebug, which the board wires to its second LED header.  Every bit is a
+   // level or a latch, so a transition here is an event worth a line: bit 7 is
+   // the CPU-clock heartbeat, then reset, seen_as, seen_prom, seen_dtack,
+   // seen_timeout, seen_diag_wr and boot mode.  See sun2_fpga.v.
+   always @(todebug)
+     $display("[%t] todebug = %08b", $realtime, todebug);
+
    // Every clock edge over a window, for pinning down the timing of one bus
    // cycle: +cycle_from=<ns> +cycle_to=<ns>.  Both edges, because the 68000
    // bus runs on both -- the odd C_S are clocked on negedge and the even on

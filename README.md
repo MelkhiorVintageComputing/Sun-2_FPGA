@@ -809,8 +809,13 @@ the target part, so `generate_ip.tcl` substitutes it into a per-board copy of
 the one committed `.prj`, and `build/ip/<board>/` keeps them from overwriting
 each other.
 
-Nothing in this repository has run on a board yet. `BRINGUP.md` is the staged
-procedure for the first time it does — what to check, in what order, and what
+This runs on a board. A MultiBus build with the RD68011 core and the Ethernet
+card auto-boots on a Wukong V3 and transmits ND protocol packets that are
+visible on the network; nothing serves them yet, so the boot eventually times
+out. A minimalist VME build with the Suska core halts before it writes its
+front panel — the RESET-instruction stall in `patches/Suska_Configware/0001`.
+
+`BRINGUP.md` is the staged procedure — what to check, in what order, and what
 each failure looks like given that almost all of them are silent at the
 console. It is also where the deferred debugging tooling lives, the ILA
 included.

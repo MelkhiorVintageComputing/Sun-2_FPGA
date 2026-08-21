@@ -1244,17 +1244,93 @@ module sun2_fpga(input         cpu_clk,
    // machine runs but the diagnostic register write never decodes, which
    // makes the front panel lie rather than the machine be dead.
    //
-   reg 		       seen_mem_timeout;
+   // Initialised, not just unreset: a Xilinx register powers up at 0 anyway,
+   // but without this it is X in simulation and X + 1 is X for ever, so the
+   // heartbeat bit would read as unknown in every board sim -- and an X in a
+   // status bit is a bug this project has already paid for twice.
+   // Initialised, not just unreset: a Xilinx register powers up at 0 anyway,
+   // but without this it is X in simulation and X + 1 is X for ever, so the
+   // heartbeat bit would read as unknown in every board sim -- and an X in a
+   // status bit is a bug this project has already paid for twice.
+   reg [23:0] 	       hb_ctr = 24'h0;
+   reg 		       seen_err, seen_diag_wr, seen_stall;
+   reg [2:0] 	       fc_err;
+   reg [9:0] 	       stall_ctr;
+
    always @(posedge cpu_clk)
      begin
-	if (sys_reset) seen_mem_timeout <= 1'b0;
-	else if (MATCH_MEM & TIMEOUT) seen_mem_timeout <= 1'b1;
+	// Free-running, and deliberately outside the reset: its job is to say
+	// the clock is alive even when the reset never releases.
+	hb_ctr <= hb_ctr + 24'd1;
+
+	if (sys_reset)
+	  begin
+	     seen_err     <= 1'b0;
+	     fc_err       <= 3'h0;
+	     seen_diag_wr <= 1'b0;
+	     seen_stall   <= 1'b0;
+	     stall_ctr    <= 10'h0;
+	  end
+	else
+	  begin
+	     // The first bus error, and the function code of the cycle that
+	     // caused it.  Qualified with ~P_AS_n because PROTERR is
+	     // combinational: outside a cycle it re-evaluates against an
+	     // address and function code that are not a bus cycle, which is
+	     // what produced 23,607 phantom protection violations once.
+	     if (~P_AS_n & ERR)
+	       begin
+		  seen_err <= 1'b1;
+		  if (~seen_err) fc_err <= P_FC;   // the *first* one only
+	       end
+
+	     // A cycle that never ends.  Main memory is exempt from the
+	     // timeout above -- `~MATCH_MEM' in the term that sets TIMEOUT --
+	     // so a memory access that never gets DTACK holds AS low for ever
+	     // with no bus error and no other trace: the CPU stops mid-cycle
+	     // while the clock keeps running, which from outside is
+	     // indistinguishable from any other kind of stopped.  The longest
+	     // legal cycle ends at C_S24, so 1024 clocks cannot be one.
+	     if (P_AS_n)         stall_ctr <= 10'h0;
+	     else if (~&stall_ctr) stall_ctr <= stall_ctr + 10'd1;
+	     if (&stall_ctr)     seen_stall <= 1'b1;
+
+	     if (WR & MATCH_DIAG & C_S4) seen_diag_wr <= 1'b1;
+	  end
      end
-   
-   //assign todebug = { P_FC, BOOT_n,
-   //		      ~P_AS_n, ~P_RW_n, ~P_DTACK_n, TIMEOUT };
-   assign todebug = { ~P_AS_n, ~P_RW_n, ~P_DTACK_n, TIMEOUT,
-		      1'b0, seen_mem_timeout, L_M_MAP_SEEN, MATCH_MEM };
-   
-   
+
+   //
+   // todebug goes to the second LED header on the board
+   // (boards/Wukong/wukong_top.sv drives extra_leds0 straight from it), so
+   // every bit here has to be a level that stays put or a latched "this has
+   // happened at least once".  A signal that moves at cpu_clk is a blur at
+   // best on an LED, and "too fast to see" cannot be told apart from "never
+   // happened", which is the only question worth asking when the machine has
+   // stopped.
+   //
+   // Bit 7 not blinking: no CPU clock, and nothing else here means anything.
+   // Blinking with bit 6 lit: held in reset, which on a board is usually
+   // init_calib_complete, folded into sys_reset_raw by wukong_top.
+   //
+   // Then the two failure bits, and they are exclusive in practice.  Bit 5
+   // says a cycle ended in a bus error, and bits 4..2 carry the function code
+   // of the *first* one: 3 is control space -- the context register, segment
+   // map, bus error register and enable register that _hardreset writes before
+   // it touches anything else -- 5 is supervisor data, which includes the
+   // 68010's reset vector fetch, and 6 is an instruction fetch.  Bit 0 says a
+   // cycle simply never ended, which is what a memory access that never gets
+   // DTACK does, since memory is exempt from the timeout by design.
+   //
+   // Bit 1 is the milestone the other bits exist to explain: the boot PROM's
+   // first write to the diagnostic register, `movsb d0,LEDOFF' in _hardreset
+   // (rsun/mon/kernel/trap.s:70).  Until that lands the Sun-2 front panel
+   // stays at its reset value whatever the machine is doing.
+   //
+   assign todebug = { hb_ctr[23],   // 7    cpu_clk runs at all (~0.75 Hz at 12.5 MHz)
+		      ~P_RESET_n,   // 6    the machine is still in reset
+		      seen_err,     // 5    a cycle ended in a bus error
+		      fc_err,       // 4..2 function code of the first such cycle
+		      seen_diag_wr, // 1    the PROM wrote the diagnostic register
+		      seen_stall }; // 0    a cycle never ended: no DTACK, no timeout
+
 endmodule // sun2_fpga

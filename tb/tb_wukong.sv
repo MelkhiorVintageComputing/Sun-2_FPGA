@@ -42,6 +42,7 @@ module tb_wukong #(
    wire        serial_rx;         // driven by uart_console below
    wire [1:0]  user_led;
    wire [7:0]  diag_leds0;
+   wire [7:0]  extra_leds0;
 
    // ------------------------------------------------------------------
    // DUT and its memory
@@ -93,7 +94,8 @@ module tb_wukong #(
        .phy_mdio       (phy_mdio),
 
        .serial_tx (serial_tx), .serial_rx (serial_rx),
-       .user_led (user_led), .diag_leds0 (diag_leds0), .user_btn (1'b1),
+       .user_led (user_led), .diag_leds0 (diag_leds0),
+       .extra_leds0 (extra_leds0), .user_btn (1'b1),
 
 `ifdef SUN2_XY450
        // No SD card model here -- see BRINGUP.md.  MISO idles high, which is
@@ -142,7 +144,8 @@ module tb_wukong #(
        .phy_mdio       (phy_mdio),
 
        .serial_tx (serial_tx), .serial_rx (serial_rx),
-       .user_led (user_led), .diag_leds0 (diag_leds0), .user_btn (1'b1),
+       .user_led (user_led), .diag_leds0 (diag_leds0),
+       .extra_leds0 (extra_leds0), .user_btn (1'b1),
 
 `ifdef SUN2_XY450
        // No SD card model here -- see BRINGUP.md.  MISO idles high, which is
@@ -216,6 +219,10 @@ module tb_wukong #(
    // ------------------------------------------------------------------
    always @(diag_leds0)
      $display("[%t] diag_leds = %02x", $realtime, diag_leds0);
+
+   // todebug, as it reaches the second LED header on the board.
+   always @(extra_leds0)
+     $display("[%t] extra_leds = %08b", $realtime, extra_leds0);
 
    always @(user_led)
      $display("[%t] user_led = %b  (led[0] low = out of reset, led[1] low = DRAM calibrated)",
