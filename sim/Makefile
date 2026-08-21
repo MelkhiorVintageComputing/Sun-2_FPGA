@@ -94,7 +94,13 @@ endif
 # and is the setting to use before believing anything about DVMA bandwidth.
 MEM_LATENCY ?= 0
 
-TIMEOUT_MS ?= 6000
+# Simulated milliseconds before giving up.  The VME machine needs more than the
+# MultiBus one and always did: with no disk it tries the network, and `nd' gives
+# up only after three retries -- which the PROM times in NMI ticks, so once the
+# Am9513 was fixed and the NMI ran at its intended 40 Hz instead of 98.9, the
+# prompt moved from inside 6 s out to 8.3 s.  STOP_ON ends the run at the
+# prompt anyway, so the larger number costs nothing when the boot is healthy.
+TIMEOUT_MS ?= $(if $(filter vme,$(MACHINE)),12000,6000)
 STOP_ON    ?= ">"
 
 # The CPU clock, for both the board-level and the core-level simulation.

@@ -444,6 +444,14 @@ one of them the same kind of probe — the frame buffer at `0xEC0000`, MBMEM at
 different PROM image (`rsun`), so it is an independent check on shared logic and
 worth running for that reason alone.
 
+It reaches the prompt at **8.3 s** of simulated time, not the under-6 s it used
+to take, and that is correct rather than a regression: with no disk it tries the
+network, and `nd` gives up only after three retries, which the PROM times in NMI
+ticks — so fixing the Am9513 write strobe, and with it the NMI's rate, stretched
+the wait. `TIMEOUT_MS` therefore defaults to 12000 for `MACHINE=vme` and 6000
+otherwise; `STOP_ON` ends the run at the prompt, so the larger number costs
+nothing.
+
 **`make -C sim check` does not boot anything.** It is `check_console.sh` against
 whatever `console.log` is already in the run directory, so it will happily pass
 against a log from days ago — that cost a wrong "VME is fine" here. Run
