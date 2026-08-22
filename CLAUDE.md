@@ -665,8 +665,9 @@ IOPB came back with the driver's own zeroes in it, reading as success.
   seconds later, and `trap.c` reads `BE_TIMEOUT` as "do not try to recover".
   That is the whole SunOS panic creating pid 1. A read re-arms the latch now,
   which keeps the documented behaviour for a handler that faults on its way to
-  reading, and a new error outranks both so nothing is lost. The MultiBus
-  fingerprint, its sequence and the console are unchanged on both cores.
+  reading, and a new error outranks both so nothing is lost. All four boots
+  are unchanged: MultiBus 22 and 274 on both cores with a byte-identical error
+  sequence, VME 10 and 312 on Suska, 11 and 319 on RD68011.
 
   How it was found is the point: the ILA caught that cycle on the board with
   `PROTERR` set and `TIMEOUT` clear, which proved the MMU right and moved the

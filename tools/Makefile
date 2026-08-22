@@ -182,4 +182,17 @@ $(DISKDIR)/mmuprobe.bin: mmuprobe/mmuprobe.c mmuprobe/mmuprobe.ld
 
 mmuprobe: $(DISKDIR)/mmuprobe.bin
 
-.PHONY: xychain beprobe clkprobe dogprobe mmuprobe
+$(DISKDIR)/usrprobe.bin: usrprobe/usrprobe.c usrprobe/usrprobe.ld
+	@command -v $(M68K)-gcc >/dev/null || { \
+		echo "$(M68K)-gcc not found: the on-machine exerciser needs an m68k"; \
+		echo "cross-compiler.  On Debian/Ubuntu: apt install gcc-m68k-linux-gnu"; \
+		exit 1; }
+	mkdir -p $(DISKDIR)
+	$(M68K)-gcc $(XYCFLAGS) -T usrprobe/usrprobe.ld -o $(DISKDIR)/usrprobe.elf \
+		usrprobe/usrprobe.c 2>&1 | grep -vE 'RWX|build-id' || true
+	$(M68K)-objcopy -O binary $(DISKDIR)/usrprobe.elf $@
+	@echo "usrprobe: $$(stat -c%s $@) bytes of 7680"
+
+usrprobe: $(DISKDIR)/usrprobe.bin
+
+.PHONY: xychain beprobe clkprobe dogprobe mmuprobe usrprobe

@@ -1,6 +1,12 @@
 # Arm the MMU ILA, wait for it to trigger, and write what it captured.
 #
-#   vivado -mode batch -source syn/ila_capture.tcl -tclargs OUTDIR MODE [LTX] [URL]
+#   vivado -mode batch -source syn/ila_capture.tcl -tclargs OUTDIR MODE [LTX] [URL] [MINUTES] [BIT]
+#
+# Give BIT to program the board and arm in the same session.  That matters
+# when the thing being caught happens soon after the machine starts: arming
+# from a second Vivado costs the best part of a minute of startup, and a
+# failure that arrives a minute after the bitstream loads will already have
+# happened by then.  Here the gap is a second.
 #
 # MODE picks the trigger:
 #   err   any bus error at all -- which errors happen, and in what order
@@ -8,6 +14,18 @@
 #         so this is the kernel's own access and nothing else
 #   as    any bus cycle, no error needed -- a sanity capture, and the way to
 #         see what the machine is doing when it is not failing
+#   reset the 68010 fetching its reset vector at address 0, which happens only
+#         out of reset.  The point is not the trigger but the 2048 samples of
+#         history in front of it: after a double bus fault the CPU halts and
+#         the board resets it, so what killed the machine is sitting in the
+#         pre-trigger half of the buffer.  A double fault cannot be described
+#         to a basic trigger unit -- "two errors with no good cycle between"
+#         needs the advanced one -- but its consequence can.
+#   supw  a bus error on a supervisor data write.  A double bus fault -- what
+#         the watchdog reset means -- is a bus error taken while the CPU is
+#         stacking the frame for an earlier exception, and that stack push is
+#         a supervisor data write.  So this catches the fatal one, and the
+#         pre-trigger half of the buffer holds what led to it
 #
 # Writes OUTDIR/ila.csv (every sample, every field) and prints a decoded window
 # round the trigger, because a capture nobody can read is not evidence.
@@ -26,6 +44,12 @@ set ltx    ""
 set url    localhost:3121
 if {[llength $argv] > 2 && [lindex $argv 2] ne ""} { set ltx [file normalize [lindex $argv 2]] }
 if {[llength $argv] > 3 && [lindex $argv 3] ne ""} { set url [lindex $argv 3] }
+# How long to wait for the trigger.  A failure that only shows once init is
+# running is minutes of boot away, and the default five is not enough.
+set waitmin 5
+if {[llength $argv] > 4 && [lindex $argv 4] ne ""} { set waitmin [lindex $argv 4] }
+set bit ""
+if {[llength $argv] > 5 && [lindex $argv 5] ne ""} { set bit [file normalize [lindex $argv 5]] }
 file mkdir $outdir
 
 open_hw_manager
@@ -47,6 +71,16 @@ if {$ltx ne ""} {
     set_property FULL_PROBES.FILE $ltx $dev
 }
 refresh_hw_device $dev
+
+# Program first if asked, so the machine starts with the ILA armed a moment
+# later rather than a Vivado startup later.
+if {$bit ne ""} {
+    if {![file exists $bit]} { puts "ERROR: no such bitstream: $bit"; exit 1 }
+    set_property PROGRAM.FILE $bit $dev
+    puts "== programming $dev with $bit =="
+    program_hw_devices $dev
+    refresh_hw_device $dev
+}
 
 set ila [lindex [get_hw_ilas -quiet] 0]
 if {$ila eq ""} {
@@ -91,10 +125,16 @@ foreach k [array names P] {
 # hand = {AS RW UDS LDS DTACK BERR}, all active low, so AS asserted is bit 5 = 0
 switch -- $mode {
     err  { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd) }
+    reset { set_property TRIGGER_COMPARE_VALUE eq3'b110 $P(fc)
+            set_property TRIGGER_COMPARE_VALUE eq23'b[string repeat 0 23] $P(addr) }
+    supw { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
+           set_property TRIGGER_COMPARE_VALUE eq3'b101   $P(fc)
+           # hand = {AS RW UDS LDS DTACK BERR}, active low, so RW low is a write
+           set_property TRIGGER_COMPARE_VALUE eq6'bX0XXXX $P(hand) }
     fc1  { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
            set_property TRIGGER_COMPARE_VALUE eq3'b001   $P(fc) }
     as   { set_property TRIGGER_COMPARE_VALUE eq6'b0XXXXX $P(hand) }
-    default { puts "ERROR: MODE must be err, fc1 or as, not '$mode'"; exit 1 }
+    default { puts "ERROR: MODE must be err, fc1, as, supw or reset, not '$mode'"; exit 1 }
 }
 
 # Capture control: keep bus cycles, drop the idle clocks between them.  4096
@@ -104,7 +144,7 @@ set_property CAPTURE_COMPARE_VALUE eq6'b0XXXXX $P(hand)
 
 puts "== armed: mode $mode, depth $depth, trigger at [expr {$depth / 2}] =="
 run_hw_ila $ila
-wait_on_hw_ila -timeout 5 $ila
+wait_on_hw_ila -timeout $waitmin $ila
 # STATUS.CORE_STATUS, not CORE_STATUS: the bare name is not a property of an
 # hw_ila at all and asking for it is an error rather than an empty answer.
 #
@@ -113,7 +153,7 @@ wait_on_hw_ila -timeout 5 $ila
 # still sitting in WAIT-TRIGGER or PRE-TRIGGER is the real "nothing matched".
 set st [get_property STATUS.CORE_STATUS $ila]
 if {$st ne "FULL"} {
-    puts "== did not trigger in 5 minutes; core status $st =="
+    puts "== did not trigger in $waitmin minutes; core status $st =="
     puts "   Nothing matched.  With mode=err that means no bus error at all --"
     puts "   check the machine is running, then try mode=as."
     exit 1

@@ -1,0 +1,107 @@
+--- a/src/ie_ru.sv
++++ b/src/ie_ru.sv
+@@ -101,6 +101,7 @@
+     RU_READY,          // armed, waiting for a frame
+     RU_POP,
+     RU_FLUSH,          // push the part filled word out before moving on
++    RU_FULL_PEEK,      // full -- but is the frame over too?  look before closing
+     RU_CLOSE_FULL,     // this buffer is full, close it and move on
+     RU_RD_NEXT_RBD,
+     RU_DROP,           // swallow the rest of a frame we are not keeping
+@@ -316,7 +317,8 @@
+   // speculatively: the read enable and the state machine use the same term.
+   wire pop_stall = wp_valid && (last_lane || hdr_phase);
+   wire pop_now   = (state == RU_POP) && !rx_empty_i && !pop_stall;
+-  assign rx_rd_o = pop_now || ((state == RU_DROP) && !rx_empty_i);
++  assign rx_rd_o = pop_now || ((state == RU_DROP) && !rx_empty_i)
++                           || ((state == RU_FULL_PEEK) && !rx_empty_i && word_end);
+ 
+   always_comb begin
+     if (state == RU_NO_RESOURCE)                        rus_o = 3'd2;  // no resource
+@@ -537,7 +539,36 @@
+                 acc_sel  <= 4'h0;
+                 acc      <= 32'h0;
+               end else begin
+-                state <= flush_to_end ? RU_FIN_CLOSE_RBD : RU_CLOSE_FULL;
++                state <= flush_to_end ? RU_FIN_CLOSE_RBD : RU_FULL_PEEK;
++              end
++            end
++
++          // The buffer is full.  That is not yet enough to know whether it is
++          // the last one: a frame whose length is exactly the buffer size ends
++          // on the same byte that fills it, and then this buffer is the end of
++          // the frame and must be closed with EOF.  Closing it as merely full
++          // costs an empty buffer and, worse, tells the driver the frame goes
++          // on.  A driver that sizes its buffers at exactly one maximum frame
++          // -- which is what SunOS's IE_BUFSZ is -- reads that as a frame too
++          // long to hold, prints "giant packet" and drops it, so every
++          // full-length frame is lost while everything shorter arrives.
++          //
++          // The receive FIFO shows its head without popping, so the answer is
++          // one look: an end-of-frame marker means close with EOF, anything
++          // else means the frame really does continue and the next buffer is
++          // needed.  The byte is left in the FIFO either way and is picked up
++          // once the next descriptor is open.
++          RU_FULL_PEEK:
++            if (!rx_empty_i) begin
++              if (word_end) begin
++                err_bad     <= word_err[2];
++                err_dribble <= word_err[1];
++                err_overrun <= word_err[0];
++                err_short   <= frame_is_short;
++                in_frame    <= 1'b0;
++                state       <= RU_FIN_CLOSE_RBD;
++              end else begin
++                state <= RU_CLOSE_FULL;
+               end
+             end
+ 
+--- a/tb/cpp/tests/test_system.cpp
++++ b/tb/cpp/tests/test_system.cpp
+@@ -311,6 +311,46 @@
+   CHECK_EQ(rx[0].data, f.payload);
+ }
+ 
++TEST(sys_receive_frame_that_exactly_fills_a_buffer) {
++  // A driver sizes its receive buffers for one maximum frame and no more --
++  // SunOS uses IE_BUFSZ, which is ETHERMTU or the header plus it depending on
++  // where the header lands -- so a full-length frame ends on the very last
++  // byte of the buffer.  That buffer is then both full and the end of the
++  // frame, and EOF is what tells the driver which.  sys/sunif/if_ie.c reads a
++  // buffer closed without EOF as "length > IE_BUFSZ", prints "giant packet"
++  // and drops the frame; NFS, whose replies are all full-length, then stalls
++  // while everything smaller works.
++  env.img().build_init_structures();
++  CHECK_DRV(env.drv().init());
++  CHECK_DRV(env.drv().ia_setup(env.local_mac()));
++  CHECK_DRV(env.drv().configure(ie::Config()));
++
++  // The header lands in the buffer, not the descriptor, so an exact fit is
++  // the whole frame: fourteen bytes of header and the payload behind it.
++  const size_t payload = 512;
++  const size_t frame   = 14 + payload;
++  env.img().build_rfa(2, 4, frame);          // exactly one frame per buffer
++  CHECK_DRV(env.drv().ru_start());
++
++  EthFrame f(env.local_mac(), env.peer_mac(), 0x0800, random_payload(payload, 37));
++  env.phy().inject(f);
++  CHECK_DRV(env.drv().wait_rx(1));
++
++  std::vector<ie::RxFrame> rx = env.img().collect_rx();
++  CHECK_EQ(rx.size(), size_t(1));
++  CHECK_EQ(rx[0].data, f.payload);
++
++  const uint16_t rbd = env.mem().rd16(env.img().addr_of(rx[0].rfd_off) + 6);
++  const uint16_t cnt = env.mem().rd16(env.img().addr_of(rbd) + 0);
++  CHECK_MSG(cnt & ie::RBD_EOF,
++            "the buffer was closed without EOF, which a driver reads as a giant packet");
++  CHECK_EQ(size_t(cnt & ie::RBD_COUNT_MASK), frame);
++  CHECK_MSG(env.mem().rd16(env.img().addr_of(rbd) + 2) == ie::NULL_PTR ||
++            !(env.mem().rd16(env.img().addr_of(env.mem().rd16(env.img().addr_of(rbd) + 2)) + 0)
++              & ie::RBD_F),
++            "a second buffer was consumed for a frame that fitted in one");
++}
++
+ TEST(sys_receive_back_to_back) {
+   bring_up(env);
+ 

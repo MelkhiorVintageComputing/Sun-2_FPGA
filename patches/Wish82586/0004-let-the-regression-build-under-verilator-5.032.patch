@@ -1,0 +1,11 @@
+--- a/Makefile
++++ b/Makefile
+@@ -77,7 +77,7 @@
+ T     ?=
+ FLAGS ?=
+ 
+-VFLAGS := --cc --exe --build --trace -Wall \
++VFLAGS := --cc --exe --build --trace -Wall -Wno-SYNCASYNCNET \
+           --top-module $(TOP) \
+           -GPHY_DATA_W=$(PHY_W) \
+           -Mdir $(OBJDIR) \
