@@ -476,6 +476,42 @@ module tb_sun2 #(
    always @(diag_leds)
      $display("[%t] diag_leds = %02x (boot=%0d)", $realtime, diag_leds, en_boot);
 
+   // ---- X on a CPU read ---------------------------------------------------
+   //
+   // Any read that completes with an X anywhere in P_DOUT, reported once per
+   // cycle with the address and the decode that answered it.
+   //
+   // This exists because two of this project's bugs were an X reaching a
+   // status register and both were found by accident: the console SCC's
+   // ctsa_n/dcda_n/synca_n left unconnected, which put X into RR0 bits 5..3
+   // and produced the spurious `Abort', and the page map read as X at
+   // power-up, which hid a fatal protection violation for the life of the
+   // project.  An X in a status bit can reach any conditional derived from
+   // it, whatever the mask says -- see the trap in CLAUDE.md.  This finds
+   // them on purpose.
+   //
+   // Gated on sys_reset: before the machine is released, plenty is legitimately
+   // unknown.  The decode field is
+   // {MATCH_SERIAL, MATCH_KBM, MATCH_TIMER, MATCH_MEM, MATCH_PROM_BOOT}.
+   //
+   int   n_xread = 0;
+   logic xread_seen = 1'b0;
+   always @(posedge dut.C100) begin
+      if (dut.P_AS_n || sys_reset) xread_seen <= 1'b0;
+      else if (!xread_seen && !dut.P_DTACK_n && dut.P_RW_n && !dut.dvma_active
+               && (^dut.P_DOUT === 1'bx)) begin
+         xread_seen <= 1'b1;
+         n_xread = n_xread + 1;
+         if (n_xread <= 20)
+           $display("[%t] X-READ %06x FC=%0d data=%16b decode=%5b%s",
+                    $realtime, {dut.P_A, 1'b0}, dut.P_FC, dut.P_DOUT,
+                    {dut.sun2.MATCH_SERIAL, dut.sun2.MATCH_KBM,
+                     dut.sun2.MATCH_TIMER, dut.sun2.MATCH_MEM,
+                     dut.sun2.MATCH_PROM_BOOT},
+                    n_xread == 20 ? "   (no further X reads reported)" : "");
+      end
+   end
+
    // todebug, which the board wires to its second LED header.  Every bit is a
    // level or a latch, so a transition here is an event worth a line: bit 7 is
    // the CPU-clock heartbeat, then reset, seen_as, seen_prom, seen_dtack,
@@ -938,6 +974,7 @@ module tb_sun2 #(
       flush_repeats();
       if (n_berr > 0) $display("%0d bus errors in total", n_berr);
       if (n_dvma > 0) $display("%0d DVMA cycles in total", n_dvma);
+      if (n_xread > 0) $display("%0d CPU reads returned X", n_xread);
       console_mon.report();
       ram.report();
       iack_report();
