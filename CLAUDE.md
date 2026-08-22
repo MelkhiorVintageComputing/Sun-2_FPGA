@@ -138,6 +138,20 @@ Anything cheap enough to repeat -- a boot block like `tools/beprobe` or
 `CPU=suska` *and* `CPU=rd68011`, and both numbers are reported. Where they
 disagree, that disagreement is the finding and neither number is thrown away.
 
+One disagreement is known and stable, so meeting it again is not a regression:
+the **VME machine on RD68011 takes 11 bus errors and 319 console characters**
+where Suska takes 10 and 312. The extra one is a protection violation on an
+instruction fetch at `A=a04370` — a wild PC — after which the monitor reports
+it and drops to the prompt. It reproduces across two core versions and both
+with and without the reset rework, and it is not a spurious interrupt: it
+survived `a44b71a`, which fixed a level-seven edge outliving its request and a
+level 0 being acknowledged. Unchased.
+
+That same commit moved RD68011's level-7 acknowledgements down by a factor of
+about 2.5 — 37 to 14 over an identical `xychain` run, with level 2 unchanged at
+6 — so **RD68011 level-7 counts recorded before it are inflated** and must not
+be compared with ones taken after. Level 5 is unaffected.
+
 What has not changed is the regression baseline: the MultiBus fingerprint of
 22 bus errors and a byte-identical console is measured with Suska, because
 that is what every recorded number was taken against, and a full boot is too
