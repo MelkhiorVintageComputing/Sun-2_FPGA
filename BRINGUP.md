@@ -122,27 +122,123 @@ other end of the cable and the frames should be there.
   bit 8 of the status register.
 * **No `?` at all:** it never got as far as transmitting.
 
+## The ILA
+
+There is one, on the MMU. `ILA=1` on a bitstream build fits an integrated logic
+analyser sampling `dbg_bus` — the wide debug bus `rtl/sun2-common/sun2_fpga.v`
+exports, whose field map is the comment beside its assignment there.
+
+```sh
+make -C syn ip-ila BOARD=v1                                  # once per board
+make -C syn bitstream ILA=1 BOARD=v1 MACHINE=multibus MB_ETHER=1 \
+     CPU=rd68011 CPU_HZ=20000000
+make -C syn hw       ILA=1 BOARD=v1 MACHINE=multibus MB_ETHER=1 \
+     CPU=rd68011 CPU_HZ=20000000
+```
+
+`make hw` programs the board and leaves the Hardware Manager open on it; `make
+program` does the same and exits. Both take the same knobs as `bitstream`,
+because that is how they find the artefact — there is nowhere else to say which
+build is meant. `HW_URL=host:3121` for a board on another machine; the default
+is a local `hw_server`.
+
+An ILA build gets its own output directory (`...-ila`) and writes a `.ltx`
+beside the bitstream. Without that probe file the Hardware Manager finds the
+debug hub and then has no names for anything on it, so it is half the
+instrument, not an extra.
+
+**What it was built for.** SunOS 4.0.3 netboots and panics creating process 1:
+the kernel touches the last byte of pid 1's user stack expecting the fault that
+grows it, and the machine reports that fault as a bus *timeout* rather than a
+*protection violation*. `tools/mmuprobe` asks the same question seven ways from
+a boot block and gets the right answer every time on both cores, so what SunOS
+brings is history a boot block cannot synthesise — and reproducing that in
+simulation is ten hours per attempt against ten minutes per bitstream. That
+ratio is the whole argument for the ILA.
+
+The diagnostic is one comparison: `ps_pmap2devices` sampled in the `C_S8 &
+~P_AS_n` window against what an FC=3 read of the page map returns for the same
+address afterwards. Equal means the lookup is sound and the fault is elsewhere;
+different is the bug, and `ia_smap2pmap` in the same window says which of the
+two map stages produced it.
+
+**Triggering.** The probes are split along field boundaries so the basic
+trigger unit is enough — one comparator per probe, ANDed:
+
+* wide first: `probe7[1] == 1` (`ERR`), to see which bus errors happen and in
+  what order;
+* then `probe7[1] == 1 && probe1 == 1` — every PROM device probe is FC 5, so
+  user data is a clean discriminator for the kernel's access;
+* trigger position mid-buffer, because a stale map index would show in the
+  cycles *before* the failing one.
+
+Capture control is enabled: qualify on `~P_AS_n` (`probe2[5] == 0`) and 4096
+samples cover bus cycles rather than the idle clocks between them.
+
+**What it costs, measured on the V1 build it was made for** (MultiBus,
+MB_ETHER, RD68011, 20 MHz): **+1883 LUTs** (21217 to 23100, 33% to 36%),
+**+3224 flip-flops**, and **+8.5 BRAM tiles** (85.5 to 94 of 135, 63% to 70%).
+Timing still passes -- WNS 1.281 ns unchanged, WHS **0.057 ns** against 0.071
+without it. Hold was the risk and it survived, but 14 ps is what an ILA costs
+here, so re-read the timing report rather than assuming the next one will.
+
+**Two things bite when building one, and neither is about the ILA.**
+
+`tolog` is an empty module -- the VCD hook round TxDA -- and an empty module is
+a **black box**, which `opt_design` refuses to run on. Every build got away
+with it because synthesis pruned the instance first; marking debug nets keeps
+hierarchy that would otherwise have been optimised through, and the first ILA
+build died in a module with nothing to do with the ILA. It is behind
+`SUN2_SIM` now, which both simulation flows define.
+
+And the **debug hub will not accept a 20 MHz clock**:
+`C_CLK_INPUT_FREQ_HZ` takes 25 MHz to 650 MHz and rejects anything slower
+outright, so a hub on `cpu_clk` cannot be told what it is clocked at. It is on
+`clk50_g` instead -- a hub and its cores are allowed to be in different
+domains, so the ILA goes on sampling `cpu_clk` -- and `implement_debug_core`
+has to run after that change or `place_design` stops with "debug core
+instances ... needs to be (re)generated".
+
+**JTAG.** `syn/program.tcl` asks the cable what rates it has and takes the
+fastest within the hub's limit; the Wukong's offers 750 kHz to 12 MHz and it
+picks 12. Setting a rate a cable does not have is a hard error, not a
+rounding, which is why it is asked rather than assumed.
+
+**It is off unless asked for.** The whole bus, the port included, is behind
+`SUN2_ILA`, so an ordinary bitstream is byte-identical to one built before any
+of this existed. That is measured, not assumed, and it is why the define
+reaches as far as `sun2_fpga.v`: with only the ILA instantiation conditional
+and the port always present, the design gained 8 LUTs and lost 17 ps of hold
+margin -- on a build whose worst hold slack is 71 ps. Simulation defines
+`SUN2_ILA` unconditionally, where the bus is free.
+
+**Two things to expect.** The core has two input pipeline stages, so everything
+it shows is two clocks late — uniformly, so relative timing is unaffected. And
+fitting it moves placement: re-read the timing report rather than assuming the
+last clean run still holds, and if the failure stops reproducing with the ILA
+in, that is evidence about the mechanism and belongs in the record rather than
+being worked around.
+
 ## Deferred until something misbehaves
 
-### The ILA
+### An ILA on the Ethernet side
 
-An ILA on the MII pins, MDC/MDIO, CRS/COL and the DVMA handshake (`P_BR_n`,
-`P_BG_n`, `dvma_active`, `P_DTACK_n`, `P_BERR_n`). It was in the original plan
-as the primary diagnostic, and it is worth building the moment a step above
-fails in a way the console cannot explain.
+The MII pins, MDC/MDIO, CRS/COL and the DVMA handshake (`P_BR_n`, `P_BG_n`,
+`dvma_active`, `P_DTACK_n`, `P_BERR_n`) — a second group, not an extension of
+the MMU one.
 
-It is *not* the first thing to reach for any more. The status register in
-device page 0xFE7 answers most of what the ILA was for and answers it from the
-monitor prompt, without a JTAG cable, a Vivado session or a rebuild. What the
+It is *not* the first thing to reach for. The status register in
+device page 0xFE7 answers most of what it was for and answers it from the
+monitor prompt, without a JTAG cable, a Vivado session or a rebuild. What an
 ILA adds that the register cannot is the *timing*: whether MDC is actually
 toggling at 125 kHz, whether TXCLK is 2.5 MHz, and what the DVMA arbitration
 handshake looks like cycle by cycle.
 
-Practical notes for when it is built: it needs a generated `ila` IP core, so it
-touches `syn/generate_ip.tcl` and `syn/build.tcl`; sample it on `cpu_clk` for
-the DVMA group and on `mii_rx_clk` for the receive group rather than trying to
-put both in one core; and remember that adding it changes placement, so re-read
-the timing report rather than assuming the previous clean run still holds.
+The scaffolding now exists — `syn/generate_ip.tcl` generates the core,
+`syn/build.tcl` reads and synthesises it, `syn/program.tcl` gets it onto the
+board — so this is a second `create_ip` and a second instantiation. Sample it
+on `mii_rx_clk` rather than trying to put the receive group and the `cpu_clk`
+group in one core.
 
 ### The frame buffer, if it is built
 

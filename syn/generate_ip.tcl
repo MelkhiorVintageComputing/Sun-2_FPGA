@@ -1,12 +1,20 @@
 # Generate the Xilinx IP the board build needs.
 #
-#   vivado -mode batch -source syn/generate_ip.tcl [-tclargs BOARD]
+#   vivado -mode batch -source syn/generate_ip.tcl [-tclargs BOARD [WHICH]]
 #
 # BOARD is v1 (default) or v3; see syn/boards.tcl.
+# WHICH is all (default), mig, or ila -- MIG takes minutes to generate and the
+# ILA seconds, so they are separable.
 #
-# Only one core: the MIG 7 Series DDR3 controller, configured from
-# syn/mig/sun2_mig.prj.  The .prj is the source of truth and is committed;
-# everything MIG emits from it lands in build/ip/<board> and is not.
+# Two cores.  The MIG 7 Series DDR3 controller, configured from
+# syn/mig/sun2_mig.prj, is in every build; the ILA is the debug instrument,
+# fitted only by ILA=1 and sampling the bus described in
+# rtl/sun2-common/sun2_fpga.v's dbg_bus.
+#
+# MIG's .prj is the source of truth for it and is committed; everything MIG
+# emits from it lands in build/ip/<board> and is not.  The ILA has no .prj --
+# an ILA is configured entirely through CONFIG.* properties, so this file is
+# its source of truth.
 #
 # The two Wukong revisions want the same DDR3 in every respect -- same
 # MT41K128M16, same 47 pins, same 3000 ps -- and differ only in the FPGA speed
@@ -23,14 +31,22 @@ set top  [file normalize $here/..]
 source $here/boards.tcl
 
 set board v1
+set which all
 if {[llength $argv] > 0} { set board [lindex $argv 0] }
+if {[llength $argv] > 1} { set which [lindex $argv 1] }
 board_check $board
+if {$which ne "all" && $which ne "mig" && $which ne "ila"} {
+    puts "ERROR: WHICH must be all, mig or ila, not '$which'"
+    exit 1
+}
 
 set part      [board_part $board]
 set mig_part  [board_mig_part $board]
 set ipdir     $top/build/ip/$board
 
 file mkdir $ipdir
+
+if {$which eq "all" || $which eq "mig"} {
 
 # The committed .prj with the target substituted.  Keep this free of XML
 # comments: MIG's parser fails on them, reports the target device as empty and
@@ -77,3 +93,62 @@ if {[llength $ds]} {
 }
 
 puts "== done; generated under $ipdir/sun2_mig =="
+
+}
+
+if {$which eq "all" || $which eq "ila"} {
+
+if {![llength [current_project -quiet]]} {
+    create_project -in_memory -part $part
+    set_property target_language Verilog [current_project]
+    set_property ip_output_repo $ipdir [current_project]
+}
+
+puts "== generating sun2_ila for Wukong $board ($part) =="
+
+# The instrument for the MMU.  Unlike MIG there is no .prj: an ILA is
+# configured entirely through CONFIG.* properties, so this is the source of
+# truth for it and there is nothing else to keep in step.
+#
+# Eight probes, because the field boundaries are what make a capture readable
+# and the basic trigger unit ANDs one comparator per probe -- ERR and FC == 1
+# in one condition, without the advanced trigger unit.  Widths must match the
+# slices in boards/Wukong/wukong_top.sv; Vivado checks them at elaboration.
+#
+# Capture control (C_EN_STRG_QUAL) is what makes 4096 samples enough: the
+# machine is idle between bus cycles, so the interesting window is a few
+# hundred clocks spread over millions.  The qualifier is set at run time from
+# the Hardware Manager -- ~P_AS_n to keep only bus cycles.
+#
+# Two input pipeline stages, because this samples wide combinational cones --
+# the map outputs and the protection terms -- and the ILA must not be what
+# fails timing.  It costs two clocks of latency, uniformly across every probe,
+# so the relative timing a capture shows is unaffected.
+
+create_ip -name ila -vendor xilinx.com -library ip \
+          -module_name sun2_ila -dir $ipdir
+
+set_property -dict [list \
+    CONFIG.C_NUM_OF_PROBES     {8} \
+    CONFIG.C_DATA_DEPTH        {4096} \
+    CONFIG.C_INPUT_PIPE_STAGES {2} \
+    CONFIG.C_EN_STRG_QUAL      {1} \
+    CONFIG.C_ADV_TRIGGER       {false} \
+    CONFIG.C_TRIGOUT_EN        {false} \
+    CONFIG.C_TRIGIN_EN         {false} \
+    CONFIG.ALL_PROBE_SAME_MU_CNT {2} \
+    CONFIG.C_PROBE0_WIDTH {23} \
+    CONFIG.C_PROBE1_WIDTH {3} \
+    CONFIG.C_PROBE2_WIDTH {6} \
+    CONFIG.C_PROBE3_WIDTH {4} \
+    CONFIG.C_PROBE4_WIDTH {8} \
+    CONFIG.C_PROBE5_WIDTH {12} \
+    CONFIG.C_PROBE6_WIDTH {12} \
+    CONFIG.C_PROBE7_WIDTH {6} \
+] [get_ips sun2_ila]
+
+generate_target {instantiation_template synthesis simulation} [get_ips sun2_ila]
+
+puts "== done; generated under $ipdir/sun2_ila =="
+
+}

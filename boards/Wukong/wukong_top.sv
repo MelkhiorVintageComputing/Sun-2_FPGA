@@ -291,6 +291,32 @@ module wukong_top #(
    assign extra_leds0 = todebug;
    wire        en_boot;
 
+   // The debug bus, and the ILA that samples it.  Field map in
+   // rtl/sun2-common/sun2_fpga.v, next to the assignment; the split into eight
+   // probe ports is what lets the Hardware Manager trigger on a combination of
+   // fields -- ERR and P_FC == 1, say -- with the basic trigger unit rather
+   // than the advanced one.
+   //
+   // All of it is behind the define, port included, so a build without the
+   // knob is not merely equivalent but byte-identical -- see the comment on
+   // dbg_bus in rtl/sun2-common/sun2_fpga.v for what the bare port cost when
+   // it was not.
+`ifdef SUN2_ILA
+   wire [73:0] dbg_bus;
+
+   sun2_ila u_ila (
+       .clk    (cpu_clk),
+       .probe0 (dbg_bus[73:51]),   // P_A[23:1]
+       .probe1 (dbg_bus[50:48]),   // P_FC
+       .probe2 (dbg_bus[47:42]),   // AS RW UDS LDS DTACK BERR, active low
+       .probe3 (dbg_bus[41:38]),   // C_S4 C_S6 C_S8 C_S24
+       .probe4 (dbg_bus[37:30]),   // ia_smap2pmap
+       .probe5 (dbg_bus[29:18]),   // ps_pmap2devices
+       .probe6 (dbg_bus[17:6]),    // ma_pmap2devices
+       .probe7 (dbg_bus[5:0])      // VALID PROTERR_raw PROTERR TIMEOUT ERR MATCH_MEM
+   );
+`endif
+
    //
    // PHY management.  None of this exists on a Sun-2 -- the 82586 drove an 8502
    // Manchester encoder straight onto an AUI cable and nothing in the machine
@@ -408,6 +434,9 @@ module wukong_top #(
        .diag_leds  (diag_leds0),
        .en_boot    (en_boot),
        .todebug    (todebug),
+`ifdef SUN2_ILA
+       .dbg_bus    (dbg_bus),
+`endif
 
        .eth_crs_stuck (eth_crs_stuck),
 

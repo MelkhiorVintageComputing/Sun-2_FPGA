@@ -189,6 +189,7 @@ module tb_sun2 #(
    wire [7:0]  diag_leds;
    wire        en_boot;
    wire [7:0]  todebug;
+   wire [73:0] dbg_bus;
 
    wire        wb_cyc, wb_stb, wb_we, wb_ack;
    wire [29:0] wb_adr;
@@ -250,6 +251,7 @@ module tb_sun2 #(
            .diag_leds(diag_leds),
            .en_boot(en_boot),
            .todebug(todebug),
+           .dbg_bus(dbg_bus),
 
            .eth_crs_stuck(eth_crs_stuck),
 
@@ -519,6 +521,40 @@ module tb_sun2 #(
    always @(todebug)
      $display("[%t] todebug = %08b", $realtime, todebug);
 
+   //
+   // dbg_bus: the wide bus the board's ILA samples.  It is compiled into every
+   // build -- only the ILA instantiation in wukong_top.sv is conditional -- so
+   // the packing can and should be proved here, where a mismatch is a line of
+   // output rather than a bench session with a field one bit out.
+   //
+   // Compared against the signals it is supposed to carry, by hierarchical
+   // name, on every edge of the whole boot.  `!==' so that X matches X: before
+   // the maps are written their outputs are X, which is a correct reading of
+   // the machine and not a packing error.
+   int dbg_bad = 0;
+   always @(posedge dut.C100 or negedge dut.C100) begin
+      if (dbg_bus !== {dut.sun2.P_A, dut.sun2.P_FC,
+                       dut.sun2.P_AS_n, dut.sun2.P_RW_n,
+                       dut.sun2.P_UDS_n, dut.sun2.P_LDS_n,
+                       dut.sun2.P_DTACK_n, dut.sun2.P_BERR_n,
+                       dut.sun2.C_S4, dut.sun2.C_S6,
+                       dut.sun2.C_S8, dut.sun2.C_S24,
+                       dut.sun2.ia_smap2pmap, dut.sun2.ps_pmap2devices,
+                       dut.sun2.ma_pmap2devices,
+                       dut.sun2.VALID, dut.sun2.PROTERR_raw, dut.sun2.PROTERR,
+                       dut.sun2.TIMEOUT, dut.sun2.ERR, dut.sun2.MATCH_MEM}) begin
+         dbg_bad = dbg_bad + 1;
+         if (dbg_bad <= 5)
+           $display("[%t] dbg_bus MISPACKED: %074b", $realtime, dbg_bus);
+      end
+   end
+   final begin
+      if (dbg_bad != 0)
+        $display("dbg_bus: MISPACKED on %0d edges -- the ILA field map in sun2_fpga.v is wrong", dbg_bad);
+      else
+        $display("dbg_bus: packing verified on every clock edge");
+   end
+
    // Every clock edge over a window, for pinning down the timing of one bus
    // cycle: +cycle_from=<ns> +cycle_to=<ns>.  Both edges, because the 68000
    // bus runs on both -- the odd C_S are clocked on negedge and the even on
@@ -547,6 +583,22 @@ module tb_sun2 #(
                 dut.sun2.C_S7, dut.sun2.C_S8,
                 dut.sun2.MATCH_PROM_BOOT, dut.sun2.VALID,
                 dut.sun2.PROTERR, dut.sun2.ERR);
+
+   // The same cycle as the board's ILA will show it, decoded out of dbg_bus
+   // rather than out of the design -- so a capture from hardware and a line
+   // from simulation can be read side by side, and so the field boundaries are
+   // exercised on a cycle whose answer is already known.
+   always @(posedge dut.C100 or negedge dut.C100)
+     if (cyc_to > 0.0 && $realtime >= cyc_from && $realtime <= cyc_to)
+       $display("[%t] %s   ila: A=%06x FC=%0d AS=%0d RW=%0d UDS=%0d LDS=%0d DTACK=%0d BERR=%0d | S4=%0d S6=%0d S8=%0d S24=%0d | smap=%02x ps=%03x ma=%03x | V=%0d Praw=%0d P=%0d T=%0d E=%0d MEM=%0d",
+                $realtime, dut.C100 ? "^" : "v",
+                {dbg_bus[73:51], 1'b0}, dbg_bus[50:48],
+                ~dbg_bus[47], ~dbg_bus[46], ~dbg_bus[45], ~dbg_bus[44],
+                ~dbg_bus[43], ~dbg_bus[42],
+                dbg_bus[41], dbg_bus[40], dbg_bus[39], dbg_bus[38],
+                dbg_bus[37:30], dbg_bus[29:18], dbg_bus[17:6],
+                dbg_bus[5], dbg_bus[4], dbg_bus[3],
+                dbg_bus[2], dbg_bus[1], dbg_bus[0]);
 
 `ifdef SUSKA_PEEK
    // Suska's own view of the same cycle -- EXTRA_DEFINES=SUSKA_PEEK, and only

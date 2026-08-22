@@ -99,6 +99,15 @@ module sun2_fpga(input         cpu_clk,
 		 output [7:0]  diag_leds,
 		 output        en_boot,
 		 output [7:0]  todebug,
+
+`ifdef SUN2_ILA
+		 // Everything an ILA needs to answer one question: does the
+		 // page map output the protection check consumes match the
+		 // entry a later FC=3 read gets back?  Packed here, threaded
+		 // out the way todebug is, and sampled in the board layer --
+		 // see the field map at the assignment below.
+		 output [73:0] dbg_bus,
+`endif
 		 /* wishbone */
 		 output        wb_cyc_o,
 		 output        wb_stb_o,
@@ -849,7 +858,20 @@ module sun2_fpga(input         cpu_clk,
    assign tx = TxDA;
    assign RxDA = rx;
   
-   tolog tolog(.TxDA(TxDA)); // so we can trace only TxDA in the VCD, pulseview doesn't like too many signals
+   // A simulation-only hook: an empty module wrapped round TxDA alone, so a VCD
+   // can carry that one signal without pulseview choking on the rest.
+   //
+   // Not built into a bitstream, and that is not tidiness.  An empty module is
+   // a black box to Vivado, and opt_design refuses to run on a design that has
+   // one.  Every build until now got away with it because synthesis pruned the
+   // instance -- it has no outputs -- before DRC could see it; the first ILA
+   // build did not, because marking debug nets keeps hierarchy that would
+   // otherwise have been optimised through, and the whole run died at
+   // opt_design with a black box in a module that has nothing to do with the
+   // ILA.  Both simulation flows define SUN2_SIM.
+`ifdef SUN2_SIM
+   tolog tolog(.TxDA(TxDA));
+`endif
    
    z8530_scc  #(.SOFT_RESET_EN(1),
 		.RR8_CTRL_POP(1),
@@ -1371,6 +1393,56 @@ module sun2_fpga(input         cpu_clk,
    // (rsun/mon/kernel/trap.s:70).  Until that lands the Sun-2 front panel
    // stays at its reset value whatever the machine is doing.
    //
+`ifdef SUN2_ILA
+   //
+   // The debug bus.  Output-only, so it cannot change what the machine does.
+   //
+   // Behind the define even so.  It costs nothing at all here -- every signal
+   // on it already has a load -- but measured against a build without it, the
+   // bare port cost 8 LUTs and moved worst hold slack from 0.071 ns to 0.054
+   // ns.  Vivado is byte-deterministic on this design, so that is the port and
+   // not run-to-run noise, and hold is the number this build has least of.  An
+   // instrument that is switched off has no business spending it.
+   //
+   // Simulation always defines SUN2_ILA (sim/run_xsim.sh), because there the
+   // bus is free and it is what proves the packing.
+   //
+   // The fields, and why each is here.  SunOS panics creating process 1: the
+   // machine reported a protection violation as a bus timeout, and
+   // sys/sun2/trap.c reads BE_TIMEOUT as "the MMU was satisfied, the memory
+   // system failed", so it never tries to grow the stack.  tools/mmuprobe
+   // cannot reproduce it from a boot block, so the question moves to the
+   // board: sampled every clock of the failing cycle, does ps_pmap2devices in
+   // the C_S8 window match the entry getpgmap reads back afterwards?
+   //
+   //   73:51  P_A[23:1]          which access
+   //   50:48  P_FC               the discriminator -- the kernel's access is
+   //                             FC 1, every PROM device probe is FC 5
+   //   47:42  AS RW UDS LDS DTACK BERR, all active low as the bus has them
+   //   41:38  C_S4 C_S6 C_S8 C_S24    where in the cycle
+   //   37:30  ia_smap2pmap       segment map output, lookup stage 1
+   //   29:18  ps_pmap2devices    page map protection/status -- the answer
+   //   17:6   ma_pmap2devices    page map physical address
+   //    5:0   VALID PROTERR_raw PROTERR TIMEOUT ERR MATCH_MEM
+   //
+   // MATCH_MEM rather than anything about DVMA, which sun2_fpga cannot see --
+   // top_fpga.v muxes the master onto these same wires, deliberately, so that
+   // nothing downstream knows DVMA exists.  MATCH_MEM is the term that decides
+   // TIMEOUT: memory is exempt from the bus timeout, so it says directly
+   // whether the cycle was headed for RAM or was left to time out.
+   //
+   assign dbg_bus = { P_A,                                        // 73:51
+		      P_FC,                                       // 50:48
+		      P_AS_n, P_RW_n, P_UDS_n, P_LDS_n,           // 47:44
+		      P_DTACK_n, P_BERR_n,                        // 43:42
+		      C_S4, C_S6, C_S8, C_S24,                    // 41:38
+		      ia_smap2pmap,                               // 37:30
+		      ps_pmap2devices,                            // 29:18
+		      ma_pmap2devices,                            // 17:6
+		      VALID, PROTERR_raw, PROTERR,                //  5:3
+		      TIMEOUT, ERR, MATCH_MEM };                  //  2:0
+`endif
+
    assign todebug = { hb_ctr[23],   // 7    cpu_clk runs at all (~0.75 Hz at 12.5 MHz)
 		      sys_reset,    // 6    the machine is still in reset
 		      seen_err,     // 5    a cycle ended in a bus error

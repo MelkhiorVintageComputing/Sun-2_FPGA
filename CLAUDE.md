@@ -16,6 +16,8 @@ make -C sim check MACHINE=vme             # pass/fail on the console log
 make -C sim board [BOARD_MEM=ddr3] [CPU=rd68011]   # as it will be on the Wukong
 make -C syn ip [BOARD=v3]                 # generate the MIG DDR3 controller (once per board)
 make -C syn bitstream [MACHINE=vme] [CPU_HZ=40000000] [BOARD=v3] [XY450=1] [CPU=rd68011]
+make -C syn ip-ila; make -C syn bitstream ILA=1  # fit the ILA on the MMU's debug bus
+make -C syn program ILA=1 [same knobs]    # JTAG; `hw' leaves the Hardware Manager open
 tools/mkxydisk -o build/disk/xy0.img       # a labelled, bootable disk image
 tools/ufsread IMG cat /vmunix -o OUT      # pull a file out of a 4.2BSD image
 tools/pcsym OUT 63c8e 40b6                # 68010 PCs -> kernel symbols
@@ -151,6 +153,19 @@ That same commit moved RD68011's level-7 acknowledgements down by a factor of
 about 2.5 — 37 to 14 over an identical `xychain` run, with level 2 unchanged at
 6 — so **RD68011 level-7 counts recorded before it are inflated** and must not
 be compared with ones taken after. Level 5 is unaffected.
+
+**There is an ILA, and it is aimed at the MMU.** `ILA=1` fits one on `dbg_bus`
+-- 74 bits of address, function code, both map lookup stages, the protection
+and timeout terms and the bus handshake, packed in `sun2_fpga.v` with its field
+map beside it and sampled every clock rather than once per cycle. It exists
+because SunOS panics creating pid 1 with a protection violation reported as a
+bus timeout, `tools/mmuprobe` cannot reproduce that from a boot block, and a
+bitstream costs ten minutes where the simulation that would show it costs ten
+hours. Simulation always builds the bus and `tb_sun2.sv` checks every field
+against the signal it claims to carry, on every clock edge of every boot, so a
+field cannot silently drift from its map; a bitstream builds it only under
+`ILA=1`, because the bare port cost 8 LUTs and 17 ps of hold margin in a build
+with no ILA in it. `BRINGUP.md` has the triggers and the diagnostic.
 
 What has not changed is the regression baseline: the MultiBus fingerprint of
 22 bus errors and a byte-identical console is measured with Suska, because
@@ -631,6 +646,23 @@ IOPB came back with the driver's own zeroes in it, reading as success.
   acknowledgements to 5 — while the bus error count, its sequence and the
   console text are all untouched. Measured, not assumed.
 
+* **An empty module is a black box, and only an ILA notices.** `tolog` -- the
+  VCD hook wrapped round TxDA -- has no body, and Vivado calls that a black
+  box; `opt_design` refuses to run on a design containing one. Every build for
+  the life of the project got away with it because synthesis pruned the
+  instance, which has no outputs, before DRC could see it. Marking debug nets
+  keeps hierarchy that would otherwise have been optimised through, so the
+  first `ILA=1` build died at `opt_design` naming a module with nothing to do
+  with the ILA. It is behind `SUN2_SIM` now. The same shape is waiting in any
+  other module that exists only to be looked at.
+* **A debug hub cannot be told it runs at 20 MHz.** `C_CLK_INPUT_FREQ_HZ`
+  takes 25 MHz to 650 MHz and rejects anything slower, and the hub Vivado
+  inserts for an IP ILA takes the ILA's clock -- `cpu_clk`. It runs on
+  `clk50_g` instead, which is legal because a hub and its cores may be in
+  different domains, and `implement_debug_core` must run after the change or
+  `place_design` stops with "needs to be (re)generated". Declaring a false
+  25 MHz would also have built, and the thing it lies about is exactly what
+  decides whether the hub answers JTAG.
 * **`xvlog` is stricter than Verilator and Yosys about declaration order.** A
   wire declared after its first use compiles elsewhere and fails here.
 * **A clock that only *sometimes* gets a BUFG.** `clk50` drives the reset

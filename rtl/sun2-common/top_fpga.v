@@ -14,6 +14,9 @@ module top(input         cpu_clk,
 	   output [7:0]  diag_leds,
 	   output 	 en_boot,
 	   output [7:0]  todebug,
+`ifdef SUN2_ILA
+	   output [73:0] dbg_bus,
+`endif
 
 	   /* Ethernet diagnostics, for the board top to surface: a PHY that
 	    holds carrier sense asserted stops transmission dead, and it is the
@@ -275,6 +278,9 @@ module top(input         cpu_clk,
 		  .en_boot(en_boot),
 		  .todebug(todebug),
 		  //.todebug(),
+`ifdef SUN2_ILA
+		  .dbg_bus(dbg_bus),
+`endif
 				
 		  // wishbone
 		  .wb_cyc_o(wb_cyc_o),

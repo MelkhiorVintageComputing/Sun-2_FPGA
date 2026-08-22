@@ -72,7 +72,16 @@ mkdir -p "$rundir"
 # The boot PROM include lives in build/rom; generate it if it isn't there yet.
 make -s -C "$top/tools"
 
-defargs=()
+# SUN2_SIM says this is a simulation: it keeps the tolog VCD hook, which is an
+# empty module and therefore a black box no bitstream may contain.
+#
+# The MMU debug bus is behind SUN2_ILA on a board, because the bare port costs
+# 8 LUTs and 17 ps of hold margin in a bitstream that has no ILA in it.  In
+# simulation it costs nothing and is what proves the packing -- tb_sun2.sv
+# checks every field of it against the signal it claims to carry, on every
+# clock edge of every boot -- so it is always on here.  There is no ILA IP to
+# find: only wukong_top.sv instantiates one, and this flow does not build it.
+defargs=(-d SUN2_SIM -d SUN2_ILA)
 for d in $SUN2_DEFINES; do
 	defargs+=(-d "$d")
 done
