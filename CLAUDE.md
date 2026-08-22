@@ -197,6 +197,13 @@ does not divide the 1 GHz VCO exactly, so there is no silent rounding.
 Vivado is expected at `/opt/Xilinx/2025.2/Vivado`; override `XILINX_VIVADO`.
 Neither `make` in `sim/` nor `syn/` needs `settings64.sh` sourced.
 
+**SunOS runs on a board.** A MultiBus V3 build with `CPU=rd68011` at 20 MHz
+netboots SunOS 4.0.3 on a Wukong V1, past the creation of process 1 and into
+the scheduler -- `_swtch+0x18`, seen on the ILA, with the stack-growth fault
+taken and recovered from silently. What stood in the way was the bus error
+register, not the MMU; see the trap above. `tools/pcsym` against the
+netbooted `vmunix` is what turns an ILA address into that answer.
+
 **It runs on a board.** A MultiBus V3 build with `CPU=rd68011` and the Ethernet
 card auto-boots on a Wukong and puts correctly formed ND packets on a real
 network — nothing answers them yet, so the boot times out, but the whole chain
@@ -665,6 +672,12 @@ IOPB came back with the driver's own zeroes in it, reading as success.
   `PROTERR` set and `TIMEOUT` clear, which proved the MMU right and moved the
   search to the one thing between the MMU and the kernel. No simulation was
   run to find it.
+
+  **Confirmed on hardware.** With the fix the kernel takes that fault
+  silently -- no message, no panic -- and the ILA then finds the CPU
+  executing kernel text in a tight loop at `_swtch+0x18`, the scheduler's
+  idle loop. SunOS 4.0.3 creates process 1 and runs its scheduler on this
+  machine.
 * **An empty module is a black box, and only an ILA notices.** `tolog` -- the
   VCD hook wrapped round TxDA -- has no body, and Vivado calls that a black
   box; `opt_design` refuses to run on a design containing one. Every build for
