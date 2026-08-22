@@ -156,4 +156,17 @@ $(DISKDIR)/clkprobe.bin: clkprobe/clkprobe.c clkprobe/clkprobe.ld
 
 clkprobe: $(DISKDIR)/clkprobe.bin
 
-.PHONY: xychain beprobe clkprobe
+$(DISKDIR)/dogprobe.bin: dogprobe/dogprobe.c dogprobe/dogprobe.ld
+	@command -v $(M68K)-gcc >/dev/null || { \
+		echo "$(M68K)-gcc not found: the on-machine exerciser needs an m68k"; \
+		echo "cross-compiler.  On Debian/Ubuntu: apt install gcc-m68k-linux-gnu"; \
+		exit 1; }
+	mkdir -p $(DISKDIR)
+	$(M68K)-gcc $(XYCFLAGS) -T dogprobe/dogprobe.ld -o $(DISKDIR)/dogprobe.elf \
+		dogprobe/dogprobe.c 2>&1 | grep -vE 'RWX|build-id' || true
+	$(M68K)-objcopy -O binary $(DISKDIR)/dogprobe.elf $@
+	@echo "dogprobe: $$(stat -c%s $@) bytes of 7680"
+
+dogprobe: $(DISKDIR)/dogprobe.bin
+
+.PHONY: xychain beprobe clkprobe dogprobe
