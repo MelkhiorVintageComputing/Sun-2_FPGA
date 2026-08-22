@@ -83,6 +83,76 @@ module top(input         cpu_clk,
 
    wire P_RESET_n;
    wire P_HALT_n;
+
+   wire        RESET_INn;
+   wire        HALT_INn;
+   wire        RESET_OUT;
+   wire        HALT_OUTn;   // the watchdog reads it -- see below
+
+   //
+   // The watchdog.  Architecture Manual 4.6.1: the board has "a watchdog
+   // circuit which generates a signal equivalent to power-on reset (POR)
+   // whenever the 68010 halts with a double bus fault", and the Engineering
+   // Manual 3.7.1 describes the mechanism -- the CPU drives HALT low and PAL
+   // A102 "automatically generates processor reset to continue processing".
+   // Both cores present that pin here as HALT_OUTn, so this works either way.
+   //
+   // It is not a power-on reset, though, whatever 4.6.1 says about how it
+   // looks to the CPU: por_reset in sun2_fpga.v stays deasserted through it,
+   // which is what lets the monitor tell a watchdog from a power-up by reading
+   // the Am9513 back (trap.s:117).  That test only means anything because the
+   // timer survives every reset a running machine can cause.
+   //
+   reg [7:0] dog_ctr = 8'h00;
+   reg 	     dog_reset = 1'b0;
+   always @(posedge C100)
+     begin
+	if (sys_reset)
+	  begin
+	     dog_ctr   <= 8'h00;
+	     dog_reset <= 1'b0;
+	  end
+	else if (~HALT_OUTn & ~dog_reset)
+	  begin
+	     dog_reset <= 1'b1;
+	     dog_ctr   <= 8'hFF;
+	  end
+	else if (dog_reset)
+	  begin
+	     dog_ctr <= dog_ctr - 8'd1;
+	     if (dog_ctr == 8'h01) dog_reset <= 1'b0;
+	  end
+     end
+
+   // What the machine sees: the board reset, or the watchdog.
+   wire machine_reset = sys_reset | dog_reset;
+
+   assign RESET_INn = ~machine_reset; /* board or watchdog reset => reset CPU */
+
+   //
+   // P.RESET- on the schematic, and P2.INIT- on the same wire: the peripheral
+   // reset net, driven by the board reset *and* by the CPU's own RESET
+   // instruction.  Sheet 1 takes it from the 68010's RESET pin through PAL
+   // A102 pin 12, and it reaches the Ethernet control register, the video
+   // control register, the VME SYSRESET driver, the VME rerun PAL and the P2
+   // connector -- Architecture Manual 4.6.1: "When the 68010 executes a reset
+   // instruction, it resets all on-board and off-board I/O devices that offer
+   // an external reset function.  No other devices are affected."
+   //
+   // What it must not reach is as load-bearing as what it does: not the system
+   // enable register or the diagnostic register (4.6.1 again -- "Devices of
+   // the CPU layer ... are not affected by 68010 Reset"), not the bus error
+   // register, not the contexts or the maps, and above all not the SCCs, which
+   // have no reset on a 2/50 at all.  SunOS declines to execute the
+   // instruction for exactly that fear -- sun2/locore.s:144, "We should reset
+   // the world here, but it screws the UART settings".
+   //
+   assign P_RESET_n = ~machine_reset & ~RESET_OUT;
+
+   // HALT_INn is the input, and stays on the board reset alone: a CPU
+   // executing its own RESET instruction must keep running.
+   assign HALT_INn = ~machine_reset;
+
    
    wire P_AS_n;
    wire P_RW_n;
@@ -136,7 +206,7 @@ module top(input         cpu_clk,
 		  .clk40(clk40),
 		  .C100(C100),
 		  .clk4m9152(clk4m9152),
-		  .sys_reset(sys_reset),
+		  .sys_reset(machine_reset),
 		  .P_VPA_n(P_VPA_n),
 		  .P_BERR_n(P_BERR_n),
 		  .P_DTACK_n(P_DTACK_n),
@@ -217,14 +287,7 @@ module top(input         cpu_clk,
 		  .wb_ack_i(wb_ack_i)
 		  );
    
-   wire        RESET_INn;
-   wire        HALT_INn;
-   wire        RESET_OUT;
-   wire        HALT_OUTn; // ignored
-   
-   assign RESET_INn = ~sys_reset; /* board reset => reset CPU */
-   assign P_RESET_n = ~sys_reset;// & ~RESET_OUT; /* board reset or CPU reset => reset system */
-   assign HALT_INn = ~sys_reset;// & ~RESET_OUT; /* board reset => reset CPU (HALTn seem needed) */
+
 
    //
    // The bus mux: CPU, or the alternate master doing DVMA.
@@ -411,7 +474,7 @@ module top(input         cpu_clk,
    //
 `ifdef SUN2_VME
    sun2_ethernet ethernet(.CLK(C100),
-			  .RESET(sys_reset),
+			  .RESET(~P_RESET_n),   // P.RESET-: the peripheral net
 
 			  .core_reset_n(ether_core_reset_n),
 			  .loopback_n(ether_loopback_n),
@@ -509,7 +572,7 @@ module top(input         cpu_clk,
 		   .MEM_KIB(`MB_ETHER_MEM_KIB),
 		   .PHY_DATA_W(4)) mbether
      (.CLK(C100),
-      .RESET(sys_reset),
+      .RESET(~P_RESET_n),   // P.RESET-: a card on the bus
 
       .mb_sel(mb_sel),
       .mb_addr(mb_addr),
@@ -569,7 +632,7 @@ module top(input         cpu_clk,
 
    sun2_xy450 #(.IO_BASE(`XY450_IO_BASE)) xy450
      (.CLK(C100),
-      .RESET(sys_reset),
+      .RESET(~P_RESET_n),   // P.RESET-: a card on the bus
 
       .mbio_sel(mbio_sel),
       .mbio_addr(mbio_addr),
@@ -608,7 +671,7 @@ module top(input         cpu_clk,
       );
 
    sun2_dvma xy_dvma(.CLK(C100),
-		     .RESET(sys_reset),
+		     .RESET(machine_reset),   // machine, not a card
 
 		     .wb_cyc_i(xy_wb_cyc),
 		     .wb_stb_i(xy_wb_stb),

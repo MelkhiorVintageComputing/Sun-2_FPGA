@@ -172,14 +172,41 @@ module sun2_fpga(input         cpu_clk,
 `endif
    end
 
-   reg 	POR_n;
-   initial
-     begin
-	POR_n = 1'b1;
-	#5 POR_n = 1'b0;
-	#2000 POR_n = 1'b1;
-     end
-   assign P_HALT_n = POR_n;
+   // ------------------------------------------------------------------
+   // Power-on reset, as distinct from a board reset
+   // ------------------------------------------------------------------
+   // A real 2/50 resets some devices and not others, and the distinction is
+   // load-bearing.  The Am9513 is "not affected by power-on resets, watchdog
+   // resets, or 68010 resets" (Architecture Manual 6.8), and the two Z8530s
+   // have no reset at all -- the part has no reset pin, and the board cannot
+   // produce the RD+WR software reset because those two strobes come from
+   // separate decoders enabled by Q.R/W and Q.R/W-.  So on real hardware all
+   // three come up in whatever state they powered up in and are never
+   // disturbed again.  The monitor's own initialisation is what puts them
+   // right, and its power-up test -- reading counter 1's mode register back
+   // and comparing against CLKM_DEFAULT, trap.s:117 -- works precisely
+   // because the timer survives a reset.
+   //
+   // An FPGA still has to start somewhere.  z8530_scc.sv has no `initial'
+   // blocks and no declaration initialisers, so with no reset at all every
+   // register in it is X, and several stay X for ever rather than healing:
+   // the FIFO gray pointers, the soft-reset counters and the interrupt
+   // latches all have else-branch guards that evaluate to X and so never
+   // assign.  That puts X on RR0 bit 7 -- ZSRR0_BREAK, the bit the NMI
+   // debounce masks and compares against g_debounce at 0x5B6 -- which is the
+   // spurious Abort again, with the X sitting directly on the bit instead of
+   // reaching it by some path nobody pinned down.
+   //
+   // por_reset is that one reset: asserted while the machine has never yet
+   // been out of reset, and never again.  A button press, a watchdog or a
+   // RESET instruction cannot re-arm it, which is what makes it a model of
+   // powering the board up rather than of resetting it.  It replaces POR_n,
+   // which was an `initial' block with # delays -- simulation-only, and a
+   // second continuous driver on P_HALT_n besides.
+   reg 	por_done = 1'b0;
+   always @(posedge cpu_clk)
+     if (~sys_reset) por_done <= 1'b1;
+   wire por_reset = sys_reset & ~por_done;
 
    // layers shortcuts
    wire FC_CTRLLAYER;
@@ -505,13 +532,17 @@ module sun2_fpga(input         cpu_clk,
    // System Enable register
    wire [7:0] 			 sys_out;
    //
-   // Cleared by the board reset, not by POR_n.  BOOT_n lives in this register,
+   // Cleared by every board reset -- by sys_reset, not por_reset, since unlike
+   // the timer and the SCCs this one really is cleared by a reset on a 2/50:
+   // its CLR is INIT-, a PAL output driven by power-on reset, VME reset and the
+   // watchdog.  BOOT_n lives in this register,
    // so what clears it decides whether a reset puts the machine back into boot
    // state -- and the boot PROM states the contract in _hardreset: "A hardware
    // reset would clear the enable register, but if this is a software reset,
    // we have to get into boot state explicitly this way."
    //
-   // POR_n is an `initial' block with # delays.  Simulation runs it and the
+   // It used to be cleared by POR_n, an `initial' block with # delays that has
+   // since been replaced by por_reset.  Simulation ran it and the
    // register is cleared at time zero; synthesis ignores the delays, so on a
    // board nothing cleared this register ever.  Power-up worked by luck -- a
    // Xilinx flip-flop configures to 0, so BOOT_n came up 0 -- but once the PROM
@@ -715,7 +746,7 @@ module sun2_fpga(input         cpu_clk,
    // ttl_am9513.v.
    ttl_am9513 timer (
 		     .CLK(C100),
-		     .reset_n(~sys_reset),
+		     .reset_n(~por_reset),   // never reset by a board reset -- see por_reset
 		   .DIN(P_DIN),
 		   .DOUT(timer_out),
 		   .CD_n(P_A[1]), // checkme: latched in the original (LA1)
@@ -768,7 +799,21 @@ module sun2_fpga(input         cpu_clk,
    assign L_M_MAP_SEEN = (leds == 8'h8F); 
    
    sun2_wishbone_bridge #(.FB_WB_BASE(`FB_WB_BASE)) wbridge(.CLK(C100),
-				.RESET_n(~sys_reset), // don't reset on CPU-only reset, don't want to loose memory access then
+				// Power-up state, not reset state.  ENABLE is armed
+				// when the monitor writes LED code 0x8F and gates
+				// wb_cyc/wb_stb, so while it is clear main memory
+				// never answers -- and memory is exempt from the bus
+				// timeout, so such a cycle hangs for ever rather than
+				// taking a bus error.  A cold boot reaches 0x8F before
+				// it needs RAM; the monitor's warm-reset path does not,
+				// it maps pages 0 and 1 and pushes every register to
+				// the stack first (trap.s, after DogSkip1).  Clearing
+				// this on a board or watchdog reset therefore hangs the
+				// machine on the way back up, which is what the
+				// watchdog test found -- and what the original comment
+				// here, "don't want to loose memory access then", was
+				// already reaching for.
+				.RESET_n(~por_reset),
 				.SET_ENABLE(L_M_MAP_SEEN),
 				.P_ADR_IN({1'h0, ma_pmap2devices[11:0], P_A[10:1]}), // full physical (4 MiB)
 				.P_DATA_IN(P_DIN),
@@ -820,12 +865,12 @@ module sun2_fpga(input         cpu_clk,
 			  .clk(C100),           // CPU/bus clock (register file, interrupts, RR mux)
 			  .pclk(clk4m9152),       // Alternative BRG/serializer clock (Zilog "PCLK")
 			  .sclk(clk4m9152),          // Primary BRG/serializer clock (e.g. 3.6864 MHz)
-			  .reset_n(~sys_reset),       // Active low reset (async assert)
+			  .reset_n(~por_reset),       // power-on only: a 2/50 SCC has no reset
 			  
 			  // CPU Interface
 			  .cs_n(1'b0),          // Chip select (active low)
-			  .rd_n(~MATCH_SERIAL | ~RD & ~sys_reset),          // Read strobe (active low)
-			  .wr_n(~MATCH_SERIAL | ~WR & ~sys_reset),          // Write strobe (active low)
+			  .rd_n(~MATCH_SERIAL | ~RD),          // Read strobe (active low)
+			  .wr_n(~MATCH_SERIAL | ~WR),          // Write strobe (active low)
 			  .a_b(P_A[2]),           // Channel select: 1=A, 0=B
 			  .d_c(P_A[1]),           // Data/Control: 1=Data, 0=Control
 			  .data_in(P_DIN[15:8]),       // Data input
@@ -935,11 +980,11 @@ module sun2_fpga(input         cpu_clk,
 			  .clk(C100),
 			  .pclk(clk4m9152),
 			  .sclk(clk4m9152),
-			  .reset_n(~sys_reset),
+			  .reset_n(~por_reset),       // power-on only: a 2/50 SCC has no reset
 
 			  .cs_n(1'b0),
-			  .rd_n(~MATCH_KBM | ~RD & ~sys_reset),
-			  .wr_n(~MATCH_KBM | ~WR & ~sys_reset),
+			  .rd_n(~MATCH_KBM | ~RD),
+			  .wr_n(~MATCH_KBM | ~WR),
 			  .a_b(P_A[2]),           // 1=A (keyboard), 0=B (mouse)
 			  .d_c(P_A[1]),           // 1=Data, 0=Control
 			  .data_in(P_DIN[15:8]),
@@ -997,7 +1042,7 @@ module sun2_fpga(input         cpu_clk,
    assign MATCH_ETHER = MATCH_RSVD;
 
    sun2_ether_ctl etherctl(.CLK(CLK),
-			   .RESET(sys_reset),
+			   .RESET(~P_RESET_n),   // P.RESET- clears ALS273 U716
 			   .din(P_DIN[15:8]),
 			   .WR(WR & MATCH_ETHER & C_S8),
 			   .dout(ether_out),
@@ -1025,7 +1070,7 @@ module sun2_fpga(input         cpu_clk,
    wire 			 fb_video_en, fb_int;
 `ifdef SUN2_FB
    sun2_fb_ctl fbctl(.CLK(CLK),
-		     .RESET(sys_reset),
+		     .RESET(~P_RESET_n),   // P2.INIT- clears U1610/U1611
 		     .din(P_DIN),
 		     .WR(WR & MATCH_FBCTL & C_S8),
 		     .UDS_n(P_UDS_n),
@@ -1327,7 +1372,7 @@ module sun2_fpga(input         cpu_clk,
    // stays at its reset value whatever the machine is doing.
    //
    assign todebug = { hb_ctr[23],   // 7    cpu_clk runs at all (~0.75 Hz at 12.5 MHz)
-		      ~P_RESET_n,   // 6    the machine is still in reset
+		      sys_reset,    // 6    the machine is still in reset
 		      seen_err,     // 5    a cycle ended in a bus error
 		      fc_err,       // 4..2 function code of the first such cycle
 		      seen_diag_wr, // 1    the PROM wrote the diagnostic register

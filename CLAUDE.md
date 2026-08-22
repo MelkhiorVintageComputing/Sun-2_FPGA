@@ -189,6 +189,42 @@ list rather than building diagnostics speculatively.
 
 ## Architecture
 
+**Reset is three nets, not one, and the differences are load-bearing.** A
+2/50's are `P.RESET-` (also labelled `P2.INIT-`, one wire), driven by the
+68010's own RESET pin through PAL A102 and reaching the Ethernet control
+register, the video control register, the VME `SYSRESET` driver and the P2
+connector; `INIT-`, a *different* PAL output driven by power-on reset, VME
+reset and the watchdog, which clears the system enable register and the
+diagnostic register; and nothing at all for the Am9513 ("not affected by
+power-on resets, watchdog resets, or 68010 resets", Architecture Manual 6.8),
+both Z8530s (no reset pin, and the board cannot make the RD+WR software reset
+because those strobes come from separate decoders), the bus error register, the
+contexts and the maps. Architecture Manual 4.6.1: "When the 68010 executes a
+reset instruction, it resets all on-board and off-board I/O devices that offer
+an external reset function. No other devices are affected."
+
+Here that is `P_RESET_n = ~machine_reset & ~RESET_OUT` in `top_fpga.v` (the
+peripheral net, carrying `sun2_ether_ctl`, `sun2_fb_ctl` and the bus cards),
+`sys_reset` (the enable and diagnostic registers, the MMU decode, DVMA), and
+`por_reset` in `sun2_fpga.v` — asserted once at configuration and never
+re-armed by a button, a watchdog or a RESET instruction. `por_reset` exists
+because an FPGA has to start somewhere: `z8530_scc.sv` has no `initial` blocks
+and no declaration initialisers, so with no reset at all its FIFO pointers,
+soft-reset counters and interrupt latches stay X *for ever*, putting X on RR0
+bit 7 — `ZSRR0_BREAK`, the bit the NMI debounce compares against `g_debounce`.
+The Wishbone bridge's `ENABLE` is on `por_reset` for a different reason: it
+gates `wb_cyc`/`wb_stb` and is armed only at LED code `0x8F`, so clearing it on
+a warm reset hangs the machine on the way back up — the monitor's non-power-up
+path pushes every register to the stack long before `0x8F`.
+
+**The watchdog works, and the monitor says so.** A double bus fault
+(`tools/dogprobe`) halts the CPU, `top_fpga.v` senses `HALT_OUTn` and pulses
+the machine reset, and the boot PROM prints `Watchdog reset!` — which it can
+only do because the Am9513 survives, so its power-up test at `trap.s:117` reads
+`0x0C22` rather than `CLKM_DEFAULT` and takes the other branch. Identical on
+both cores; the two spell the open-drain HALT pin differently and agree on when
+it is driven.
+
 **One define picks the machine.** `rtl/sun2-common/sun2_config.vh` derives everything
 machine-dependent from `SUN2_MULTIBUS` (default) or `SUN2_VME`: device-space
 base page, size of memory space, the ID PROM's machine type, and which boot
