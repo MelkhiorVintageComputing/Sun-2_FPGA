@@ -175,6 +175,18 @@ trigger unit is enough — one comparator per probe, ANDed:
 Capture control is enabled: qualify on `~P_AS_n` (`probe2[5] == 0`) and 4096
 samples cover bus cycles rather than the idle clocks between them.
 
+**It has already earned its keep.** The first capture off the board answered
+the question it was built for. Triggering on a bus error at FC 1 caught the
+kernel's `subyte` to `USRSTACK-1`: `smap=ff` (SEGINV), `ps=800` (valid, no
+permissions), `PROTERR_raw` set on the cycle's first clock, `PROTERR` the
+moment `C_S8` arrived, `TIMEOUT` never -- and it cannot, since `ma=000` TYPE 0
+makes `MATCH_MEM` and memory is exempt from the timeout. The two instruction
+fetches before it were `0x470a` and `0x470c`, `_suibyte`, the PC from the
+panic. So the MMU reported the fault correctly and the bus error *register*
+did not: it was still holding a device probe from seconds earlier, because it
+kept the first error until written and SunOS only ever reads it. See the trap
+in CLAUDE.md. Ten minutes of bitstream, one capture, no simulation.
+
 **What it costs, measured on the V1 build it was made for** (MultiBus,
 MB_ETHER, RD68011, 20 MHz): **+1883 LUTs** (21217 to 23100, 33% to 36%),
 **+3224 flip-flops**, and **+8.5 BRAM tiles** (85.5 to 94 of 135, 63% to 70%).

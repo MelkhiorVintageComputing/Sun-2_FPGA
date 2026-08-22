@@ -304,16 +304,31 @@ module wukong_top #(
 `ifdef SUN2_ILA
    wire [73:0] dbg_bus;
 
+   // Named wires rather than slices straight into the core, because the
+   // Hardware Manager names a probe after the net it is driven from -- and
+   // eight slices of one net all get that net's name.  Vivado then called the
+   // first slice it met `dbg_bus' and numbered the rest, and the slice it met
+   // first was probe7: `dbg_bus_1' was the address and `dbg_bus' the verdict.
+   // Every field one out, and quietly.  Measured on the board, not guessed.
+   wire [22:0] dbg_addr = dbg_bus[73:51];  // P_A[23:1]
+   wire [2:0]  dbg_fc   = dbg_bus[50:48];  // P_FC
+   wire [5:0]  dbg_hand = dbg_bus[47:42];  // AS RW UDS LDS DTACK BERR, all low
+   wire [3:0]  dbg_cs   = dbg_bus[41:38];  // C_S4 C_S6 C_S8 C_S24
+   wire [7:0]  dbg_smap = dbg_bus[37:30];  // ia_smap2pmap
+   wire [11:0] dbg_ps   = dbg_bus[29:18];  // ps_pmap2devices
+   wire [11:0] dbg_ma   = dbg_bus[17:6];   // ma_pmap2devices
+   wire [5:0]  dbg_verd = dbg_bus[5:0];    // V PROTERR_raw PROTERR TIMEOUT ERR MEM
+
    sun2_ila u_ila (
        .clk    (cpu_clk),
-       .probe0 (dbg_bus[73:51]),   // P_A[23:1]
-       .probe1 (dbg_bus[50:48]),   // P_FC
-       .probe2 (dbg_bus[47:42]),   // AS RW UDS LDS DTACK BERR, active low
-       .probe3 (dbg_bus[41:38]),   // C_S4 C_S6 C_S8 C_S24
-       .probe4 (dbg_bus[37:30]),   // ia_smap2pmap
-       .probe5 (dbg_bus[29:18]),   // ps_pmap2devices
-       .probe6 (dbg_bus[17:6]),    // ma_pmap2devices
-       .probe7 (dbg_bus[5:0])      // VALID PROTERR_raw PROTERR TIMEOUT ERR MATCH_MEM
+       .probe0 (dbg_addr),
+       .probe1 (dbg_fc),
+       .probe2 (dbg_hand),
+       .probe3 (dbg_cs),
+       .probe4 (dbg_smap),
+       .probe5 (dbg_ps),
+       .probe6 (dbg_ma),
+       .probe7 (dbg_verd)
    );
 `endif
 

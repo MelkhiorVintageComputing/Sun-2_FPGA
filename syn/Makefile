@@ -68,8 +68,11 @@ IPDIR   = $(TOP)/build/ip/$(BOARD)/sun2_mig
 ILADIR  = $(TOP)/build/ip/$(BOARD)/sun2_ila
 TAG     = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)
 OUTDIR  = $(TOP)/build/syn/$(BOARD)-$(MACHINE)$(TAG)-cpu$(shell expr $(CPU_HZ) / 1000000)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(ILA)),-ila,)
-BIT     = $(OUTDIR)/sun2_wukong_$(BOARD).bit
-LTX     = $(if $(filter 1,$(ILA)),$(OUTDIR)/sun2_wukong_$(BOARD).ltx,)
+# Absolute, because the recipes below run Vivado from $(WORKDIR) and $(OUTDIR)
+# is relative to here: a relative path resolves against the wrong directory and
+# program.tcl reports a bitstream that was never at that address.
+BIT     = $(abspath $(OUTDIR))/sun2_wukong_$(BOARD).bit
+LTX     = $(if $(filter 1,$(ILA)),$(abspath $(OUTDIR))/sun2_wukong_$(BOARD).ltx,)
 WORKDIR = $(TOP)/build/syn/work-$(BOARD)
 
 all: bitstream

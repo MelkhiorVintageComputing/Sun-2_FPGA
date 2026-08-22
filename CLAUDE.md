@@ -646,6 +646,25 @@ IOPB came back with the driver's own zeroes in it, reading as success.
   acknowledgements to 5 — while the bus error count, its sequence and the
   console text are all untouched. Measured, not assumed.
 
+* **The bus error register held the first error for ever, and SunOS reads it
+  without writing.** `mon/h/buserr.h` documents the Sun-2 register as keeping
+  only the first of several errors, cleared when software *writes* it, and the
+  RTL implemented exactly that. Beside the one write the PROM ever does,
+  `mon/kernel/trap.s:104` says "FIXME, remove this when latch is gone" -- and
+  it went: `getbuserr` (`sys/sun2/locore.s:972`) is a bare `movsw
+  BUSERRREG,d0` and no file in the SunOS tree writes the register. So the
+  first bus error of a boot -- a PROM device probe, a timeout on a valid page,
+  `0x84` -- was still sitting there when the kernel took a protection fault
+  seconds later, and `trap.c` reads `BE_TIMEOUT` as "do not try to recover".
+  That is the whole SunOS panic creating pid 1. A read re-arms the latch now,
+  which keeps the documented behaviour for a handler that faults on its way to
+  reading, and a new error outranks both so nothing is lost. The MultiBus
+  fingerprint, its sequence and the console are unchanged on both cores.
+
+  How it was found is the point: the ILA caught that cycle on the board with
+  `PROTERR` set and `TIMEOUT` clear, which proved the MMU right and moved the
+  search to the one thing between the MMU and the kernel. No simulation was
+  run to find it.
 * **An empty module is a black box, and only an ILA notices.** `tolog` -- the
   VCD hook wrapped round TxDA -- has no body, and Vivado calls that a black
   box; `opt_design` refuses to run on a design containing one. Every build for

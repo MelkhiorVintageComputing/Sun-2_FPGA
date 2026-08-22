@@ -517,18 +517,40 @@ module sun2_fpga(input         cpu_clk,
    wire 			 ERR;
    assign ERR = (PROTERR | TIMEOUT) & C_S4;
 
-   // The acknowledge: any write to the register, data discarded.
-   wire 			 berr_ack;
-   assign berr_ack = WR & MATCH_BERR & C_S4;
+   // The acknowledge: any write to the register, data discarded.  And a read,
+   // which is the part that took a board and an ILA to find.
+   //
+   // mon/h/buserr.h states the rule this implements: "If multiple bus errors
+   // occur, only the first one is kept.  Software indicates that it has read
+   // out that bus error by writing to the bus error reg; the data doesn't
+   // matter and isn't saved."  Beside the single write the PROM ever does,
+   // mon/kernel/trap.s:104 says: "FIXME, remove this when latch is gone."
+   //
+   // The latch went.  SunOS never writes this register -- getbuserr in
+   // sys/sun2/locore.s:972 is a bare `movsw BUSERRREG,d0' and no file in the
+   // tree writes it -- so on a machine that only clears on a write, the first
+   // bus error of the boot is held for ever.  The first errors of a boot are
+   // the PROM's device probes: a timeout on a valid page, 0x84.  Which is
+   // exactly what SunOS 4.0.3 printed when it panicked creating pid 1, for a
+   // fault the MMU had reported correctly as a protection violation -- the
+   // ILA caught that cycle on the board with PROTERR set, TIMEOUT clear, and
+   // the register said TIMEOUT because it was still showing a device probe
+   // from seconds earlier.
+   //
+   // So a read re-arms it too.  That keeps the documented behaviour where it
+   // matters -- a nested fault on the way to reading this still finds the
+   // first error, because nothing has read it yet -- and lets a handler that
+   // reads and moves on see its own error next time.  A new error outranks
+   // both, so an error arriving on the same clock as a read is not lost.
+   wire 			 berr_ack, berr_read;
+   assign berr_ack  = WR & MATCH_BERR & C_S4;
+   assign berr_read = RD & MATCH_BERR & C_S4;
 
-   // Hold the *first* error until acknowledged.  Latching every error instead
-   // would report the last one, so a handler that took a nested fault on its
-   // way to reading this would find the wrong cause.
    reg 				 berr_latched;
    always @(posedge CLK)
-     if (sys_reset)        berr_latched <= 1'b0;
-     else if (berr_ack)    berr_latched <= 1'b0;
-     else if (ERR)         berr_latched <= 1'b1;
+     if (sys_reset)                     berr_latched <= 1'b0;
+     else if (ERR)                      berr_latched <= 1'b1;
+     else if (berr_ack | berr_read)     berr_latched <= 1'b0;
 
    gen8bit_reg berr(.CLK(CLK),
 		    .din(berr_in),
