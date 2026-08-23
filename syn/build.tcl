@@ -31,6 +31,7 @@ set fb       0
 set xy450    0
 set cpu      suska
 set ila      0
+set hdmi30   0
 if {[llength $argv] > 0} { set cpu_hz   [lindex $argv 0] }
 if {[llength $argv] > 1} { set machine  [lindex $argv 1] }
 if {[llength $argv] > 2} { set mb_ether [lindex $argv 2] }
@@ -39,6 +40,7 @@ if {[llength $argv] > 4} { set fb       [lindex $argv 4] }
 if {[llength $argv] > 5} { set xy450    [lindex $argv 5] }
 if {[llength $argv] > 6} { set cpu      [lindex $argv 6] }
 if {[llength $argv] > 7} { set ila      [lindex $argv 7] }
+if {[llength $argv] > 8} { set hdmi30   [lindex $argv 8] }
 if {$cpu ne "suska" && $cpu ne "rd68011"} {
     puts "ERROR: CPU must be suska or rd68011, not '$cpu'"
     exit 1
@@ -66,6 +68,19 @@ if {$fb == 1} {
     lappend defines SUN2_FB
 }
 
+# HDMI30=1: drive the display at 1080p30 rather than 1080p60.  The picture is
+# identical; what halves is the TMDS serial rate, from 742 MHz to 371.  The
+# faster one is out of specification for an Artix-7 global buffer and is what
+# QMTech's own reference design does, so it works on some parts and sinks and
+# not others -- a monitor reporting the signal out of range is the symptom.
+if {$hdmi30 == 1} {
+    if {$fb != 1} {
+        puts "ERROR: HDMI30 needs FB=1; there is no display without it"
+        exit 1
+    }
+    lappend defines SUN2_HDMI_30HZ
+}
+
 # The Xylogics 450 is a MultiBus card; a 2/50 takes a 451 on the VME bus, which
 # is a different card in a different address space.
 if {$xy450 == 1} {
@@ -91,7 +106,7 @@ if {$ila == 1} {
 
 set part    [board_part $board]
 set ipdir   $top/build/ip/$board
-set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu[expr {$cpu_hz / 1000000}][expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}]
+set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu[expr {$cpu_hz / 1000000}][expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$hdmi30 == 1 ? "-hdmi30" : ""}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir
@@ -340,6 +355,27 @@ report_drc               -file $outdir/drc.rpt
 set wns [get_property SLACK [get_timing_paths -delay_type max]]
 set whs [get_property SLACK [get_timing_paths -delay_type min]]
 puts "== worst setup slack $wns ns, worst hold slack $whs ns =="
+
+# Setup and hold are not the whole of timing, and this gate used to think they
+# were.  A clock can be inside every data path's budget and still be faster
+# than the buffer carrying it: the HDMI 5x clock ran a BUFG at 742 MHz against
+# its rated 628, reported as a pulse width violation -- Min Period, slack
+# -0.245 ns, nine endpoints -- and sailed through a check that only looked at
+# WNS and WHS.  The board showed it as a monitor that would not lock.
+set pwbad {}
+foreach line [split [report_pulse_width -all_violators -return_string] "\n"] {
+    if {[regexp {^\s*(Min Period|Max Period|Low Pulse Width|High Pulse Width|Max Skew)\s} $line] &&
+        [regexp {\s(-\d+\.\d+)\s} $line -> sl]} {
+        lappend pwbad [string trim $line]
+    }
+}
+if {[llength $pwbad]} {
+    puts "ERROR: pulse width / period violations -- a clock is faster than the"
+    puts "       resource carrying it, whatever the data paths say:"
+    foreach l $pwbad { puts "         $l" }
+    exit 1
+}
+puts "== pulse width and period checks clean =="
 
 if {$wns < 0 || $whs < 0} {
     puts "ERROR: timing not met (WNS $wns, WHS $whs); see $outdir/timing.rpt"

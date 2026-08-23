@@ -610,9 +610,20 @@ module wukong_top #(
 
    // DVI rather than full HDMI: no audio to send, and it costs less.  Every
    // HDMI sink accepts a DVI signal.
-   hdmi #(.VIDEO_ID_CODE(16),          // 1920x1080p60
+   // Always code 16, even at 30 Hz.  1080p30 is the *same* 2200x1125 raster as
+   // 1080p60 -- only the pixel clock differs -- so HDMI30 halves the clock in
+   // hdmi_clkgen.sv and changes nothing here.  In DVI mode no infoframe is
+   // sent, so the code number never reaches the sink either.
+   //
+   // Not code 34, which is what 1080p30 is called and what BRINGUP.md used to
+   // advise: this library implements 1, 2/3, 4, 16, 17/18, 19 and 20 and has
+   // no default arm, so an unsupported code leaves frame_width and
+   // frame_height undriven and nothing is generated at all -- the monitor sees
+   // no signal and sleeps.  Its BIT_HEIGHT is also 11 bits only for code 16,
+   // and 1125 lines does not fit in the 10 the others get.
+   hdmi #(.VIDEO_ID_CODE(16),          // 1920x1080, 60 Hz or 30 by the clock
           .DVI_OUTPUT(1'b1),
-          .VIDEO_REFRESH_RATE(60.0),
+          .VIDEO_REFRESH_RATE(60.0),   // audio N/CTS only, and DVI sends none
           .IT_CONTENT(1'b1),
           .VENDOR_NAME({"Sun     "}),
           .PRODUCT_DESCRIPTION({"Sun-2/50        "})

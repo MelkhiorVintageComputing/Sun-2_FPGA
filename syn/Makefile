@@ -60,6 +60,11 @@ CPU ?= suska
 # different artefact, and BRINGUP.md explains when it is worth building one.
 ILA ?= 0
 
+# Drive the display at 1080p30 instead of 1080p60.  Same picture, half the TMDS
+# serial rate -- reach for it when a monitor will not lock or reports the
+# signal out of range.  Needs FB=1.
+HDMI30 ?= 0
+
 # Where hw_server is listening for the JTAG cable.  localhost:3121 is a local
 # one; override for a board on another machine.
 HW_URL ?= localhost:3121
@@ -67,7 +72,7 @@ HW_URL ?= localhost:3121
 IPDIR   = $(TOP)/build/ip/$(BOARD)/sun2_mig
 ILADIR  = $(TOP)/build/ip/$(BOARD)/sun2_ila
 TAG     = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)
-OUTDIR  = $(TOP)/build/syn/$(BOARD)-$(MACHINE)$(TAG)-cpu$(shell expr $(CPU_HZ) / 1000000)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(ILA)),-ila,)
+OUTDIR  = $(TOP)/build/syn/$(BOARD)-$(MACHINE)$(TAG)-cpu$(shell expr $(CPU_HZ) / 1000000)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(ILA)),-ila,)$(if $(filter 1,$(HDMI30)),-hdmi30,)
 # Absolute, because the recipes below run Vivado from $(WORKDIR) and $(OUTDIR)
 # is relative to here: a relative path resolves against the wrong directory and
 # program.tcl reports a bitstream that was never at that address.
@@ -107,7 +112,7 @@ inputs:
 
 bitstream: ip rom inputs $(if $(filter 1,$(ILA)),ip-ila,) | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
-		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB) $(XY450) $(CPU) $(ILA)
+		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB) $(XY450) $(CPU) $(ILA) $(HDMI30)
 	@echo "bitstream: $(BIT)"
 
 # Programming.  Same knobs as bitstream, so `make program ILA=1 CPU=rd68011

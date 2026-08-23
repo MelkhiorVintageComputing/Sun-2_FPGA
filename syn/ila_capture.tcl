@@ -189,6 +189,18 @@ switch -- $mode {
             set_property TRIGGER_COMPARE_VALUE eq23'h000003  $P(addr)
             set_property TRIGGER_COMPARE_VALUE eq6'bX0XXXX   $P(hand)
             set_property TRIGGER_COMPARE_VALUE neq16'h0000   $P(data) }
+    fbprobe { # the monitor's display probe.  msun's sunmon.c probes
+              # MBMEM_BASE+0xC0000 = 0xEC0000 with bus errors caught, and sets
+              # g_fbthere from whether it faulted; that one bit decides whether
+              # the console goes to the screen or stays on the serial port.
+              # Triggering on the address rather than on an error catches the
+              # cycle either way, which is the point: it says whether the probe
+              # faulted and, if it did, whether by timeout or protection.
+              # FC 5, supervisor data: the probe itself.  Without that, the
+              # trigger catches the PROM writing the page map for the same
+              # address in control space, which is FC 3 and not the question.
+              set_property TRIGGER_COMPARE_VALUE eq23'h760000 $P(addr)
+              set_property TRIGGER_COMPARE_VALUE eq3'b101     $P(fc) }
     scc  { # any access in the console SCC's device page, 0xEEC800..0xEECFFF.
            # dbg_addr is P_A[23:1], so the page is the top 13 bits of 0x776400
            # and the low ten are don't-care.
@@ -200,7 +212,7 @@ switch -- $mode {
     fc1  { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
            set_property TRIGGER_COMPARE_VALUE eq3'b001   $P(fc) }
     as   { set_property TRIGGER_COMPARE_VALUE eq6'b0XXXXX $P(hand) }
-    default { puts "ERROR: MODE must be err, fc1, as, supw, scc, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz or reset, not '$mode'"; exit 1 }
+    default { puts "ERROR: MODE must be err, fc1, as, supw, scc, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz, fbprobe or reset, not '$mode'"; exit 1 }
 }
 
 # Capture control: keep bus cycles, drop the idle clocks between them.  4096
