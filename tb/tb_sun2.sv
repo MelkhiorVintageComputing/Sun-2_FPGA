@@ -189,6 +189,22 @@ module tb_sun2 #(
    wire [7:0]  diag_leds;
    wire        en_boot;
    wire [7:0]  todebug;
+
+   // DISPEN, straight out of the machine's video control register.
+   //
+   // Nothing used to watch this, and that is how a frame buffer that could
+   // never display reached a board: fb_scanout's own testbench checks both
+   // states of video_en, but no test asked whether the *machine* ever sets it.
+   // The boot PROM does, from finit() at ef3160, and if it stops -- a decode
+   // that drifts, a byte strobe, a page-map change -- every screenshot this
+   // tree renders would still look perfect, because fb_dump reads memory and
+   // tools/fbshot replays it with video_en forced high.
+   //
+   // Declared here rather than left to the port connection below, which would
+   // declare it implicitly and then collide with this one.  xvlog says so
+   // plainly; Vivado would have invented the wire and said nothing, which is
+   // the whole reason this signal needed a test.
+   wire        fb_video_en;
    wire [100:0] dbg_bus;
 
    wire        wb_cyc, wb_stb, wb_we, wb_ack;
@@ -251,6 +267,7 @@ module tb_sun2 #(
            .diag_leds(diag_leds),
            .en_boot(en_boot),
            .todebug(todebug),
+           .fb_video_en(fb_video_en),
            .dbg_bus(dbg_bus),
 
            .eth_crs_stuck(eth_crs_stuck),
@@ -1023,6 +1040,16 @@ module tb_sun2 #(
    // ------------------------------------------------------------------
    real timeout_ms = 1000.0;
 
+   reg  fb_ven_seen = 1'b0;
+   always @(posedge cpu_clk) if (fb_video_en) fb_ven_seen <= 1'b1;
+
+   task automatic fb_dispen_report();
+      if (fb_ven_seen)
+        $display("PASS: the machine enabled DISPEN (video control register bit 15)");
+      else
+        $display("FAIL: DISPEN was never set -- a real display would stay black");
+   endtask
+
    task automatic wrap_up(input string why);
       $display("");
       $display("=== %s at %t ===", why, $realtime);
@@ -1034,6 +1061,7 @@ module tb_sun2 #(
       ram.report();
       iack_report();
 `ifdef SUN2_FB
+      fb_dispen_report();
       fb_report();
       fb_dump(FBIMAGE);
 `endif
