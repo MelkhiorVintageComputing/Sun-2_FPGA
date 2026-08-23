@@ -75,6 +75,20 @@ static void puthex(u32 v, int digits)
  */
 #define USP_BASE  0x00030000UL
 
+/*
+ * Comparing the two stack pointers is not enough, and finding that out cost a
+ * run: a core can write *below* the user stack pointer without moving it, and
+ * then USP still reads back exactly where it was put while the word has
+ * already landed on the user's stack.  The first version of this probe
+ * declared such a core correct.
+ *
+ * So the words under both stack pointers are painted first and read back
+ * afterwards.  A frame word that lands there changes the paint, whatever the
+ * pointer says.
+ */
+#define PAINT  0xA5A5A5A5UL
+static volatile u32 * const under_usp = (volatile u32 *)(USP_BASE - 4);
+
 static volatile u32 * const vec_trap0  = (volatile u32 *)0x80;
 static volatile u32 * const vec_buserr = (volatile u32 *)0x8;
 
@@ -281,6 +295,7 @@ int main(void)
     puts_("\r\n  B  a bus error rather than a trap, from user mode\r\n");
 
     *vec_buserr = (u32)berr_handler;
+    *under_usp  = PAINT;
     setpgmap(FAULT_VA, PME_DENY);
     puts_("     entry at ");  puthex(FAULT_VA, 6);
     puts_(" is ");            puthex(getpgmap(FAULT_VA), 8);
@@ -297,8 +312,20 @@ int main(void)
         puts_("   at the fault ");                puthex(usp_at_berr, 8);
         puts_("\r\n     frame format ");         puthex(berr_fmt, 4);
         puts_("  (8xxx is the long bus error frame)\r\n");
+        puts_("     the word under the user stack was ");
+        puthex(PAINT, 8);
+        puts_(", now ");
+        puthex(*under_usp, 8);
+        puts_("\r\n");
 
-        if (usp_at_berr != USP_BASE && ssp_at_berr == ssp_before) {
+        if (*under_usp != PAINT) {
+            puts_("     PART OF THE FRAME WENT ON THE USER STACK.  The pointer\r\n");
+            puts_("     did not move, so only the paint shows it.  On a machine\r\n");
+            puts_("     where that page is not writable -- a fresh process, its\r\n");
+            puts_("     stack not yet grown -- the write faults inside exception\r\n");
+            puts_("     processing, which is a double fault and a dead CPU.\r\n");
+            puts_("     That is how SunOS dies here at its first user instruction.\r\n");
+        } else if (usp_at_berr != USP_BASE && ssp_at_berr == ssp_before) {
             puts_("     the frame went on the USER stack.  That is the bug the\r\n");
             puts_("     ILA caught: SunOS dies at its first user instruction\r\n");
             puts_("     because the frame lands wherever the user stack points\r\n");

@@ -111,7 +111,12 @@ foreach k {addr fc hand cs smap ps ma verd} {
 }
 
 set depth [get_property CONTROL.DATA_DEPTH $ila]
-set_property CONTROL.TRIGGER_POSITION [expr {$depth / 2}] $ila
+# Half way by default, so the cycles before the trigger are kept.  A mode that
+# qualifies the capture hard -- user instruction fetches only -- must not ask
+# for that: the core collects the pre-trigger samples before it will even look
+# at the trigger, and if qualified samples are rare it never arms at all.  That
+# is what "did not trigger, core status IDLE" meant the first time.
+set trigpos [expr {$depth / 2}]
 set_property CONTROL.WINDOW_COUNT 1 $ila
 
 # Everything don't-care first, so a mode only has to say what it constrains.
@@ -127,6 +132,46 @@ switch -- $mode {
     err  { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd) }
     reset { set_property TRIGGER_COMPARE_VALUE eq3'b110 $P(fc)
             set_property TRIGGER_COMPARE_VALUE eq23'b[string repeat 0 23] $P(addr) }
+    uerr { # any bus error on a user-mode access: FC 1 or 2, and FC 3 too,
+           # which one comparator cannot exclude -- the decode sorts it out.
+           set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
+           set_property TRIGGER_COMPARE_VALUE eq3'b0XX   $P(fc) }
+    uerr2 { # a user-mode bus error that is NOT the stack-growth probe.
+            # Every new process faults at USRSTACK-1 on purpose so the kernel
+            # can grow its stack, and that recoverable fault fires this trigger
+            # first every time.  Excluding the one address gets past it to
+            # whatever else is going wrong.
+            set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X  $P(verd)
+            set_property TRIGGER_COMPARE_VALUE eq3'b0XX    $P(fc)
+            set_property TRIGGER_COMPARE_VALUE neq23'h7fffff $P(addr) }
+    uonly { # Trigger on a user-mode fault that is not the stack-growth probe,
+            # and -- the point of this mode -- keep only user-mode clocks in
+            # the buffer.  With the qualifier on ~AS the window is a few tens
+            # of microseconds and almost all of it is kernel; qualified on the
+            # function code instead, 4096 samples are 4096 clocks of user
+            # execution, which is the whole life of a short-lived process.
+            # The post-trigger half then shows whether it resumed after the
+            # fault or never ran again.
+            set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X  $P(verd)
+            set_property TRIGGER_COMPARE_VALUE eq3'b0XX    $P(fc)
+            set_property TRIGGER_COMPARE_VALUE neq23'h7fffff $P(addr)
+            set qualify_user 1 }
+    uprog { # User instruction fetches only -- FC 2 -- as both the trigger and
+            # the capture qualifier.  The buffer then holds 4096 clocks of
+            # actual user-mode execution and nothing else: which addresses ran,
+            # and how far each process got before it stopped running.
+            set_property TRIGGER_COMPARE_VALUE eq3'b010 $P(fc)
+            set qualify_prog 1 }
+    uprogerr { # a bus error on a user *instruction* fetch: a process faulting on
+               # its own text, which is what a child dying before it can exec
+               # would look like.  Distinct from uerr/uerr2, which catch the
+               # kernel's own MOVES into user space.
+               set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
+               set_property TRIGGER_COMPARE_VALUE eq3'b010   $P(fc) }
+    scc  { # any access in the console SCC's device page, 0xEEC800..0xEECFFF.
+           # dbg_addr is P_A[23:1], so the page is the top 13 bits of 0x776400
+           # and the low ten are don't-care.
+           set_property TRIGGER_COMPARE_VALUE eq23'b1110111011001XXXXXXXXXX $P(addr) }
     supw { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
            set_property TRIGGER_COMPARE_VALUE eq3'b101   $P(fc)
            # hand = {AS RW UDS LDS DTACK BERR}, active low, so RW low is a write
@@ -134,13 +179,30 @@ switch -- $mode {
     fc1  { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
            set_property TRIGGER_COMPARE_VALUE eq3'b001   $P(fc) }
     as   { set_property TRIGGER_COMPARE_VALUE eq6'b0XXXXX $P(hand) }
-    default { puts "ERROR: MODE must be err, fc1, as, supw or reset, not '$mode'"; exit 1 }
+    default { puts "ERROR: MODE must be err, fc1, as, supw, scc, uerr, uerr2, uonly, uprog, uprogerr or reset, not '$mode'"; exit 1 }
 }
 
 # Capture control: keep bus cycles, drop the idle clocks between them.  4096
 # samples is a few hundred cycles that way and a few microseconds otherwise.
+# The trigger position, now that the mode is known.  A mode that qualifies the
+# capture hard -- user instruction fetches only -- must not ask for a half
+# buffer of history: the core collects the pre-trigger samples before it will
+# even look at the trigger, and if qualified samples are rare it never arms.
+# That is what "did not trigger, core status IDLE" meant the first time.
+if {[info exists qualify_prog]} { set trigpos 16 }
+set_property CONTROL.TRIGGER_POSITION $trigpos $ila
+puts "== trigger position $trigpos of $depth =="
+
 set_property CONTROL.CAPTURE_MODE BASIC $ila
-set_property CAPTURE_COMPARE_VALUE eq6'b0XXXXX $P(hand)
+if {[info exists qualify_prog]} {
+    set_property CAPTURE_COMPARE_VALUE eq3'b010 $P(fc)
+} elseif {[info exists qualify_user]} {
+    # user-mode clocks only: FC 1, 2 (and 3, which one comparator cannot
+    # exclude and which barely occurs in user mode anyway)
+    set_property CAPTURE_COMPARE_VALUE eq3'b0XX $P(fc)
+} else {
+    set_property CAPTURE_COMPARE_VALUE eq6'b0XXXXX $P(hand)
+}
 
 puts "== armed: mode $mode, depth $depth, trigger at [expr {$depth / 2}] =="
 run_hw_ila $ila
