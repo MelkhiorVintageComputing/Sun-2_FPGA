@@ -234,6 +234,12 @@ module sun2_fpga(input         cpu_clk,
    // bus timeout logic just underneath uses MATCH_MEM, and xvlog rejects
    // use-before-declaration.
    wire 			 MATCH_MEM, MATCH_MEMX;
+   // Declared up here, with MATCH_MEM, because the bus timeout below exempts
+   // both and xvlog rejects a wire used before its declaration -- where Vivado
+   // merely warns and invents an implicit undriven one, which builds a
+   // bitstream in which the exemption quietly does nothing.  The assignments
+   // stay down with the rest of the frame buffer decode.
+   wire 			 MATCH_FB, MATCH_FBCTL;
 
    // P_AS_n timing
    reg C_S3, C_S5, C_S7, C_S9;
@@ -265,7 +271,24 @@ module sun2_fpga(input         cpu_clk,
 	if (~P_AS_n & C_S18) C_S20 <= 1'b1;
 	if (~P_AS_n & C_S20) C_S22 <= 1'b1;
 	if (~P_AS_n & C_S22) C_S24 <= 1'b1;
-	if (~P_AS_n & C_S24 & ~MATCH_MEM) TIMEOUT <= 1'b1;
+	// Memory is exempt from the bus timeout, and so is the frame buffer,
+	// for the same reason: both are answered by the Wishbone bridge out of
+	// the same DDR3, and DDR3 is slower than twelve clocks.
+	//
+	// Measured on a board, with the ILA, on the monitor's own display
+	// probe at 0xEC0000: C_S24 fires on clock 12 and DTACK arrives on
+	// clock 13.  The two land on the same edge and the timeout wins by
+	// one.  AS to DTACK on this machine is bimodal, 8 clocks or 13, so the
+	// fast case always worked and the slow case never could -- which is
+	// why the frame buffer was found in simulation, where the memory model
+	// answers at once, and never on hardware.
+	//
+	// The consequence is the one memory already carries: an access up here
+	// that is never answered hangs instead of raising a bus error.  A real
+	// Sun-2's video board is local memory on the card and answers inside
+	// the timeout; ours shares the CPU's DRAM, so it inherits the CPU
+	// memory's exemption along with its latency.
+	if (~P_AS_n & C_S24 & ~MATCH_MEM & ~MATCH_FB) TIMEOUT <= 1'b1;
 	if ( P_AS_n)
 	  begin
 	     C_S4 <= 1'b0;
@@ -680,7 +703,6 @@ module sun2_fpga(input         cpu_clk,
    // the Wishbone bridge fields MATCH_FB.  Only the control register is local.
    // FB_PAGE is ma_pmap2devices[5:0] either way: 0x000 and 0xE00 agree in the
    // bottom six bits, so the same wires pick the 2 KiB within the aperture.
-   wire 			 MATCH_FB, MATCH_FBCTL;
 `ifdef SUN2_FB
  `ifdef SUN2_VME
    assign MATCH_FB       = (FC_GENERAL) & (TYPE == 3'h1) & C_S6 &

@@ -653,6 +653,23 @@ IOPB came back with the driver's own zeroes in it, reading as success.
   acknowledgements to 5 — while the bus error count, its sequence and the
   console text are all untouched. Measured, not assumed.
 
+* **The frame buffer is exempt from the bus timeout, and has to be.** Memory
+  was already exempt because DDR3 is slower than the twelve clocks `C_S24`
+  allows. The MultiBus frame buffer aperture is answered by the same Wishbone
+  bridge out of the same DDR3, and was not -- so the monitor's display probe
+  at `0xEC0000` timed out, `g_fbthere` went 0, and `sunmon.c:396` left the
+  console on the serial port with a perfectly good display fitted.
+  
+  It is a one-clock race, and the ILA measured it on the board: `C_S24` fires
+  on clock 12 and DTACK arrives on clock 13, the two landing on the same edge.
+  AS to DTACK here is bimodal, 8 clocks or 13, so the fast case always worked
+  and the slow case never could. Simulation could not show it at all until
+  `MEM_LATENCY=13` -- at 7, which is what `make -C sim migddr3` measures for a
+  Wishbone read, the probe still beats the timeout.
+  
+  Anything else that lands on the Wishbone bridge without an exemption meets
+  the same wall. The exemption carries memory's bargain with it: an access up
+  there that is never answered now hangs instead of raising a bus error.
 * **The bus error register held the first error for ever, and SunOS reads it
   without writing.** `mon/h/buserr.h` documents the Sun-2 register as keeping
   only the first of several errors, cleared when software *writes* it, and the
@@ -698,6 +715,14 @@ IOPB came back with the driver's own zeroes in it, reading as success.
   decides whether the hub answers JTAG.
 * **`xvlog` is stricter than Verilator and Yosys about declaration order.** A
   wire declared after its first use compiles elsewhere and fails here.
+
+  And the two tools disagree in the dangerous direction. `xvlog` makes it an
+  **error**; Vivado makes it warning `Synth 8-6901` and invents an implicit
+  undriven one-bit wire. So a change that is only ever built for synthesis can
+  reach a board with the new term silently dead -- which is exactly what the
+  frame buffer's timeout exemption did on its first build, `~MATCH_FB` against
+  a wire nothing drove. Simulation refusing to compile is what caught it.
+  Build the simulator too, even for a change that looks synthesis-only.
 * **A clock that only *sometimes* gets a BUFG.** `clk50` drives the reset
   assembly and the PHY reset sequencer as well as the MMCMs. Vivado used to
   infer its global buffer, and inferred one for the MultiBus build but not the
@@ -710,6 +735,12 @@ IOPB came back with the driver's own zeroes in it, reading as success.
   `create_clock` has not yet defined gets `get_clocks` returning nothing and the
   group is dropped with no warning — which surfaces later as a real hold
   violation on a crossing that should have been ignored.
+* **`MEM_LATENCY` is not part of the simulation run directory's name.** Two
+  latency variants of the same machine therefore share one directory and
+  collide, which matters because comparing latencies is the only way to
+  reproduce a DDR3-speed failure -- see the frame buffer timeout below. Run
+  them one after another, and do not queue the second on a `pgrep` for the
+  first: the check catches a gap between processes and starts anyway.
 * **Two simulation runs of the same machine clobber each other.** Each machine
   gets its own directory under `build/sim/`, so different machines can run
   concurrently, but the same one twice cannot — the second recompiles the
