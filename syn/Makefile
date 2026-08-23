@@ -65,12 +65,14 @@ ILA ?= 0
 # little else in the die and does not work in the full machine.  1280x1024 is
 # the mode that fits the Sun-2's 1152x900 screen inside every rating.
 #
-#   1080p60    the default, and what the board is wired for.  Needs ALLOW_PW=1.
-#   1080p30    same raster, half the clock -- but many sinks reject 30 Hz.
+#   1280x1024  the default: 108.125 / 540.625 MHz, VESA DMT, every clock
+#              inside its rating, and 1152x900 fits with a 64x62 border.
+#   1080p60    what the board is wired for and what does NOT work in the full
+#              design -- 742 MHz past a BUFG's 628.  Needs ALLOW_PW=1.
+#   1080p30    the 1080p60 raster at half the clock; many sinks reject 30 Hz.
 #   720p60     half the clock at a raster more sinks take.  FBDEBUG=1 only.
-#   1280x1024  108.125 / 540.625 MHz, VESA DMT.  Needs FB=1.
 #
-HDMI_MODE ?= 1080p60
+HDMI_MODE ?= 1280x1024
 
 # Drive the display from a test pattern instead of the frame buffer, and put
 # the video domain on the LED header.  Needs FB=1.  See test/hdmi/README.md.
@@ -98,7 +100,7 @@ HW_URL ?= localhost:3121
 IPDIR   = $(TOP)/build/ip/$(BOARD)/sun2_mig
 ILADIR  = $(TOP)/build/ip/$(BOARD)/sun2_ila
 TAG     = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)
-OUTDIR  = $(TOP)/build/syn/$(BOARD)-$(MACHINE)$(TAG)-cpu$(shell expr $(CPU_HZ) / 1000000)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(ILA)),-ila,)$(if $(filter-out 1080p60,$(HDMI_MODE)),-$(HDMI_MODE),)$(if $(filter 1,$(FBDEBUG)),-fbdbg,)$(if $(filter 1,$(FBPROBE)),-fbprobe,)$(if $(filter 1,$(FBFORCE)),-fbforce,)
+OUTDIR  = $(TOP)/build/syn/$(BOARD)-$(MACHINE)$(TAG)-cpu$(shell expr $(CPU_HZ) / 1000000)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(ILA)),-ila,)$(if $(filter 1,$(FB)),-$(HDMI_MODE),)$(if $(filter 1,$(FBDEBUG)),-fbdbg,)$(if $(filter 1,$(FBPROBE)),-fbprobe,)$(if $(filter 1,$(FBFORCE)),-fbforce,)
 # Absolute, because the recipes below run Vivado from $(WORKDIR) and $(OUTDIR)
 # is relative to here: a relative path resolves against the wrong directory and
 # program.tcl reports a bitstream that was never at that address.

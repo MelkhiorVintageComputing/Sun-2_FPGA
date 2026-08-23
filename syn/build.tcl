@@ -31,7 +31,7 @@ set fb       0
 set xy450    0
 set cpu      suska
 set ila      0
-set hdmimode 1080p60
+set hdmimode 1280x1024
 set fbdebug  0
 set allowpw  0
 set fbprobe  0
@@ -84,13 +84,15 @@ if {$fb == 1} {
 # bench.  So the default is the mode the board is wired for, and the working
 # answer is the one that fits 1152x900 inside every rating:
 #
-#   1080p60    2200x1125, 148.4375 / 742.1875 MHz.  Needs ALLOW_PW=1.
+#   1280x1024  1688x1066, 108.125 / 540.625 MHz, VESA DMT rather than CEA.
+#              **The default.**  Inside every rating, and 1152x900 fits with a
+#              64x62 border.
+#   1080p60    2200x1125, 148.4375 / 742.1875 MHz.  Needs ALLOW_PW=1, and does
+#              not work in the full design; see the trap in CLAUDE.md.
 #   1080p30    the *same* raster at half the clock.  Not every sink takes it:
 #              the monitor on this bench rejects 30 Hz outright.
 #   720p60     1650x750 at the same half clock, a raster more sinks accept.
 #              Diagnostic only -- 900 lines do not fit in 720 -- so FBDEBUG=1.
-#   1280x1024  1688x1066, 108.125 / 540.625 MHz, VESA DMT rather than CEA.
-#              Inside both ratings, and 1152x900 fits with a 64x62 border.
 #
 if {$hdmimode ne "1080p60" && $fb != 1} {
     puts "ERROR: HDMI_MODE=$hdmimode needs FB=1; there is no display without it"
@@ -180,7 +182,7 @@ if {$ila == 1} {
 
 set part    [board_part $board]
 set ipdir   $top/build/ip/$board
-set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu[expr {$cpu_hz / 1000000}][expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$hdmimode ne "1080p60" ? "-$hdmimode" : ""}][expr {$fbdebug == 1 ? "-fbdbg" : ""}][expr {$fbprobe == 1 ? "-fbprobe" : ""}][expr {$fbforce == 1 ? "-fbforce" : ""}]
+set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu[expr {$cpu_hz / 1000000}][expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$fbdebug == 1 ? "-fbdbg" : ""}][expr {$fbprobe == 1 ? "-fbprobe" : ""}][expr {$fbforce == 1 ? "-fbforce" : ""}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir
