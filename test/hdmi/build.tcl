@@ -1,5 +1,6 @@
 # vivado -mode batch -source build.tcl -tclargs MODE OUTDIR
-#   MODE is 720 (default) or 1080.
+#   MODE is 720 (default), 1080 for 1080p60, 1030 for 1080p30, or 1280 for
+#   1280x1024 at 60 Hz.
 set mode 720
 set out  [pwd]
 if {[llength $argv] > 0} { set mode [lindex $argv 0] }
@@ -10,19 +11,21 @@ set part xc7a100tfgg676-2
 
 set defines {}
 if {$mode == 1080} { lappend defines HDMI_1080P60 }
+if {$mode == 1030} { lappend defines HDMI_1080P30 }
+if {$mode == 1280} { lappend defines HDMI_SXGA }
 
 create_project -in_memory -part $part
 read_verilog -sv [list \
-    $sun2/Inputs/hdmi/src/tmds_channel.sv \
-    $sun2/Inputs/hdmi/src/serializer.sv \
-    $sun2/Inputs/hdmi/src/packet_assembler.sv \
-    $sun2/Inputs/hdmi/src/packet_picker.sv \
-    $sun2/Inputs/hdmi/src/audio_clock_regeneration_packet.sv \
-    $sun2/Inputs/hdmi/src/audio_info_frame.sv \
-    $sun2/Inputs/hdmi/src/audio_sample_packet.sv \
-    $sun2/Inputs/hdmi/src/auxiliary_video_information_info_frame.sv \
-    $sun2/Inputs/hdmi/src/source_product_description_info_frame.sv \
-    $sun2/Inputs/hdmi/src/hdmi.sv \
+    $sun2/build/inputs/hdmi/src/tmds_channel.sv \
+    $sun2/build/inputs/hdmi/src/serializer.sv \
+    $sun2/build/inputs/hdmi/src/packet_assembler.sv \
+    $sun2/build/inputs/hdmi/src/packet_picker.sv \
+    $sun2/build/inputs/hdmi/src/audio_clock_regeneration_packet.sv \
+    $sun2/build/inputs/hdmi/src/audio_info_frame.sv \
+    $sun2/build/inputs/hdmi/src/audio_sample_packet.sv \
+    $sun2/build/inputs/hdmi/src/auxiliary_video_information_info_frame.sv \
+    $sun2/build/inputs/hdmi/src/source_product_description_info_frame.sv \
+    $sun2/build/inputs/hdmi/src/hdmi.sv \
     $here/hdmitest_top.sv ]
 read_xdc $here/hdmitest.xdc
 if {[llength $defines]} {

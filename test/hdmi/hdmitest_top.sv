@@ -35,14 +35,22 @@ module hdmitest_top (
    MMCME2_BASE #(
        .BANDWIDTH         ("OPTIMIZED"),
        .CLKIN1_PERIOD     (20.000),
-       .DIVCLK_DIVIDE     (4),
+`ifdef HDMI_SXGA
+       .DIVCLK_DIVIDE     (1),          // PFD 50 MHz, VCO 1081.25
+       .CLKFBOUT_MULT_F   (21.625),
+`else
+       .DIVCLK_DIVIDE     (4),          // PFD 12.5 MHz, VCO 742.1875
        .CLKFBOUT_MULT_F   (59.375),
-`ifdef HDMI_1080P60
-       .CLKOUT0_DIVIDE_F  (5.000),
+`endif
+`ifdef HDMI_SXGA
+       .CLKOUT0_DIVIDE_F  (10.000),     // 108.125 MHz pixel, 540.625 serial
+       .CLKOUT1_DIVIDE    (2),
+`elsif HDMI_1080P60
+       .CLKOUT0_DIVIDE_F  (5.000),      // 148.4375 MHz pixel, 742.1875 serial
        .CLKOUT1_DIVIDE    (1),
 `else
-       .CLKOUT0_DIVIDE_F  (10.000),
-       .CLKOUT1_DIVIDE    (2),
+       .CLKOUT0_DIVIDE_F  (10.000),     // 74.21875 MHz pixel, 371.09375 serial
+       .CLKOUT1_DIVIDE    (2),          // ... for 720p60 and for 1080p30 alike
 `endif
        .STARTUP_WAIT      ("FALSE")
    ) mmcm (
@@ -62,14 +70,37 @@ module hdmitest_top (
    always @(posedge clk_pixel) rstq <= {rstq[2:0], ~locked};
    wire pix_rst = rstq[3];
 
+// 1080p30 is the *same* 2200x1125 raster as 1080p60 and the same VIDEO_ID_CODE
+// -- only the pixel clock differs, which is why it shares this arm and differs
+// from 1080p60 by nothing but the two MMCM output dividers above.  There is no
+// code 34 here on purpose: this library implements 1, 2/3, 4, 16, 17/18, 19
+// and 20 with no default arm, so 34 leaves the raster undriven and generates
+// nothing at all.
+`ifdef HDMI_1080P30
+`define HDMI_1080_RASTER
+`endif
 `ifdef HDMI_1080P60
+`define HDMI_1080_RASTER
+`endif
+
+`ifdef HDMI_SXGA
+   wire [11:0] cx;   // code 127 counts to 1688 x 1066
+   wire [10:0] cy;   // 1066 needs 11 bits, which is why the patch widens
+   localparam LAST_X = 12'd1279, LAST_Y = 11'd1023;
+   localparam VIC = 127;
+`elsif HDMI_1080_RASTER
    wire [11:0] cx;   // code 16 counts to 2200 x 1125
    wire [10:0] cy;
    localparam LAST_X = 12'd1919, LAST_Y = 11'd1079;
    localparam VIC = 16;
 `else
-   wire [9:0] cx, cy;    // code 4 counts to 1650 x 750
-   localparam LAST_X = 10'd1279, LAST_Y = 10'd719;
+   // 11 and 10 bits, not 10 and 10: hdmi.sv sizes cx as BIT_WIDTH, which is 11
+   // for code 4 because the raster is 1650 wide.  Declaring a 10-bit wire
+   // truncated cx's top bit at the port, which still displayed -- the bars
+   // simply restarted halfway across -- and so went unnoticed.
+   wire [10:0] cx;
+   wire [9:0]  cy;       // code 4 counts to 1650 x 750
+   localparam LAST_X = 11'd1279, LAST_Y = 10'd719;
    localparam VIC = 4;
 `endif
    wire [23:0] rgb;

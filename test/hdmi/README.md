@@ -15,7 +15,9 @@ pattern in place of the demo's audio.
 ```sh
 make -C test/hdmi                 # 720p60
 make -C test/hdmi MODE=1080       # 1080p60
-make -C test/hdmi program [MODE=1080]
+make -C test/hdmi MODE=1030       # 1080p30 -- same raster as 1080p60, half the clock
+make -C test/hdmi MODE=1280       # 1280x1024 at 60 Hz -- what the Sun-2 uses
+make -C test/hdmi program [MODE=...]
 ```
 
 Eight colour bars with a one-pixel white frame round the raster, so an edge
@@ -25,8 +27,19 @@ a dark screen can still be told apart from a dead clock.
 
 ## What it settled
 
-**Both modes work on a Wukong V1.** 720p60 first, then 1080p60 — the monitor
-reporting it had synchronised on 1920x1080 at a 148.5 MHz pixel clock.
+**720p60 and 1080p60 work on a Wukong V1.** 720p60 first, then 1080p60 — the
+monitor reporting it had synchronised on 1920x1080 at a 148.5 MHz pixel clock.
+
+**1080p30 does not, and the monitor is why.** Same 2200x1125 raster, same
+`VIDEO_ID_CODE 16`, only the two MMCM output dividers doubled — and this
+display reports the signal out of range where it takes both the others. So
+"halve the serial rate" is not free: it has to land on a mode the sink accepts,
+and 30 Hz refresh is not one here. That is what `HDMI720=1` in the Sun-2 build
+exists for — the same 371 MHz serial clock at a raster this monitor does take.
+
+The measurement matters beyond this bench: it means a `HDMI30=1` bitstream that
+shows nothing has told you about your monitor, not about your FPGA, and the
+30 Hz knob cannot be used to test the serial rate on its own.
 
 That matters because 1080p60 **fails a timing check** on this part and works
 anyway:
@@ -58,7 +71,9 @@ test deliberately does not, since producing that bitstream is the point.
 | build | WNS | note |
 |---|---|---|
 | this test, 720p60 | 9.337 ns | nothing else in the design |
+| this test, 1080p30 | 9.098 ns | the 1080p60 raster at the 720p60 clock |
 | this test, 1080p60 | 3.295 ns | still comfortable |
+| this test, 1280x1024 | 5.444 ns | the mode the Sun-2 build settled on |
 | Sun-2 + FB + ILA, 1080p60, BUFG | 1.281 ns | the whole machine |
 | Sun-2 + FB + ILA, 1080p60, BUFIO/BUFR | **-2.992 ns** | the regional clock's cost |
 
