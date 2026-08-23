@@ -31,7 +31,11 @@ set fb       0
 set xy450    0
 set cpu      suska
 set ila      0
-set hdmi30   0
+set hdmimode 1080p60
+set fbdebug  0
+set allowpw  0
+set fbprobe  0
+set fbforce  0
 if {[llength $argv] > 0} { set cpu_hz   [lindex $argv 0] }
 if {[llength $argv] > 1} { set machine  [lindex $argv 1] }
 if {[llength $argv] > 2} { set mb_ether [lindex $argv 2] }
@@ -40,7 +44,11 @@ if {[llength $argv] > 4} { set fb       [lindex $argv 4] }
 if {[llength $argv] > 5} { set xy450    [lindex $argv 5] }
 if {[llength $argv] > 6} { set cpu      [lindex $argv 6] }
 if {[llength $argv] > 7} { set ila      [lindex $argv 7] }
-if {[llength $argv] > 8} { set hdmi30   [lindex $argv 8] }
+if {[llength $argv] > 8} { set hdmimode [lindex $argv 8] }
+if {[llength $argv] > 9} { set fbdebug  [lindex $argv 9] }
+if {[llength $argv] > 10} { set allowpw [lindex $argv 10] }
+if {[llength $argv] > 11} { set fbprobe [lindex $argv 11] }
+if {[llength $argv] > 12} { set fbforce [lindex $argv 12] }
 if {$cpu ne "suska" && $cpu ne "rd68011"} {
     puts "ERROR: CPU must be suska or rd68011, not '$cpu'"
     exit 1
@@ -68,17 +76,83 @@ if {$fb == 1} {
     lappend defines SUN2_FB
 }
 
-# HDMI30=1: drive the display at 1080p30 rather than 1080p60.  The picture is
-# identical; what halves is the TMDS serial rate, from 742 MHz to 371.  The
-# faster one is out of specification for an Artix-7 global buffer and is what
-# QMTech's own reference design does, so it works on some parts and sinks and
-# not others -- a monitor reporting the signal out of range is the symptom.
-if {$hdmi30 == 1} {
-    if {$fb != 1} {
-        puts "ERROR: HDMI30 needs FB=1; there is no display without it"
+# The video mode, which on this part is a question about the TMDS serial clock
+# and not about the picture.  1080p60 needs 742 MHz out of a global buffer that
+# is rated for 628 and an OSERDESE2 rated for 680; it works with little else in
+# the die -- test/hdmi proves that on this board and monitor -- and it does not
+# work in the full machine, which drives 720p60's 371 MHz perfectly on the same
+# bench.  So the default is the mode the board is wired for, and the working
+# answer is the one that fits 1152x900 inside every rating:
+#
+#   1080p60    2200x1125, 148.4375 / 742.1875 MHz.  Needs ALLOW_PW=1.
+#   1080p30    the *same* raster at half the clock.  Not every sink takes it:
+#              the monitor on this bench rejects 30 Hz outright.
+#   720p60     1650x750 at the same half clock, a raster more sinks accept.
+#              Diagnostic only -- 900 lines do not fit in 720 -- so FBDEBUG=1.
+#   1280x1024  1688x1066, 108.125 / 540.625 MHz, VESA DMT rather than CEA.
+#              Inside both ratings, and 1152x900 fits with a 64x62 border.
+#
+if {$hdmimode ne "1080p60" && $fb != 1} {
+    puts "ERROR: HDMI_MODE=$hdmimode needs FB=1; there is no display without it"
+    exit 1
+}
+switch -- $hdmimode {
+    1080p60   { }
+    1080p30   { lappend defines SUN2_HDMI_HALFRATE }
+    1280x1024 { lappend defines SUN2_HDMI_SXGA }
+    720p60    {
+        if {$fbdebug != 1} {
+            puts "ERROR: HDMI_MODE=720p60 needs FBDEBUG=1 -- 1152x900 does not"
+            puts "       fit in 720 lines, so there is no honest way to show"
+            puts "       the frame buffer at that raster"
+            exit 1
+        }
+        lappend defines SUN2_HDMI_HALFRATE
+        lappend defines SUN2_HDMI_720P
+    }
+    default {
+        puts "ERROR: HDMI_MODE must be 1080p60, 1080p30, 720p60 or 1280x1024,"
+        puts "       not '$hdmimode'"
         exit 1
     }
-    lappend defines SUN2_HDMI_30HZ
+}
+
+# FBDEBUG=1: drive the display from a test pattern rather than fb_scanout, and
+# put the video domain on the LED header in place of todebug.  For finding out
+# why a display that test/hdmi drives happily shows nothing from the Sun-2.
+if {$fbdebug == 1} {
+    if {$fb != 1} {
+        puts "ERROR: FBDEBUG needs FB=1"
+        exit 1
+    }
+    lappend defines SUN2_FB_DEBUG
+}
+
+# FBPROBE=1: the real display, with the path to it on the LED header instead
+# of todebug.  For a screen that is black inside a raster the monitor accepts,
+# which is what every link in the chain looks like from outside -- DISPEN, the
+# fetch, the answer, the data, the pixel.  One latch each; see wukong_top.sv.
+if {$fbprobe == 1} {
+    if {$fb != 1} {
+        puts "ERROR: FBPROBE needs FB=1"
+        exit 1
+    }
+    if {$fbdebug == 1} {
+        puts "ERROR: FBPROBE and FBDEBUG both drive extra_leds0; pick one"
+        exit 1
+    }
+    lappend defines SUN2_FB_PROBE
+}
+
+# FBFORCE=1: tie the scan-out's DISPEN high, leaving the video control
+# register itself alone.  Diagnostic: it asks whether everything downstream of
+# DISPEN works, without waiting to find out why the machine has not set it.
+if {$fbforce == 1} {
+    if {$fb != 1} {
+        puts "ERROR: FBFORCE needs FB=1"
+        exit 1
+    }
+    lappend defines SUN2_FB_FORCE_EN
 }
 
 # The Xylogics 450 is a MultiBus card; a 2/50 takes a 451 on the VME bus, which
@@ -106,7 +180,7 @@ if {$ila == 1} {
 
 set part    [board_part $board]
 set ipdir   $top/build/ip/$board
-set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu[expr {$cpu_hz / 1000000}][expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$hdmi30 == 1 ? "-hdmi30" : ""}]
+set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu[expr {$cpu_hz / 1000000}][expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$hdmimode ne "1080p60" ? "-$hdmimode" : ""}][expr {$fbdebug == 1 ? "-fbdbg" : ""}][expr {$fbprobe == 1 ? "-fbprobe" : ""}][expr {$fbforce == 1 ? "-fbforce" : ""}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir
@@ -228,16 +302,16 @@ read_verilog -sv [list \
     $top/boards/Wukong/wb_to_mig_ui.sv \
     $top/boards/Wukong/mig_arb.sv \
     $top/boards/Wukong/fb_scanout.sv \
-    $top/Inputs/hdmi/src/tmds_channel.sv \
-    $top/Inputs/hdmi/src/serializer.sv \
-    $top/Inputs/hdmi/src/packet_assembler.sv \
-    $top/Inputs/hdmi/src/packet_picker.sv \
-    $top/Inputs/hdmi/src/audio_clock_regeneration_packet.sv \
-    $top/Inputs/hdmi/src/audio_info_frame.sv \
-    $top/Inputs/hdmi/src/audio_sample_packet.sv \
-    $top/Inputs/hdmi/src/auxiliary_video_information_info_frame.sv \
-    $top/Inputs/hdmi/src/source_product_description_info_frame.sv \
-    $top/Inputs/hdmi/src/hdmi.sv \
+    $top/build/inputs/hdmi/src/tmds_channel.sv \
+    $top/build/inputs/hdmi/src/serializer.sv \
+    $top/build/inputs/hdmi/src/packet_assembler.sv \
+    $top/build/inputs/hdmi/src/packet_picker.sv \
+    $top/build/inputs/hdmi/src/audio_clock_regeneration_packet.sv \
+    $top/build/inputs/hdmi/src/audio_info_frame.sv \
+    $top/build/inputs/hdmi/src/audio_sample_packet.sv \
+    $top/build/inputs/hdmi/src/auxiliary_video_information_info_frame.sv \
+    $top/build/inputs/hdmi/src/source_product_description_info_frame.sv \
+    $top/build/inputs/hdmi/src/hdmi.sv \
     $top/boards/Wukong/wukong_top.sv \
 ]
 
@@ -291,6 +365,25 @@ if {$xy450 == 1} {
 # ---------------------------------------------------------------------------
 # Synthesis and implementation
 # ---------------------------------------------------------------------------
+# Echo what the knobs actually resolved to.  A define that is appended and read
+# by nothing, or -- worse -- one that is *not* appended, produces a bitstream
+# that builds cleanly, passes every gate below and quietly has a whole
+# subsystem missing.  Both have happened here: SUN2_HDMI_30HZ was consumed by
+# no file for the life of the knob, and a refactor of this block once dropped
+# SUN2_FB, giving a build with no frame buffer, no HDMI, no keyboard SCC and no
+# driver at all on extra_leds0 -- which read on the bench as three unrelated
+# faults.  One line makes it visible in the log.
+puts "== defines: $defines =="
+
+# An implicit net is how a whole feature reaches a board dead.  Vivado's
+# default for an undeclared identifier is to invent a one-bit undriven wire and
+# warn; `fb_video_en' was never connected at the machine instantiation, so the
+# frame buffer's DISPEN was a constant 0 in every bitstream ever built, and the
+# only symptom was a black screen.  Simulation could not catch it -- tb_sun2
+# drives top_fpga directly, below the layer with the mistake in it.  Make it an
+# error: a signal worth naming is worth declaring.
+set_msg_config -id {Synth 8-6901} -new_severity ERROR
+
 synth_design -top wukong_top -part $part \
     -include_dirs [list $top/rtl/sun2-common $top/build/rom] \
     -verilog_define $defines \
@@ -300,6 +393,17 @@ synth_design -top wukong_top -part $part \
 write_checkpoint -force $outdir/post_synth.dcp
 report_utilization -file $outdir/post_synth_utilization.rpt
 report_clocks      -file $outdir/clocks.rpt
+
+# ... and check the headline feature is actually in the netlist, because the
+# echo above only proves what was passed, not what was read.  The pulse width
+# gate below cannot catch this: with no HDMI clock in the design there is
+# nothing to violate, so a frame buffer that vanished reports "clean".
+if {$fb == 1 && [llength [get_cells -quiet -hier -filter {NAME =~ *hdmiclk*}]] == 0} {
+    puts "ERROR: FB=1 but the netlist has no HDMI clock generator."
+    puts "       SUN2_FB did not reach the RTL, or hdmi_clkgen was optimised"
+    puts "       away.  A bitstream from here has no display in it."
+    exit 1
+}
 
 opt_design
 
@@ -370,10 +474,24 @@ foreach line [split [report_pulse_width -all_violators -return_string] "\n"] {
     }
 }
 if {[llength $pwbad]} {
-    puts "ERROR: pulse width / period violations -- a clock is faster than the"
-    puts "       resource carrying it, whatever the data paths say:"
-    foreach l $pwbad { puts "         $l" }
-    exit 1
+    if {$allowpw == 1} {
+        # Knowingly, and only ever knowingly.  test/hdmi drives this same
+        # block on this same board at 1080p60, violating the BUFG minimum
+        # period by 245 ps, and a monitor synchronises on it and displays the
+        # picture -- so the rating is conservative here and refusing the build
+        # would cost the machine its display for no measured reason.  What
+        # must not happen is that being forgotten, so it is a knob rather than
+        # a deletion, and the violations are printed either way.
+        puts "== pulse width / period violations, ALLOWED by ALLOW_PW=1 =="
+        foreach l $pwbad { puts "     $l" }
+        puts "== see test/hdmi/README.md for what was measured on the bench =="
+    } else {
+        puts "ERROR: pulse width / period violations -- a clock is faster than the"
+        puts "       resource carrying it, whatever the data paths say:"
+        foreach l $pwbad { puts "         $l" }
+        puts "       ALLOW_PW=1 builds anyway, if you know why that is safe."
+        exit 1
+    }
 }
 puts "== pulse width and period checks clean =="
 

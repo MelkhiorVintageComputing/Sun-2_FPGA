@@ -277,13 +277,35 @@ to check rather than a symptom of failure.
   seeing it means the SCC is not decoding -- type 0 page 0xF00.
 
 Both boards close timing with it: V1 at WNS 1.281, V3 at 1.262 as a 2/50 and
-0.969 as a 2/120; with a disk as well, V3 gives 1.248. **The one thing simulation cannot answer** is whether the
-part really drives 1.485 Gb/s per TMDS lane. The 5x clock is on a plain BUFG, above what an Artix-7 is rated for,
-which is what QMTech's own 1080p design for this board does; there is no
-failing timing path because the clock only feeds OSERDES hard blocks, so the
-tools have nothing to report either way. If the screen is unstable or the sink
-will not lock, that is where to look, and the fix is 1080p30 -- VIDEO_ID_CODE
-34 in `wukong_top.sv`, half the serial rate for the same picture.
+0.969 as a 2/120; with a disk as well, V3 gives 1.248.
+
+**The part does drive 1.485 Gb/s per TMDS lane, and this is measured.**
+`test/hdmi` is the same `hdmi` block, the same OBUFDS, the same MMCM recipe and
+the same pins, with a colour-bar pattern in place of the Sun-2, and on a Wukong
+V1 it displays 1080p60 -- the monitor reporting 1920x1080 at a 148.5 MHz pixel
+clock -- as well as 720p60. So the BUFG, the serialisers and the cable are not
+in doubt; see `test/hdmi/README.md`.
+
+The 5x clock is nevertheless on a plain BUFG above what an Artix-7 is rated
+for, which is what QMTech's own 1080p design for this board does. **Two things
+this file used to say about that are wrong**, and both cost time:
+
+* *"There is no failing timing path, so the tools have nothing to report."*
+  They report it clearly, as a **pulse width** check rather than a setup one:
+  `Min Period  BUFG/I  required 1.592  actual 1.347  slack -0.245`. `report_timing_summary`
+  does not carry it, which is why it went unnoticed for so long; `report_pulse_width`
+  does. `syn/build.tcl` now gates on it beside WNS and WHS, and `ALLOW_PW=1`
+  prints the violations and builds anyway -- which is the right answer *here*,
+  because the bench says the buffer works, but should never be passed without
+  that kind of evidence.
+* *"The fix is 1080p30 -- VIDEO_ID_CODE 34."* That produces **no signal at
+  all**. This library implements codes 1, 2/3, 4, 16, 17/18, 19 and 20 with no
+  `default` arm, so an unsupported code leaves `frame_width` and `frame_height`
+  undriven and nothing is generated; its `BIT_HEIGHT` is also 11 bits only for
+  code 16, and 1125 lines does not fit in the 10 the others get. 1080p30 is the
+  *same* 2200x1125 raster as 1080p60 -- only the pixel clock differs -- so the
+  knob is **`HDMI30=1`**, which halves the clock in `hdmi_clkgen.sv` and leaves
+  the code at 16.
 
 ### The disk, if it is built
 

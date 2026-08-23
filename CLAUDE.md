@@ -16,6 +16,7 @@ make -C sim check MACHINE=vme             # pass/fail on the console log
 make -C sim board [BOARD_MEM=ddr3] [CPU=rd68011]   # as it will be on the Wukong
 make -C syn ip [BOARD=v3]                 # generate the MIG DDR3 controller (once per board)
 make -C syn bitstream [MACHINE=vme] [CPU_HZ=40000000] [BOARD=v3] [XY450=1] [CPU=rd68011]
+make -C syn bitstream FB=1 HDMI_MODE=1280x1024      # the display mode this board can drive
 make -C syn ip-ila; make -C syn bitstream ILA=1  # fit the ILA on the MMU's debug bus
 make -C syn program ILA=1 [same knobs]    # JTAG; `hw' leaves the Hardware Manager open
 tools/mkxydisk -o build/disk/xy0.img       # a labelled, bootable disk image
@@ -196,6 +197,19 @@ does not divide the 1 GHz VCO exactly, so there is no silent rounding.
 
 Vivado is expected at `/opt/Xilinx/2025.2/Vivado`; override `XILINX_VIVADO`.
 Neither `make` in `sim/` nor `syn/` needs `settings64.sh` sourced.
+
+**The screen works on a board.** A MultiBus build with `CPU=rd68011`, `FB=1`
+and `HDMI_MODE=1280x1024` on a Wukong V1 puts the boot PROM's banner, the
+bootloader and a netbooting SunOS kernel on a real monitor -- CPU, MMU,
+Wishbone bridge, DDR3, `fb_scanout`, TMDS, sink. The serial port is silent
+while it does, which is correct and not a fault: `sunmon.c:396` sets
+`g_outsink = OUTSCREEN` whenever `s2fbthere()` succeeds and offers no way to
+ask for both.
+
+Two things had to be true at once and neither was. **1080p60 is more than the
+full design can clock** -- see the trap below -- and **`fb_video_en` was never
+connected**, so DISPEN was a constant 0 in every bitstream ever built. Each
+alone shows a black screen, which is why they took a session to separate.
 
 **SunOS runs on a board.** A MultiBus V3 build with `CPU=rd68011` at 20 MHz
 netboots SunOS 4.0.3 on a Wukong V1, past the creation of process 1 and into
@@ -653,6 +667,68 @@ IOPB came back with the driver's own zeroes in it, reading as success.
   acknowledgements to 5 — while the bus error count, its sequence and the
   console text are all untouched. Measured, not assumed.
 
+* **A port left off an instantiation is a feature that reaches the board
+  dead.** `wukong_top.sv` named every port of `top machine (...)` except
+  `fb_video_en`, so Vivado invented a one-bit undriven wire, tied it low, and
+  `fb_scanout`'s `visible = in_x && in_y && ven_s2` was constant 0 in every
+  bitstream this project has ever produced. The frame buffer could not have
+  displayed at any resolution.
+
+  **Nothing in the flow could catch it, and that is the lesson.** `tb_sun2`
+  drives `top_fpga` directly -- one level *below* the layer with the mistake in
+  it, where the port is correctly wired -- so the simulator faithfully wrote
+  0x8000 to the video control register and read it back. `tb_fb_scanout.sv`
+  forces `video_en = 1'b1`, so the unit test and every `make -C sim
+  screenshot` rendered a perfect picture. And `wukong_top.sv` is only ever
+  built for synthesis, where an undeclared identifier is warning `Synth
+  8-6901` rather than an error. Three independent checks all looked past the
+  one wire.
+
+  `syn/build.tcl` now promotes `Synth 8-6901` to an ERROR, so an implicit net
+  fails the build. When a board symptom survives a simulation that says the
+  RTL is right, suspect the layer the testbench does not instantiate -- and
+  compare the module's port list against the instantiation mechanically rather
+  than by eye. It is one `get_ports`-style diff and it found this in seconds
+  after a day of not finding it.
+* **1080p60 is not a mode this design can drive, and the tools said so all
+  along.** `test/hdmi` -- the same `hdmi` block, the same OBUFDS, the same
+  pins, colour bars and nothing else -- displays 1080p60 on a Wukong V1. The
+  full machine, with the CPU, the MMU, DDR3 and the Ethernet in the same die,
+  does not: the monitor sleeps, or syncs and tears. The discriminator is the
+  TMDS serial clock, and it was measured rather than argued -- the full design
+  drives 720p60's 371 MHz and 1280x1024's 540 MHz perfectly on the same board
+  and the same monitor, and only 742 MHz fails.
+
+  742 MHz breaks two ratings: a 7-series BUFG is good for 628 MHz and an
+  OSERDESE2 for 680. Both appear in `report_pulse_width` as `Min Period`
+  violations -- **not** in `report_timing_summary`, which is why a check on WNS
+  and WHS alone passed them for the life of the project. Vivado reports only
+  the worst resource per clock, so the OSERDES one stays invisible until the
+  BUFG is dealt with. `syn/build.tcl` gates on both now; `ALLOW_PW=1` builds
+  anyway and prints them.
+
+  So `HDMI_MODE=1280x1024` is the answer, added to the library as
+  `patches/hdmi/0001`: 1688x1066 at 108.125 / 540.625 MHz, VESA DMT rather than
+  CEA, which fits the Sun's 1152x900 screen with a 64x62 border. 1080p30 would
+  have been the obvious fix and is not one -- this bench's monitor rejects
+  30 Hz outright -- and no CEA mode with room for 900 lines runs slower than
+  148.5 MHz. Two smaller things fell out of the same hunt: **`HDMI30=1` was
+  appended by `build.tcl` and read by no file in the tree**, so a "1080p30
+  shows nothing" result was really a 1080p60 one; and **`VIDEO_ID_CODE 34` does
+  not work**, not because the library lacks the case -- 34 shares code 16's arm
+  -- but because `BIT_HEIGHT` is 11 bits *only* for code 16, so the same
+  `assign frame_height = 1125` silently becomes 101 under 34.
+* **A define that reaches nothing builds cleanly and hides a whole subsystem.**
+  Losing `SUN2_FB` from `build.tcl` in a refactor gave a bitstream with no
+  frame buffer, no HDMI, no keyboard SCC and **no driver at all on
+  `extra_leds0`** -- because the FBDEBUG assignment lives inside `ifdef
+  SUN2_FB` while the `ifndef SUN2_FB_DEBUG` guard still suppressed `todebug`.
+  On the bench that read as three unrelated faults, and it arrived the same
+  hour as a real power glitch, which made it look like hardware. Every gate in
+  the flow passed, including the pulse width one -- with no HDMI clock in the
+  design there is nothing to violate, so a vanished frame buffer reports
+  *clean*. `build.tcl` echoes `== defines: ... ==` now and hard-fails when
+  `FB=1` leaves no HDMI clock generator in the netlist.
 * **The frame buffer is exempt from the bus timeout, and has to be.** Memory
   was already exempt because DDR3 is slower than the twelve clocks `C_S24`
   allows. The MultiBus frame buffer aperture is answered by the same Wishbone

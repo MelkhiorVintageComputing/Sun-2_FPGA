@@ -273,6 +273,16 @@ module wukong_top #(
    wire [3:0]  wb_sel;
    wire [7:0]  todebug;
 
+   // DISPEN, out of the video control register the machine owns.  Declared
+   // here rather than left to an implicit net at the instantiation: it was
+   // **not connected at all** for the life of the frame buffer, so Vivado
+   // invented a one-bit undriven wire, tied it low, and fb_scanout's
+   // `visible' term was constant 0 on every board that ever ran.  Nothing
+   // caught it -- tb_sun2 drives top_fpga directly, where the port exists, and
+   // tb_fb_scanout forces video_en high -- so the simulator wrote 0x8000 to
+   // the register, every screenshot rendered, and the real screen was black.
+   wire        fb_video_en;
+
    // Whatever sun2_fpga.v is reporting on todebug, straight out to the second
    // LED header.  Same convention as diag_leds0: driven as-is, so a 1 lights
    // the LED on the module those headers take.
@@ -288,7 +298,13 @@ module wukong_top #(
    // a decode match -- is a blur at best and dark at worst, so what belongs on
    // todebug is levels and latched "this has happened at least once" flags.
    // See the comment on todebug in rtl/sun2-common/sun2_fpga.v.
+   // extra_leds0 is driven below, after the video domain it can also report:
+   // see the SUN2_FB_DEBUG block down there.
+`ifndef SUN2_FB_DEBUG
+ `ifndef SUN2_FB_PROBE
    assign extra_leds0 = todebug;
+ `endif
+`endif
    wire        en_boot;
 
    // The debug bus, and the ILA that samples it.  Field map in
@@ -455,6 +471,7 @@ module wukong_top #(
        .diag_leds  (diag_leds0),
        .en_boot    (en_boot),
        .todebug    (todebug),
+       .fb_video_en (fb_video_en),
 `ifdef SUN2_ILA
        .dbg_bus    (dbg_bus),
 `endif
@@ -597,31 +614,216 @@ module wukong_top #(
        .rst_sync_out (pix_rst)
    );
 
-   wire [11:0] cx;
-   wire [10:0] cy;
-   wire [23:0] rgb;
+   //
+   // The raster, which is what the video mode actually is.  hdmi.sv sizes cx
+   // and cy from VIDEO_ID_CODE -- 12 and 11 bits for code 16's 2200x1125, 11
+   // and 10 for code 4's 1650x750 -- so the mode picks the widths as well as
+   // the number, and a wire of the wrong width truncates the counter at the
+   // port rather than failing to compile.
+   //
+`ifdef SUN2_HDMI_SXGA
+   localparam int VIC = 127;                  // 1280x1024 at 60 Hz, VESA DMT
+   localparam int CXW = 12, CYW = 11;         // 1688 x 1066 raster
+   localparam int LAST_X = 1279, LAST_Y = 1023;
+   localparam int SCR_W = 1280, SCR_H = 1024;
+`elsif SUN2_HDMI_720P
+   localparam int VIC = 4;                    // 1280x720p60
+   localparam int CXW = 11, CYW = 10;
+   localparam int LAST_X = 1279, LAST_Y = 719;
+   // fb_scanout keeps the 1080p window on purpose: 900 lines do not fit in
+   // 720, so (SCREEN_H - FB_H)/2 would be negative.  720p is a FBDEBUG-only
+   // mode and the scanout's output is not used in it, so leaving the window
+   // where nothing matches is honest where a negative offset is not.
+   localparam int SCR_W = 1920, SCR_H = 1080;
+`else
+   localparam int VIC = 16;                   // 1920x1080, 60 Hz or 30 by the clock
+   localparam int CXW = 12, CYW = 11;
+   localparam int LAST_X = 1919, LAST_Y = 1079;
+   localparam int SCR_W = 1920, SCR_H = 1080;
+`endif
+   wire [CXW-1:0] cx;
+   wire [CYW-1:0] cy;
+   wire [23:0] rgb, rgb_fb;
 
-   fb_scanout #(.FB_APP_BASE(28'(`FB_WB_BASE * 2))) scanout (
+   // FBFORCE=1 ties the scan-out's DISPEN high, leaving the register itself
+   // alone -- so `fb_video_en' on the FBPROBE ladder still reports what the
+   // machine actually wrote, and one bitstream answers both "is everything
+   // downstream of DISPEN sound?" and "did DISPEN ever get set?".
+`ifdef SUN2_FB_FORCE_EN
+   wire fb_ven_eff = 1'b1;
+`else
+   wire fb_ven_eff = fb_video_en;
+`endif
+
+   fb_scanout #(.FB_APP_BASE(28'(`FB_WB_BASE * 2)),
+                .SCREEN_W(SCR_W), .SCREEN_H(SCR_H)) scanout (
        .ui_clk (ui_clk), .ui_rst (ui_clk_sync_rst),
        .c_addr (c1_addr), .c_req (c1_req), .c_done (c1_done), .c_rdata (c1_rdata),
        .clk_pixel (clk_pixel), .pix_rst (pix_rst),
-       .cx (cx), .cy (cy), .video_en (fb_video_en), .rgb (rgb)
+       .cx (12'(cx)), .cy (11'(cy)), .video_en (fb_ven_eff), .rgb (rgb_fb)
    );
+
+`ifndef SUN2_FB_DEBUG
+   assign rgb = rgb_fb;
+`endif
+
+`ifdef SUN2_FB_DEBUG
+   //
+   // FBDEBUG=1: the video path with the Sun-2 taken out of it.
+   //
+   // test/hdmi drives this same block, on this same board, at this same rate,
+   // and a monitor displays it -- so the question is what the Sun-2 build does
+   // differently.  This drives the encoder from the test's own colour bars
+   // instead of fb_scanout's pixels, which splits the remaining difference in
+   // one build: bars mean the clocks, the reset and the encoder are sound and
+   // fb_scanout or the DDR3 read path is not; no bars mean the opposite, and
+   // fb_scanout is innocent.
+   //
+   // Eight bars with a one-pixel white frame, exactly as test/hdmi draws them,
+   // so the two can be compared by eye.
+   wire [2:0] dbg_bar = cx[CXW-2 -: 3];
+   assign rgb = (cy == CYW'(0) || cy == CYW'(LAST_Y) ||
+                 cx == CXW'(0) || cx == CXW'(LAST_X))
+                ? 24'hFFFFFF
+                : {{8{dbg_bar[2]}}, {8{dbg_bar[1]}}, {8{dbg_bar[0]}}};
+
+   // And the video domain on the LED header, because none of it is observable
+   // otherwise: hdmi_locked has exactly one consumer, pix_rst, and nothing
+   // downstream reports whether either ever came true.  A heartbeat rather
+   // than the clock itself, since a pixel clock on an LED is invisible.
+   reg [24:0] pix_hb = 25'd0;
+   always @(posedge clk_pixel) pix_hb <= pix_hb + 1'b1;
+
+   //
+   // Is the 742 MHz clock alive?
+   //
+   // Nothing else in the design can say.  clk_pixel_x5 has exactly two loads,
+   // the OSERDESE2 CLK pins of the four TMDS lanes, and a dead or degraded 5x
+   // clock looks from every other vantage point exactly like a working one:
+   // the MMCM still locks, the pixel clock still runs, cx and cy still count,
+   // and the serialisers simply emit nothing.  That is the symptom exactly,
+   // and this is the one clock in the design knowingly outside what an Artix-7
+   // global buffer is rated for -- so it is the one thing test/hdmi does not
+   // rule out, because a small design and a full one do not route it alike.
+   //
+   // A single toggle flip-flop makes a 371 MHz square wave out of it.  Sampled
+   // on clk50_g that is an asynchronous read of an unrelated fast clock, which
+   // is to say a random bit -- and "the bit changes" is the whole test.  It is
+   // deliberately not a counter on clk_pixel_x5: a counter would not close
+   // timing at 1.347 ns, where a toggle's Q-to-D is a local loop that does.
+   //
+   // Adding a fabric load to that net can move its placement, so this build is
+   // not bit-identical to the one measured before it.  That is the price of
+   // looking.
+   //
+   (* ASYNC_REG = "TRUE" *) reg x5_tog = 1'b0;
+   always @(posedge clk_pixel_x5) x5_tog <= ~x5_tog;
+
+   (* ASYNC_REG = "TRUE" *) reg [2:0] x5_sync = 3'b000;
+   always @(posedge clk50_g) x5_sync <= {x5_sync[1:0], x5_tog};
+
+   reg        x5_alive = 1'b0;
+   reg [24:0] x5_ctr   = 25'd0;
+   always @(posedge clk50_g)
+      if (x5_sync[2] != x5_sync[1]) begin
+         x5_alive <= 1'b1;
+         x5_ctr   <= x5_ctr + 1'b1;
+      end
+
+   // And lock loss, armed only once lock has been seen.  The first version of
+   // this latched on any low and so was set by the microseconds between
+   // configuration and the MMCM acquiring -- it read 1 on a board whose lock
+   // had never dropped, which is exactly the reading it existed to rule out.
+   reg locked_seen = 1'b0, locked_ever_lost = 1'b0;
+   always @(posedge clk50_g) begin
+      if (hdmi_locked)                    locked_seen      <= 1'b1;
+      if (locked_seen && !hdmi_locked)    locked_ever_lost <= 1'b1;
+   end
+
+   // The video domain on the LED header instead of todebug, for this build
+   // only.  Losing the machine's own ladder is the price of seeing this one,
+   // and the machine is not what is being asked about here.
+   //   7  pixel-clock heartbeat     the pixel clock is running at all
+   //   6  x5_alive                  the 742 MHz clock has toggled, ever
+   //   5  hdmi_locked               the HDMI MMCM is locked now
+   //   4  pix_rst                   the video block is still held in reset
+   //   3  x5 heartbeat              ... and is still toggling
+   //   2  init_calib_complete       DDR3 is up
+   //   1  locked_ever_lost          lock has dropped since it was first had
+   //   0  1                         the ladder itself is alive
+   assign extra_leds0 = {pix_hb[24], x5_alive, hdmi_locked, pix_rst,
+                         x5_ctr[24], init_calib_complete, locked_ever_lost, 1'b1};
+`endif
+
+`ifdef SUN2_FB_PROBE
+   //
+   // FBPROBE=1: the real display, with the path to it on the LED header.
+   //
+   // The frame buffer has never displayed on hardware.  Until 1280x1024 there
+   // was no video path to carry it, so a black screen inside a raster the
+   // monitor syncs on is the first time the question can even be asked -- and
+   // "black" is what every failure along the chain looks like from outside.
+   // So the chain goes on the ladder, one latch per link, because any of them
+   // alone is consistent with what the screen shows:
+   //
+   //   DISPEN -> fb_scanout asks DDR3 -> DDR3 answers -> the answer is not
+   //   zeros -> a pixel comes out non-black
+   //
+   // Latches rather than levels, for the reason the whole todebug convention
+   // exists: a request at ui_clk is invisible on an LED, and "too fast to see"
+   // cannot be told from "never happened".
+   //
+   reg [24:0] pix_hb = 25'd0;
+   always @(posedge clk_pixel) pix_hb <= pix_hb + 1'b1;
+
+   reg fbp_req = 1'b0, fbp_done = 1'b0, fbp_data = 1'b0;
+   always @(posedge ui_clk) begin
+      if (ui_clk_sync_rst) begin
+         fbp_req  <= 1'b0;
+         fbp_done <= 1'b0;
+         fbp_data <= 1'b0;
+      end else begin
+         if (c1_req)                          fbp_req  <= 1'b1;
+         if (c1_done)                         fbp_done <= 1'b1;
+         if (c1_done && (c1_rdata != 128'h0)) fbp_data <= 1'b1;
+      end
+   end
+
+   // ... and the far end: did fb_scanout ever put a non-black pixel out?  With
+   // a black screen, this one bit says whether to look upstream of the shifter
+   // or downstream of it.
+   reg fbp_pix = 1'b0;
+   always @(posedge clk_pixel)
+      if (pix_rst)          fbp_pix <= 1'b0;
+      else if (rgb_fb != 24'h0) fbp_pix <= 1'b1;
+
+   //   7  pixel-clock heartbeat     the pixel clock is running
+   //   6  fb_video_en               DISPEN: the PROM's finit() enabled video
+   //   5  fb_scanout asked DDR3     ever
+   //   4  DDR3 answered it          ever
+   //   3  the answer was non-zero   ever -- so there are pixels in memory
+   //   2  init_calib_complete       DDR3 is up
+   //   1  a non-black pixel came out of fb_scanout
+   //   0  1                         the ladder itself is alive
+   assign extra_leds0 = {pix_hb[24], fb_video_en, fbp_req, fbp_done,
+                         fbp_data, init_calib_complete, fbp_pix, 1'b1};
+`endif
 
    // DVI rather than full HDMI: no audio to send, and it costs less.  Every
    // HDMI sink accepts a DVI signal.
-   // Always code 16, even at 30 Hz.  1080p30 is the *same* 2200x1125 raster as
-   // 1080p60 -- only the pixel clock differs -- so HDMI30 halves the clock in
-   // hdmi_clkgen.sv and changes nothing here.  In DVI mode no infoframe is
-   // sent, so the code number never reaches the sink either.
+   // Code 16 at both 60 Hz and 30: 1080p30 is the *same* 2200x1125 raster as
+   // 1080p60, so HDMI30 halves the clock in hdmi_clkgen.sv and changes nothing
+   // here.  HDMI720 is a different raster and so does change the code.  In DVI
+   // mode no infoframe is sent, so the number never reaches the sink either.
    //
    // Not code 34, which is what 1080p30 is called and what BRINGUP.md used to
-   // advise: this library implements 1, 2/3, 4, 16, 17/18, 19 and 20 and has
-   // no default arm, so an unsupported code leaves frame_width and
-   // frame_height undriven and nothing is generated at all -- the monitor sees
-   // no signal and sleeps.  Its BIT_HEIGHT is also 11 bits only for code 16,
-   // and 1125 lines does not fit in the 10 the others get.
-   hdmi #(.VIDEO_ID_CODE(16),          // 1920x1080, 60 Hz or 30 by the clock
+   // advise.  The library does handle it -- 34 shares code 16's case arm -- but
+   // `BIT_HEIGHT' is 11 bits *only* for code 16, so under 34 the very same
+   // `assign frame_height = 1125' lands in a 10-bit signal and becomes 101.
+   // The raster is not undriven, it is silently truncated to 2200x101, which
+   // the monitor reads as no signal at all.  A parameter that sizes a signal
+   // from a mode number is a trap of a shape worth remembering.
+   hdmi #(.VIDEO_ID_CODE(VIC),         // see the raster block above
           .DVI_OUTPUT(1'b1),
           .VIDEO_REFRESH_RATE(60.0),   // audio N/CTS only, and DVI sends none
           .IT_CONTENT(1'b1),

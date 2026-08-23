@@ -60,10 +60,36 @@ CPU ?= suska
 # different artefact, and BRINGUP.md explains when it is worth building one.
 ILA ?= 0
 
-# Drive the display at 1080p30 instead of 1080p60.  Same picture, half the TMDS
-# serial rate -- reach for it when a monitor will not lock or reports the
-# signal out of range.  Needs FB=1.
-HDMI30 ?= 0
+# The video mode.  On this part that is a question about the TMDS serial clock:
+# 1080p60 asks a global buffer rated for 628 MHz to carry 742, which works with
+# little else in the die and does not work in the full machine.  1280x1024 is
+# the mode that fits the Sun-2's 1152x900 screen inside every rating.
+#
+#   1080p60    the default, and what the board is wired for.  Needs ALLOW_PW=1.
+#   1080p30    same raster, half the clock -- but many sinks reject 30 Hz.
+#   720p60     half the clock at a raster more sinks take.  FBDEBUG=1 only.
+#   1280x1024  108.125 / 540.625 MHz, VESA DMT.  Needs FB=1.
+#
+HDMI_MODE ?= 1080p60
+
+# Drive the display from a test pattern instead of the frame buffer, and put
+# the video domain on the LED header.  Needs FB=1.  See test/hdmi/README.md.
+FBDEBUG ?= 0
+
+# Drive the real display, but put the path to it on the LED header: DISPEN, the
+# DDR3 fetch, its answer, whether that answer was non-zero, and whether a
+# non-black pixel came out.  For a black screen the monitor is happy to sync
+# on.  Needs FB=1, and is exclusive with FBDEBUG.
+FBPROBE ?= 0
+
+# Tie the scan-out's DISPEN high, leaving the video control register alone.
+# Answers "is everything past DISPEN sound?" on its own.  Needs FB=1.
+FBFORCE ?= 0
+
+# Build even though a clock exceeds the rating of the resource carrying it.
+# 1080p60's TMDS clock does, by 245 ps on the BUFG, and works on the bench --
+# test/hdmi is the evidence.  Off by default so it has to be chosen.
+ALLOW_PW ?= 0
 
 # Where hw_server is listening for the JTAG cable.  localhost:3121 is a local
 # one; override for a board on another machine.
@@ -72,7 +98,7 @@ HW_URL ?= localhost:3121
 IPDIR   = $(TOP)/build/ip/$(BOARD)/sun2_mig
 ILADIR  = $(TOP)/build/ip/$(BOARD)/sun2_ila
 TAG     = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)
-OUTDIR  = $(TOP)/build/syn/$(BOARD)-$(MACHINE)$(TAG)-cpu$(shell expr $(CPU_HZ) / 1000000)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(ILA)),-ila,)$(if $(filter 1,$(HDMI30)),-hdmi30,)
+OUTDIR  = $(TOP)/build/syn/$(BOARD)-$(MACHINE)$(TAG)-cpu$(shell expr $(CPU_HZ) / 1000000)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(ILA)),-ila,)$(if $(filter-out 1080p60,$(HDMI_MODE)),-$(HDMI_MODE),)$(if $(filter 1,$(FBDEBUG)),-fbdbg,)$(if $(filter 1,$(FBPROBE)),-fbprobe,)$(if $(filter 1,$(FBFORCE)),-fbforce,)
 # Absolute, because the recipes below run Vivado from $(WORKDIR) and $(OUTDIR)
 # is relative to here: a relative path resolves against the wrong directory and
 # program.tcl reports a bitstream that was never at that address.
@@ -109,10 +135,11 @@ inputs:
 	$(TOP)/tools/patch_inputs.sh Wish82586
 	$(TOP)/tools/patch_inputs.sh Wish5380
 	$(TOP)/tools/patch_inputs.sh Suska_Configware
+	$(TOP)/tools/patch_inputs.sh hdmi
 
 bitstream: ip rom inputs $(if $(filter 1,$(ILA)),ip-ila,) | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
-		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB) $(XY450) $(CPU) $(ILA) $(HDMI30)
+		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB) $(XY450) $(CPU) $(ILA) $(HDMI_MODE) $(FBDEBUG) $(ALLOW_PW) $(FBPROBE) $(FBFORCE)
 	@echo "bitstream: $(BIT)"
 
 # Programming.  Same knobs as bitstream, so `make program ILA=1 CPU=rd68011
