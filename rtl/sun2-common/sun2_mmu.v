@@ -21,12 +21,17 @@ module sun2_mmu(input CLK,
 
 		/* MMU outputs */
 		output [15:0] ctx_out,
+		// Which of the two contexts this access is translating through.
+		// Purely for the debug bus: the register file shows both halves,
+		// but only this says which one the segment map was indexed with.
+		output [2:0]  cx_dbg,
 		output [7:0]  ia_smap2pmap,
 		output [11:0] ma_pmap2devices,
 		output [11:0] ps_pmap2devices
 );
 
    wire [2:0] 			 cx_ctx2smap; /* cx_ctx2smap is purely internal, ctx_out is the variant visible to the CPU */
+   assign cx_dbg = cx_ctx2smap;
    
    // Context register
    ctx_reg ctx(.CLK(CLK),

@@ -106,7 +106,10 @@ set P(smap) $byport(4)
 set P(ps)   $byport(5)
 set P(ma)   $byport(6)
 set P(verd) $byport(7)
-foreach k {addr fc hand cs smap ps ma verd} {
+set P(data) $byport(8)
+set P(ctx)  $byport(9)
+set P(cx)   $byport(10)
+foreach k {addr fc hand cs smap ps ma verd data ctx cx} {
     puts "== probe $k: [get_property NAME $P($k)] port [get_property PROBE_PORT $P($k)] width [get_property WIDTH $P($k)] =="
 }
 
@@ -168,6 +171,24 @@ switch -- $mode {
                # kernel's own MOVES into user space.
                set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
                set_property TRIGGER_COMPARE_VALUE eq3'b010   $P(fc) }
+    ctxwr { # a write to either context register.  They live in one word at
+            # FC_MAP offset 6 -- supervisor in the even byte, user in the odd
+            # -- so P_A[23:1] is 3 for both and UDS/LDS says which.  A context
+            # switch writes the user byte; if this never fires, every process
+            # is sharing one context.
+            set_property TRIGGER_COMPARE_VALUE eq3'b011      $P(fc)
+            set_property TRIGGER_COMPARE_VALUE eq23'h000003  $P(addr)
+            set_property TRIGGER_COMPARE_VALUE eq6'bX0XXXX   $P(hand) }
+    ctxnz { # a context register write with a NON-ZERO value.  The PROM sets
+            # both contexts to zero early in every boot and would otherwise
+            # take the trigger every time; SunOS hands a process a context of
+            # its own, 1..7, so a nonzero value is the kernel and not the
+            # monitor.  A byte write drives the value on both halves of the
+            # bus, so the data word is 0x0101 for context 1 and so on.
+            set_property TRIGGER_COMPARE_VALUE eq3'b011      $P(fc)
+            set_property TRIGGER_COMPARE_VALUE eq23'h000003  $P(addr)
+            set_property TRIGGER_COMPARE_VALUE eq6'bX0XXXX   $P(hand)
+            set_property TRIGGER_COMPARE_VALUE neq16'h0000   $P(data) }
     scc  { # any access in the console SCC's device page, 0xEEC800..0xEECFFF.
            # dbg_addr is P_A[23:1], so the page is the top 13 bits of 0x776400
            # and the low ten are don't-care.
@@ -179,7 +200,7 @@ switch -- $mode {
     fc1  { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
            set_property TRIGGER_COMPARE_VALUE eq3'b001   $P(fc) }
     as   { set_property TRIGGER_COMPARE_VALUE eq6'b0XXXXX $P(hand) }
-    default { puts "ERROR: MODE must be err, fc1, as, supw, scc, uerr, uerr2, uonly, uprog, uprogerr or reset, not '$mode'"; exit 1 }
+    default { puts "ERROR: MODE must be err, fc1, as, supw, scc, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz or reset, not '$mode'"; exit 1 }
 }
 
 # Capture control: keep bus cycles, drop the idle clocks between them.  4096

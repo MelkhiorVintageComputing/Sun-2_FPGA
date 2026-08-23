@@ -128,8 +128,13 @@ puts "== generating sun2_ila for Wukong $board ($part) =="
 create_ip -name ila -vendor xilinx.com -library ip \
           -module_name sun2_ila -dir $ipdir
 
+# The probe count first, on its own.  set_property -dict is atomic and
+# validated as a whole, so naming C_PROBE8_WIDTH while the core still has eight
+# probes invalidates the entire dict -- silently: the IP keeps its old
+# configuration and only the generated .xci shows it.
+set_property CONFIG.C_NUM_OF_PROBES {11} [get_ips sun2_ila]
+
 set_property -dict [list \
-    CONFIG.C_NUM_OF_PROBES     {8} \
     CONFIG.C_DATA_DEPTH        {4096} \
     CONFIG.C_INPUT_PIPE_STAGES {2} \
     CONFIG.C_EN_STRG_QUAL      {1} \
@@ -145,6 +150,9 @@ set_property -dict [list \
     CONFIG.C_PROBE5_WIDTH {12} \
     CONFIG.C_PROBE6_WIDTH {12} \
     CONFIG.C_PROBE7_WIDTH {6} \
+    CONFIG.C_PROBE8_WIDTH {16} \
+    CONFIG.C_PROBE9_WIDTH {8} \
+    CONFIG.C_PROBE10_WIDTH {3} \
 ] [get_ips sun2_ila]
 
 generate_target {instantiation_template synthesis simulation} [get_ips sun2_ila]

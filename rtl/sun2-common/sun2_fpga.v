@@ -106,7 +106,7 @@ module sun2_fpga(input         cpu_clk,
 		 // entry a later FC=3 read gets back?  Packed here, threaded
 		 // out the way todebug is, and sampled in the board layer --
 		 // see the field map at the assignment below.
-		 output [73:0] dbg_bus,
+		 output [100:0] dbg_bus,
 `endif
 		 /* wishbone */
 		 output        wb_cyc_o,
@@ -300,6 +300,7 @@ module sun2_fpga(input         cpu_clk,
    wire [23:0] 			 pa_forshow; // more readbable as a wave, no functional use
    // MMU & control layers
    wire [15:0] 			 ctx_out;
+   wire [2:0] 			 cx_dbg;
    wire [7:0] 			 ia_smap2pmap;
    wire [11:0] 			 ma_pmap2devices;
    wire [11:0] 			 ps_pmap2devices;
@@ -335,6 +336,7 @@ module sun2_fpga(input         cpu_clk,
 		.C_S6(C_S6),
 		/* MMU outputs */
 		.ctx_out(ctx_out),
+		.cx_dbg(cx_dbg),
 		.ia_smap2pmap(ia_smap2pmap),
 		.ma_pmap2devices(ma_pmap2devices),
 		.ps_pmap2devices(ps_pmap2devices)
@@ -1447,13 +1449,29 @@ module sun2_fpga(input         cpu_clk,
    //   17:6   ma_pmap2devices    page map physical address
    //    5:0   VALID PROTERR_raw PROTERR TIMEOUT ERR MATCH_MEM
    //
+   // and, added after a session of inferring all three from bus behaviour:
+   //
+   //   89:74   the data on the bus -- what the CPU is writing, or what the
+   //           machine is returning.  Without it a capture can say a register
+   //           was written but not with what, which is the difference between
+   //           watching a context switch and knowing which context.
+   //   97:90   both context registers, supervisor half then user half.  They
+   //           share a word and are written a byte at a time; seeing them
+   //           apart is the only way to catch one write moving both.
+   //  100:98   the context the segment map was actually indexed with, which
+   //           is neither of the above but a choice between them made by
+   //           P_FC[2] -- and FC 3, control space, counts as user.
+   //
    // MATCH_MEM rather than anything about DVMA, which sun2_fpga cannot see --
    // top_fpga.v muxes the master onto these same wires, deliberately, so that
    // nothing downstream knows DVMA exists.  MATCH_MEM is the term that decides
    // TIMEOUT: memory is exempt from the bus timeout, so it says directly
    // whether the cycle was headed for RAM or was left to time out.
    //
-   assign dbg_bus = { P_A,                                        // 73:51
+   assign dbg_bus = { cx_dbg,                                      // 100:98
+		      ctx_out[11:8], ctx_out[3:0],                //  97:90
+		      (P_RW_n ? P_DOUT : P_DIN),                  //  89:74
+		      P_A,                                        // 73:51
 		      P_FC,                                       // 50:48
 		      P_AS_n, P_RW_n, P_UDS_n, P_LDS_n,           // 47:44
 		      P_DTACK_n, P_BERR_n,                        // 43:42
