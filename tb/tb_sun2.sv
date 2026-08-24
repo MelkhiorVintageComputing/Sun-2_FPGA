@@ -1097,22 +1097,46 @@ module tb_sun2 #(
    reg         last_cpu_rd = 1'b0;
 
    //
-   // A memory-content checker lived here and has been taken out rather than
-   // left switched off.  The idea is right -- every CPU read from memory must
-   // return what memory holds, which would catch the corruption outright --
-   // but the version written disagreed with the machine on 279715 of 295828
-   // reads on a boot that completes, expecting the two halves of each
-   // Wishbone word transposed.  A check that calls a working machine broken
-   // is worse than no check: it trains you to ignore it.
+   // Every CPU read from memory must return what memory holds.
    //
-   // What it needs is the mapping between a 32-bit Wishbone word and the two
-   // 68010 words inside it, established by experiment rather than read off
-   // sun2_wishbone_bridge's big-endian arm as I did -- ram.fetch does not
-   // present a word the way wb_dat_i carries it.  The physical address side
-   // is right and worth keeping: sun2_fpga hands the bridge
-   // P_ADR_IN[23:1] = {1'h0, ma_pmap2devices[11:0], P_A[10:1]}, so the word is
-   // P_ADR_IN[23:2] and P_A[1] picks the half.
+   // This is the check that names a corrupted read outright, instead of
+   // counting the situations one could happen in.  It was written once and
+   // taken out again for disagreeing with a machine that boots -- it assumed a
+   // mapping between a 32-bit Wishbone word and the two 68010 words inside it,
+   // and assumed it wrong.  ram.fetch does not present a word the way
+   // wb_dat_i carries it, and reading the bridge's big-endian arm was not
+   // enough to tell me how.
    //
+   // So it does not assume this time: both candidate mappings are scored over
+   // the whole boot, and the run says which is right.  On a machine that
+   // boots, the correct one matches essentially every read and the other
+   // matches almost none; a run where *neither* matches means the check is
+   // still wrong and nothing should be concluded from it.  The first attempt
+   // scored 7101 and 46253 out of 198889, which is that verdict.
+   //
+   // What it was missing: **dbg_data lags by one transaction.**  P_DATA_OUT is
+   // a register the bridge loads when a transaction is acknowledged, so during
+   // a cycle the bus carries the *previous* memory transaction's data and this
+   // cycle's own arrives during the next one.  The PROM's page-sizing loop
+   // made it unmistakable -- a read of page 006 reported 0005, 007 reported
+   // 0006, 008 reported 0007, each one the page before.  The CPU is not
+   // getting stale data, or the machine would not boot; the observation is
+   // stale.  So each sample is compared against the *previous* read's
+   // expectation, which is what the wire actually carries.
+   //
+   // The physical address was right first time and is kept: sun2_fpga hands
+   // the bridge P_ADR_IN[23:1] = {1'h0, ma_pmap2devices[11:0], P_A[10:1]}, so
+   // the Wishbone word is P_ADR_IN[23:2] and P_A[1] picks the half.
+   //
+   int mem_rd = 0, match_a = 0, match_b = 0, shown = 0;
+   reg [11:0] prev_ma; reg [22:0] prev_pa; reg prev_valid = 1'b0;
+   reg [15:0] prev_exp; reg prev_dvma = 1'b0;
+
+   function automatic logic [31:0] mem_word(input logic [11:0] ma,
+                                            input logic [22:0] pa);
+      mem_word = ram.fetch({1'b0, ma, pa[9:1]});
+   endfunction
+
    always @(posedge dut.C100) begin
       if (!dbg_bus[47]) begin
          in_cyc <= 1'b1;
@@ -1122,7 +1146,53 @@ module tb_sun2 #(
          if (cyc[101]) begin
             dvma_cycles++;
             dvma_between <= 1'b1;
+            // A master's memory read loads P_DATA_OUT too, so it becomes the
+            // data the *next* cycle carries.  Tracking only CPU reads made the
+            // checker report every DVMA-interleaved read as corrupt -- eleven
+            // of thirteen flagged reads "carried" 0004, which is precisely
+            // what the chip's read of 0xFFFFFE returns.  That is the
+            // observation lagging, not the machine losing data, and it would
+            // have been a false finding at exactly the address under
+            // suspicion.
+            if (cyc[46] && cyc[0] && !$isunknown(cyc[17:6])) begin
+               logic [31:0] dw;
+               dw = mem_word(cyc[17:6], cyc[73:51]);
+               prev_ma    <= cyc[17:6];
+               prev_pa    <= cyc[73:51];
+               prev_exp   <= cyc[51] ? {dw[31:24], dw[23:16]} : {dw[15:8], dw[7:0]};
+               prev_dvma  <= 1'b1;
+               prev_valid <= 1'b1;
+            end
          end else begin
+            // every CPU read from memory, against both candidate mappings
+            if (cyc[46] && cyc[0] && !$isunknown(cyc[17:6]) && !$isunknown(cyc[89:74])) begin
+               logic [31:0] w;
+               logic [15:0] wa, wb;
+               // Expectation is taken when the read happens, not when it is
+               // checked one transaction later: a location written in between
+               // -- a counter, a stack slot -- would otherwise be compared
+               // against its new value and reported as corruption.  That was
+               // the whole of the residual 7% on the calibration run, all of
+               // it at one address being rewritten in a loop.
+               w  = mem_word(cyc[17:6], cyc[73:51]);
+               wa = cyc[51] ? {w[31:24], w[23:16]} : {w[15:8], w[7:0]};
+               if (prev_valid) begin
+                  mem_rd++;
+                  if (cyc[89:74] === prev_exp) match_a++;
+                  else if (shown < 12) begin
+                     shown++;
+                     $display("[%t] read of %06x (page %03x) carried %04x, memory held %04x%s",
+                              $realtime, {prev_pa,1'b0}, prev_ma, cyc[89:74], prev_exp,
+                              prev_dvma ? "   <== a master's cycle was inside it" : "");
+                  end
+               end
+               prev_ma    <= cyc[17:6];
+               prev_pa    <= cyc[73:51];
+               prev_exp   <= wa;
+               prev_dvma  <= dvma_between;
+               prev_valid <= 1'b1;
+            end
+
             // a longword read is two consecutive word reads at A and A+2
             if (last_cpu_rd && cyc[46] && cyc[73:51] == last_cpu_a + 23'd1) begin
                lw_total++;
@@ -1143,6 +1213,7 @@ module tb_sun2 #(
    task automatic lw_report();
       $display("longword reads: %0d, of which %0d split by DVMA (%0d master cycles seen)",
                lw_total, lw_split, dvma_cycles);
+      $display("CPU memory reads checked: %0d, wrong: %0d", mem_rd, mem_rd - match_a);
    endtask
 
    task automatic wrap_up(input string why);
