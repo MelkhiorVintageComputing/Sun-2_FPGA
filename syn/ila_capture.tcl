@@ -265,6 +265,40 @@ switch -- $mode {
             set qualify_dvma 1
             set trigpos_override 64 }
 
+    caseq { # the boot PROM's Channel Attention routine, from its first
+            # instruction onwards.  Triggers on the supervisor-program fetch
+            # of the `bset #5' at 0xEF431E and stores one sample per completed
+            # cycle with the trigger near the front, so the buffer holds the
+            # whole of what the CPU does next -- roughly four thousand cycles.
+            #
+            # The question it answers: the routine is
+            #
+            #     ef431e  bset #5,%a0@      raise CA
+            #     ef4322  moveal %a5@(1118),%a0
+            #     ef4326  bclr #5,%a0@      drop it
+            #
+            # and the board executes the bset twice against one bclr, so CA
+            # never falls between the two attentions and the second makes no
+            # edge.  Either the CPU leaves between ef431e and ef4326 -- and
+            # this shows where it goes -- or it does not, and the doubling is
+            # the core re-issuing a read-modify-write.  The instruction stream
+            # tells the two apart, which no amount of watching the register
+            # can.
+            set_property TRIGGER_COMPARE_VALUE eq23'b11101111010000110001111 $P(addr)
+            set_property TRIGGER_COMPARE_VALUE eq3'b110 $P(fc)
+            set qualify_done 1
+            set trigpos_override 128 }
+
+    caclk { # the same trigger as `caseq', but every clock rather than one
+            # sample per cycle: less reach, and the data timing visible.  For
+            # reading what a CPU read actually returned, which one sample per
+            # cycle cannot settle -- the ILA's two input pipeline stages delay
+            # every probe equally, so the relationship holds, but a single
+            # sample taken at DTACK may be earlier than the data is valid.
+            set_property TRIGGER_COMPARE_VALUE eq23'b11101111010000110001111 $P(addr)
+            set_property TRIGGER_COMPARE_VALUE eq3'b110 $P(fc)
+            set trigpos_override 128 }
+
     etherseq { # the same trigger as `ether', built to follow a sequence rather
             # than to dissect a cycle.  Two changes, and they buy about eight
             # times the reach:
@@ -304,7 +338,7 @@ switch -- $mode {
     fc1  { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
            set_property TRIGGER_COMPARE_VALUE eq3'b001   $P(fc) }
     as   { set_property TRIGGER_COMPARE_VALUE eq6'b0XXXXX $P(hand) }
-    default { puts "ERROR: MODE must be err, fc1, as, supw, scc, ether, etherseq, dvma, dvmaseq, scp, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz, fbprobe or reset, not '$mode'"; exit 1 }
+    default { puts "ERROR: MODE must be err, fc1, as, supw, scc, ether, etherseq, caseq, caclk, dvma, dvmaseq, scp, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz, fbprobe or reset, not '$mode'"; exit 1 }
 }
 
 # Capture control: keep bus cycles, drop the idle clocks between them.  4096

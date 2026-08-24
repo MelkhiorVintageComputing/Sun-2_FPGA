@@ -96,7 +96,7 @@ clean:
 	rm -f rom rompatch
 	rm -rf $(ROMDIR)
 
-.PHONY: all check clean
+.PHONY: all check clean caprobe
 
 # ---------------------------------------------------------------------------
 # The chained-IOPB exerciser
@@ -155,6 +155,19 @@ $(DISKDIR)/clkprobe.bin: clkprobe/clkprobe.c clkprobe/clkprobe.ld
 	@echo "clkprobe: $$(stat -c%s $@) bytes of 7680"
 
 clkprobe: $(DISKDIR)/clkprobe.bin
+
+$(DISKDIR)/caprobe.bin: caprobe/caprobe.c caprobe/caprobe.ld
+	@command -v $(M68K)-gcc >/dev/null || { \
+		echo "$(M68K)-gcc not found: the on-machine exerciser needs an m68k"; \
+		echo "cross-compiler.  On Debian/Ubuntu: apt install gcc-m68k-linux-gnu"; \
+		exit 1; }
+	mkdir -p $(DISKDIR)
+	$(M68K)-gcc $(XYCFLAGS) -T caprobe/caprobe.ld -o $(DISKDIR)/caprobe.elf \
+		caprobe/caprobe.c 2>&1 | grep -vE 'RWX|build-id' || true
+	$(M68K)-objcopy -O binary $(DISKDIR)/caprobe.elf $@
+	@echo "caprobe: $$(stat -c%s $@) bytes of 7680"
+
+caprobe: $(DISKDIR)/caprobe.bin
 
 $(DISKDIR)/dogprobe.bin: dogprobe/dogprobe.c dogprobe/dogprobe.ld
 	@command -v $(M68K)-gcc >/dev/null || { \
