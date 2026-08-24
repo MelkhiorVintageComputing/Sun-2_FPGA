@@ -205,7 +205,7 @@ module tb_sun2 #(
    // plainly; Vivado would have invented the wire and said nothing, which is
    // the whole reason this signal needed a test.
    wire        fb_video_en;
-   wire [100:0] dbg_bus;
+   wire [101:0] dbg_bus;
 
    wire        wb_cyc, wb_stb, wb_we, wb_ack;
    wire [29:0] wb_adr;
@@ -550,7 +550,8 @@ module tb_sun2 #(
    // the machine and not a packing error.
    int dbg_bad = 0;
    always @(posedge dut.C100 or negedge dut.C100) begin
-      if (dbg_bus !== {dut.sun2.cx_dbg,
+      if (dbg_bus !== {dut.dvma_active,
+                       dut.sun2.cx_dbg,
                        dut.sun2.ctx_out[11:8], dut.sun2.ctx_out[3:0],
                        (dut.sun2.P_RW_n ? dut.sun2.P_DOUT : dut.sun2.P_DIN),
                        dut.sun2.P_A, dut.sun2.P_FC,
@@ -565,7 +566,7 @@ module tb_sun2 #(
                        dut.sun2.TIMEOUT, dut.sun2.ERR, dut.sun2.MATCH_MEM}) begin
          dbg_bad = dbg_bad + 1;
          if (dbg_bad <= 5)
-           $display("[%t] dbg_bus MISPACKED: %0101b", $realtime, dbg_bus);
+           $display("[%t] dbg_bus MISPACKED: %0102b", $realtime, dbg_bus);
       end
    end
    final begin

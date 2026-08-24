@@ -15,7 +15,7 @@ module top(input         cpu_clk,
 	   output 	 en_boot,
 	   output [7:0]  todebug,
 `ifdef SUN2_ILA
-	   output [100:0] dbg_bus,
+	   output [101:0] dbg_bus,
 `endif
 
 	   /* Ethernet diagnostics, for the board top to surface: a PHY that
@@ -280,6 +280,8 @@ module top(input         cpu_clk,
 		  //.todebug(),
 `ifdef SUN2_ILA
 		  .dbg_bus(dbg_bus),
+		  // The one thing sun2_fpga cannot see about its own bus.
+		  .dbg_dvma_active(dvma_active),
 `endif
 				
 		  // wishbone

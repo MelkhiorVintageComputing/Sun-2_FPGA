@@ -318,7 +318,7 @@ module wukong_top #(
    // dbg_bus in rtl/sun2-common/sun2_fpga.v for what the bare port cost when
    // it was not.
 `ifdef SUN2_ILA
-   wire [100:0] dbg_bus;
+   wire [101:0] dbg_bus;
 
    // Named wires rather than slices straight into the core, because the
    // Hardware Manager names a probe after the net it is driven from -- and
@@ -337,6 +337,8 @@ module wukong_top #(
    wire [15:0] dbg_data = dbg_bus[89:74];  // what is on the data bus
    wire [7:0]  dbg_ctx  = dbg_bus[97:90];  // {supervisor context, user context}
    wire [2:0]  dbg_cx   = dbg_bus[100:98]; // the one the segment map used
+   wire        dbg_dvma = dbg_bus[101];    // 1 => the cycle is a master's,
+                                           //      not the CPU's
 
    sun2_ila u_ila (
        .clk    (cpu_clk),
@@ -350,7 +352,8 @@ module wukong_top #(
        .probe7 (dbg_verd),
        .probe8 (dbg_data),
        .probe9 (dbg_ctx),
-       .probe10(dbg_cx)
+       .probe10(dbg_cx),
+       .probe11(dbg_dvma)
    );
 `endif
 

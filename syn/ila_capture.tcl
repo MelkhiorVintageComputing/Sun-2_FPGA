@@ -21,6 +21,28 @@
 #         pre-trigger half of the buffer.  A double fault cannot be described
 #         to a basic trigger unit -- "two errors with no good cycle between"
 #         needs the advanced one -- but its consequence can.
+#   ether the VME machine's Ethernet control register, device page 0xFE1 at
+#         virtual 0xEE3000.  This is where the PROM kicks the 82586: the
+#         RESET* bit its driver asserts on every ieinit, and the Channel
+#         Attention that tells the chip to go and look at its SCP.  Nothing
+#         else lives in that page, so every sample is the driver talking to
+#         the chip.  Use it to answer "did the machine ever start the part"
+#   dvma  any cycle driven by a bus master that is not the CPU -- the 82586 on
+#         a VME machine, the Xylogics on a MultiBus one.  dbg_bus carries
+#         dvma_active as bit 101 for exactly this: top_fpga muxes the master
+#         onto the CPU's wires deliberately, so nothing else on the bus can
+#         tell the two apart
+#   dvmaseq  every DVMA cycle and nothing else, one sample each, trigger near
+#         the front: 4096 master cycles of history with no CPU traffic in the
+#         way.  This is the one to reach for when the question is what the
+#         chip read and wrote, in order
+#   scp   the 82586 fetching its System Configuration Pointer, at 0xFFFFF6.
+#         That address is hard-wired in the part -- sun2_ethernet.sv ties
+#         scp_addr_i to it -- so this is the chip's *first* bus cycle as a
+#         master, and the cleanest possible answer to "did DVMA ever happen".
+#         If `ether' fires and this does not, the driver started a chip that
+#         never took the bus; if this fires, the DVMA path works and the
+#         question moves to what it read
 #   supw  a bus error on a supervisor data write.  A double bus fault -- what
 #         the watchdog reset means -- is a bus error taken while the CPU is
 #         stacking the frame for an earlier exception, and that stack push is
@@ -109,6 +131,7 @@ set P(verd) $byport(7)
 set P(data) $byport(8)
 set P(ctx)  $byport(9)
 set P(cx)   $byport(10)
+set P(dvma) $byport(11)
 foreach k {addr fc hand cs smap ps ma verd data ctx cx} {
     puts "== probe $k: [get_property NAME $P($k)] port [get_property PROBE_PORT $P($k)] width [get_property WIDTH $P($k)] =="
 }
@@ -201,6 +224,75 @@ switch -- $mode {
               # address in control space, which is FC 3 and not the question.
               set_property TRIGGER_COMPARE_VALUE eq23'h760000 $P(addr)
               set_property TRIGGER_COMPARE_VALUE eq3'b101     $P(fc) }
+    ether { # the VME Ethernet's control register: I/O page 0xFE1, reached as
+            # supervisor data.  Keyed on the *physical* page out of the page
+            # map rather than on a virtual address, which is both narrower and
+            # immune to aliases -- and on FC 5, which is the correction that
+            # matters.  Triggering on the virtual address alone caught the
+            # PROM writing the page map *entry* for 0xEE3000 from FC 3
+            # control space: same address, entirely different event, and the
+            # map write happens long before the chip is ever touched.
+            #
+            # Every PROM device access is FC 5, so this is the driver poking
+            # the chip and nothing else: the RESET* bit, and the Channel
+            # Attention that sends the part off to fetch its SCP.
+            set_property TRIGGER_COMPARE_VALUE eq12'b111111100001 $P(ma)
+            set_property TRIGGER_COMPARE_VALUE eq3'b101 $P(fc) }
+
+    dvma  { # any cycle a bus master other than the CPU is driving.
+            #
+            # This is the bit the debug bus lacked, and the reason it was
+            # added: top_fpga muxes the master onto the CPU's own wires on
+            # purpose, so an address and a function code cannot tell a chip's
+            # cycle from the CPU's.  Chasing the VME Ethernet, that mattered
+            # exactly where it hurt -- the 82586's first fetch is from
+            # 0xFFFFF6 and so are the CPU's own writes while it builds the SCP
+            # there, both FC 5.
+            #
+            # One hit says the master took the bus, and the address says what
+            # it went for.  No hit, on a machine whose driver has raised
+            # Channel Attention and seen INT come back, says the chip answered
+            # without ever fetching anything -- which is a different fault
+            # entirely, and not one any amount of staring at the CPU would
+            # find.
+            set_property TRIGGER_COMPARE_VALUE eq1'b1 $P(dvma) }
+
+    dvmaseq { # every DVMA cycle, one sample each, with the trigger at the
+            # front: the master's whole conversation with memory rather than
+            # its first word of it.  Capture is qualified on dvma_active, so
+            # the buffer holds 4096 master cycles and no CPU traffic at all.
+            set_property TRIGGER_COMPARE_VALUE eq1'b1 $P(dvma)
+            set qualify_dvma 1
+            set trigpos_override 64 }
+
+    etherseq { # the same trigger as `ether', built to follow a sequence rather
+            # than to dissect a cycle.  Two changes, and they buy about eight
+            # times the reach:
+            #
+            #   * one sample per *completed* cycle -- AS asserted and DTACK
+            #     asserted -- instead of every clock AS is low.  A 68010 cycle
+            #     spends four or more clocks with AS asserted, so the ordinary
+            #     qualifier burns the buffer four-deep on each cycle.
+            #   * the trigger near the front, because everything of interest
+            #     here happens *after* the driver first touches the chip.
+            #
+            # Use it when the question is "and then what": the driver resets
+            # the chip, waits, brings it out of reset, builds an SCP, and
+            # somewhere after that raises Channel Attention.  Following that to
+            # its end needs thousands of cycles, not hundreds.
+            set_property TRIGGER_COMPARE_VALUE eq12'b111111100001 $P(ma)
+            set_property TRIGGER_COMPARE_VALUE eq3'b101 $P(fc)
+            set qualify_done 1
+            set trigpos_override 128 }
+
+    scp   { # the 82586's SCP fetch at 0xFFFFF6, its first cycle as a master.
+            # Exact, not a page: A[23:1] of 0xFFFFF6 is 0x7FFFFB.  The chip
+            # reads six bytes from here before it does anything else, so one
+            # hit proves the DVMA path -- arbitration, sun2_dvma's cycle
+            # generation, the MMU translation of a master that is not the CPU
+            # -- and no hit proves none of it ran.
+            set_property TRIGGER_COMPARE_VALUE eq23'b11111111111111111111011 $P(addr) }
+
     scc  { # any access in the console SCC's device page, 0xEEC800..0xEECFFF.
            # dbg_addr is P_A[23:1], so the page is the top 13 bits of 0x776400
            # and the low ten are don't-care.
@@ -212,7 +304,7 @@ switch -- $mode {
     fc1  { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
            set_property TRIGGER_COMPARE_VALUE eq3'b001   $P(fc) }
     as   { set_property TRIGGER_COMPARE_VALUE eq6'b0XXXXX $P(hand) }
-    default { puts "ERROR: MODE must be err, fc1, as, supw, scc, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz, fbprobe or reset, not '$mode'"; exit 1 }
+    default { puts "ERROR: MODE must be err, fc1, as, supw, scc, ether, etherseq, dvma, dvmaseq, scp, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz, fbprobe or reset, not '$mode'"; exit 1 }
 }
 
 # Capture control: keep bus cycles, drop the idle clocks between them.  4096
@@ -223,6 +315,7 @@ switch -- $mode {
 # even look at the trigger, and if qualified samples are rare it never arms.
 # That is what "did not trigger, core status IDLE" meant the first time.
 if {[info exists qualify_prog]} { set trigpos 16 }
+if {[info exists trigpos_override]} { set trigpos $trigpos_override }
 set_property CONTROL.TRIGGER_POSITION $trigpos $ila
 puts "== trigger position $trigpos of $depth =="
 
@@ -233,6 +326,13 @@ if {[info exists qualify_prog]} {
     # user-mode clocks only: FC 1, 2 (and 3, which one comparator cannot
     # exclude and which barely occurs in user mode anyway)
     set_property CAPTURE_COMPARE_VALUE eq3'b0XX $P(fc)
+} elseif {[info exists qualify_dvma]} {
+    # only cycles a master other than the CPU is driving
+    set_property CAPTURE_COMPARE_VALUE eq1'b1 $P(dvma)
+} elseif {[info exists qualify_done]} {
+    # AS asserted *and* DTACK asserted: exactly one sample per completed bus
+    # cycle.  hand is {AS RW UDS LDS DTACK BERR}, all active low.
+    set_property CAPTURE_COMPARE_VALUE eq6'b0XXX0X $P(hand)
 } else {
     set_property CAPTURE_COMPARE_VALUE eq6'b0XXXXX $P(hand)
 }
@@ -248,10 +348,32 @@ wait_on_hw_ila -timeout $waitmin $ila
 # still sitting in WAIT-TRIGGER or PRE-TRIGGER is the real "nothing matched".
 set st [get_property STATUS.CORE_STATUS $ila]
 if {$st ne "FULL"} {
-    puts "== did not trigger in $waitmin minutes; core status $st =="
-    puts "   Nothing matched.  With mode=err that means no bus error at all --"
-    puts "   check the machine is running, then try mode=as."
-    exit 1
+    puts "== core status $st after $waitmin minutes, not FULL =="
+    #
+    # A hung machine starves the ILA, and that is the case worth rescuing.
+    # The core only reaches FULL once its post-trigger half has filled, and
+    # filling needs bus cycles; if the machine has stopped issuing them there
+    # will never be another sample.  So a trigger that fired into a hang
+    # leaves the core part-filled for ever -- with the last cycles before
+    # everything stopped sitting in it, which is the whole of what we came
+    # for.  Throwing that away because a status string is not "FULL" is
+    # exactly the wrong reflex.
+    #
+    # A frozen bus reads as a final sample with AS asserted and DTACK never
+    # answering: memory is exempt from the twelve-clock timeout, so an
+    # unanswered access up there hangs rather than raising a bus error.
+    #
+    if {[catch {set data [upload_hw_ila_data $ila]} err]} {
+        puts "   and nothing could be uploaded: $err"
+        puts "   Nothing matched at all.  With mode=err that means no bus"
+        puts "   error; check the machine is running, then try mode=as."
+        exit 1
+    }
+    write_hw_ila_data -force -csv_file $outdir/ila.csv $data
+    puts "== wrote a PARTIAL capture to $outdir/ila.csv =="
+    puts "   Read the last samples, not the first: if the bus froze, the tail"
+    puts "   is the cycle that never completed."
+    exit 0
 }
 set data [upload_hw_ila_data $ila]
 write_hw_ila_data -force -csv_file $outdir/ila.csv $data

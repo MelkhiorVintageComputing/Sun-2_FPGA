@@ -106,7 +106,10 @@ module sun2_fpga(input         cpu_clk,
 		 // entry a later FC=3 read gets back?  Packed here, threaded
 		 // out the way todebug is, and sampled in the board layer --
 		 // see the field map at the assignment below.
-		 output [100:0] dbg_bus,
+		 output [101:0] dbg_bus,
+		 // DVMA, which this module cannot work out for itself -- see the
+		 // field map below.  Debug only: nothing downstream of here reads it.
+		 input         dbg_dvma_active,
 `endif
 		 /* wishbone */
 		 output        wb_cyc_o,
@@ -1484,13 +1487,22 @@ module sun2_fpga(input         cpu_clk,
    //           is neither of the above but a choice between them made by
    //           P_FC[2] -- and FC 3, control space, counts as user.
    //
-   // MATCH_MEM rather than anything about DVMA, which sun2_fpga cannot see --
-   // top_fpga.v muxes the master onto these same wires, deliberately, so that
-   // nothing downstream knows DVMA exists.  MATCH_MEM is the term that decides
-   // TIMEOUT: memory is exempt from the bus timeout, so it says directly
-   // whether the cycle was headed for RAM or was left to time out.
+   // MATCH_MEM is the term that decides TIMEOUT: memory is exempt from the bus
+   // timeout, so it says directly whether the cycle was headed for RAM or was
+   // left to time out.
    //
-   assign dbg_bus = { cx_dbg,                                      // 100:98
+   //   101     dvma_active        whose cycle this is
+   //
+   // That bit has to be handed in.  top_fpga.v muxes the master onto these
+   // same wires deliberately, so that nothing downstream knows DVMA exists --
+   // which is right for the machine and blinding for a capture.  Chasing the
+   // VME Ethernet cost three captures for want of it: the chip's first fetch
+   // is from 0xFFFFF6, but so are the CPU's own writes while it builds the
+   // SCP there, and FC 5 covers both, so no combination of address and
+   // function code can separate them.  One bit does.
+   //
+   assign dbg_bus = { dbg_dvma_active,                              //    101
+		      cx_dbg,                                      // 100:98
 		      ctx_out[11:8], ctx_out[3:0],                //  97:90
 		      (P_RW_n ? P_DOUT : P_DIN),                  //  89:74
 		      P_A,                                        // 73:51
