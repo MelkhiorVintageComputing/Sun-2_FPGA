@@ -141,23 +141,39 @@ Anything cheap enough to repeat -- a boot block like `tools/beprobe` or
 `CPU=suska` *and* `CPU=rd68011`, and both numbers are reported. Where they
 disagree, that disagreement is the finding and neither number is thrown away.
 
-One disagreement is known and stable, so meeting it again is not a regression:
-the **VME machine on RD68011 takes 11 bus errors and 319 console characters**
-where Suska takes 10 and 312. The extra one is a protection violation on an
-instruction fetch at `A=a04370` — a wild PC — after which the monitor reports
-it and drops to the prompt. It reproduces across two core versions and both
-with and without the reset rework, and it is not a spurious interrupt: it
-survived `a44b71a`, which fixed a level-seven edge outliving its request and a
-level 0 being acknowledged. Unchased.
+The disagreement this file carried for months — **the VME machine on RD68011
+taking 11 bus errors and 319 characters where Suska takes 10 and 312**, the
+extra one a protection violation on an instruction fetch at `A=a04370`, a wild
+PC, "unchased" — **was a bug in the core, and it is fixed** (`8e8a1b4`). It was
+never a spurious interrupt, which is why surviving `a44b71a` told us nothing.
 
-That same commit moved RD68011's level-7 acknowledgements down by a factor of
+A 68010 longword read is two bus cycles and a master may legally be granted the
+bus between them. RD68011's bus unit decided whether to hand over from
+`arb_bus_released`, built from the arbitration unit's *current* state, while its
+output enables were registered from `arb_bus_released_nxt`, built from the
+*next* one — so the two disagreed for a clock and the word read before the
+grant was lost. `a04370` and `664370`, two runs of the same failure, differ only
+above their low word: that is a longword with its first half replaced.
+
+It only bites when something else masters the bus, which is why a MultiBus boot
+with no cards never showed it and a VME netboot — the 82586 streaming a kernel
+in by DVMA while the CPU runs the PROM — died three different ways from one
+bitstream: a timeout at a wild address, an illegal instruction at a PC holding
+ordinary code, and a double bus fault with the watchdog. Three failures, one
+race. `Inputs/rd68011-longword-read-across-a-bus-grant.md` is the report.
+
+`a44b71a` also moved RD68011's level-7 acknowledgements down by a factor of
 about 2.5 — 37 to 14 over an identical `xychain` run, with level 2 unchanged at
 6 — so **RD68011 level-7 counts recorded before it are inflated** and must not
 be compared with ones taken after. Level 5 is unaffected.
 
 **There is an ILA, and it is aimed at the MMU.** `ILA=1` fits one on `dbg_bus`
--- 74 bits of address, function code, both map lookup stages, the protection
-and timeout terms and the bus handshake, packed in `sun2_fpga.v` with its field
+-- 102 bits of address, function code, both map lookup stages, the protection
+and timeout terms, the bus handshake, the data, both context registers, and
+`dvma_active`, which is the one thing `sun2_fpga` cannot work out for itself:
+`top_fpga` muxes the master onto the same wires on purpose, so no combination
+of address and function code separates a master's cycle from the CPU's. It is
+packed in `sun2_fpga.v` with its field
 map beside it and sampled every clock rather than once per cycle. It exists
 because SunOS panics creating pid 1 with a protection violation reported as a
 bus timeout, `tools/mmuprobe` cannot reproduce that from a boot block, and a
@@ -210,6 +226,13 @@ Two things had to be true at once and neither was. **1080p60 is more than the
 full design can clock** -- see the trap below -- and **`fb_video_en` was never
 connected**, so DISPEN was a constant 0 in every bitstream ever built. Each
 alone shows a black screen, which is why they took a session to separate.
+
+**SunOS runs on the VME machine too, over the network.** A 2/50 on a Wukong V1
+at 20 MHz with `CPU=rd68011` netboots SunOS 4.0.3 to a full autoconfig: RARP,
+120936 bytes of bootloader over TFTP, NFS root and swap, then `zs0`, `zs1` and
+`ie0` attached. It needed two fixes a long way apart — the memory bridge below,
+and the core's bus-grant handover above — and neither could be found without the
+other, because the first one hung the machine before the second could show.
 
 **SunOS runs on a board.** A MultiBus V3 build with `CPU=rd68011` at 20 MHz
 netboots SunOS 4.0.3 on a Wukong V1, past the creation of process 1 and into
@@ -667,6 +690,36 @@ IOPB came back with the driver's own zeroes in it, reading as success.
   acknowledgements to 5 — while the bus error count, its sequence and the
   console text are all untouched. Measured, not assumed.
 
+* **A bridge that serves two masters must know whose cycle it is answering.**
+  `sun2_wishbone_bridge` sits on the muxed 68010 wires — `top_fpga` puts the
+  CPU and DVMA on the same pins deliberately — and `mig_arb` allows one
+  transaction in flight with nothing tagging it. It took any `wb_ack_i` as an
+  answer to whatever cycle was on the bus, so an acknowledgement still
+  resolving from the previous cycle, possibly the *other* master's, reached
+  DTACK and the CPU latched that transaction's data. It also re-requested:
+  `MATCH_ANY` stays asserted for the rest of a cycle and `~wb_ack_i_prev`
+  suppressed the request for exactly one clock. A cycle owns its transaction
+  now — `issued` qualifies the ack and the data latch, `done` stops the repeat.
+
+  **A boot cannot show this and a data check can.** The VME boot splits 67
+  longword reads with a master's cycle and completes every time; with the bug
+  restored, `tb_sun2`'s memory check reports 10 corrupt reads out of 295,827 on
+  that same boot. Pass/fail on a boot is a coarse instrument for corruption
+  that is usually survivable — which is why this was found on the board first,
+  and why the check exists now.
+* **`dbg_data` lags by one transaction, and so does anything else watching
+  `P_DATA_OUT`.** It is a register the bridge loads on acknowledgement, so
+  during a bus cycle the wire carries the *previous* memory transaction's data
+  and this cycle's own arrives during the next one — including a master's,
+  which loads it too. The CPU is not getting stale data; the observation is
+  stale. Every ILA capture needs reading with that shift, and four versions of
+  a memory checker reported confident nonsense before it was accounted for:
+  279,715 "corrupt" reads on a machine that boots, then a mapping that fitted
+  neither half, then a 7% residual that was the expectation being read after
+  the location had been rewritten. What caught each one was the machine under
+  test demonstrably working. The PROM's page-sizing loop is the clearest
+  demonstration: a read of page 006 reports 0005, 007 reports 0006, 008 reports
+  0007.
 * **A port left off an instantiation is a feature that reaches the board
   dead.** `wukong_top.sv` named every port of `top machine (...)` except
   `fb_video_en`, so Vivado invented a one-bit undriven wire, tied it low, and
