@@ -162,6 +162,13 @@ bitstream: a timeout at a wild address, an illegal instruction at a PC holding
 ordinary code, and a double bus fault with the watchdog. Three failures, one
 race. `Inputs/rd68011-longword-read-across-a-bus-grant.md` is the report.
 
+**Both cores now take 10 bus errors and 312 characters on a VME boot**, and the
+two agree for the first time. That is the confirmation rather than the
+inference: 7,621,331 longword reads on that boot, 94 of them split by a
+master's cycle, all assembled correctly, and `tb_sun2`'s memory check clean at
+3,527,559 reads. So a VME disagreement between the cores is a finding again,
+not a known quantity to be waved past.
+
 `a44b71a` also moved RD68011's level-7 acknowledgements down by a factor of
 about 2.5 — 37 to 14 over an identical `xychain` run, with level 2 unchanged at
 6 — so **RD68011 level-7 counts recorded before it are inflated** and must not
