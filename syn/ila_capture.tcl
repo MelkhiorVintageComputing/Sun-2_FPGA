@@ -1,6 +1,12 @@
 # Arm the MMU ILA, wait for it to trigger, and write what it captured.
 #
-#   vivado -mode batch -source syn/ila_capture.tcl -tclargs OUTDIR MODE [LTX] [URL] [MINUTES] [BIT]
+#   vivado -mode batch -source syn/ila_capture.tcl -tclargs OUTDIR MODE [LTX] [URL] [MINUTES] [BIT] [ARMDELAY]
+#
+# ARMDELAY waits that many seconds after programming before arming.  A VME boot
+# takes ten device-probe bus errors before it reaches the boot line, so a
+# trigger on `any bus error' spends the buffer on the first probe and never
+# sees the one that matters.  Waiting past the probes is the difference between
+# catching a failure and catching a start-up.
 #
 # Give BIT to program the board and arm in the same session.  That matters
 # when the thing being caught happens soon after the machine starts: arming
@@ -72,6 +78,9 @@ set waitmin 5
 if {[llength $argv] > 4 && [lindex $argv 4] ne ""} { set waitmin [lindex $argv 4] }
 set bit ""
 if {[llength $argv] > 5 && [lindex $argv 5] ne ""} { set bit [file normalize [lindex $argv 5]] }
+# Seconds to wait after programming before arming.  See ARMDELAY above.
+set armdelay 0
+if {[llength $argv] > 6 && [lindex $argv 6] ne ""} { set armdelay [lindex $argv 6] }
 file mkdir $outdir
 
 open_hw_manager
@@ -265,6 +274,47 @@ switch -- $mode {
             set qualify_dvma 1
             set trigpos_override 64 }
 
+    lateerr { # any bus error, but built for one that happens late: one sample
+            # per completed cycle and the trigger near the end, so the buffer
+            # holds about four thousand cycles of history in front of it.  Pair
+            # it with ARMDELAY to skip the device probes, which would otherwise
+            # trigger this instantly.
+            #
+            # For a failure that varies from run to run, which is what a race
+            # looks like from outside: a VME netboot on RD68011 has ended in a
+            # timeout at 0xFFFFFFFF inside the PROM's bcopy, and in a Line-F
+            # exception reported at an address holding an ordinary branch.  A
+            # trigger tuned to either misses the other; this catches whichever
+            # happens.
+            set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
+            set qualify_done 1
+            set trigpos_override 4032 }
+
+    wildptr { # the bus error that ends a VME netboot on RD68011.
+            #
+            #   Boot: ie(0,0,0)vmunix
+            #   Timeout Bus Error, addr: FFFFFFFF at EF2BC0
+            #
+            # ef2bc0 is the instruction after `moveb %a5@+,%a4@+' at ef2bbc,
+            # the PROM's byte-copy loop, so one of its pointers came back
+            # 0xFFFFFFFF and dereferencing it in bus space times out --
+            # correctly.  The fault is the corrupted pointer, not the timeout.
+            #
+            # Triggering on ERR alone is no use: a VME boot takes ten device
+            # probes that error first, and the buffer would be spent on the
+            # first of them.  This wants ERR *and* an all-ones address, which
+            # no probe uses -- the only legitimate traffic up there is the
+            # 82586's SCP fetch at 0xFFFFF6..0xFFFFFE, which does not error.
+            #
+            # One sample per completed cycle and the trigger near the end, so
+            # the buffer is almost all history: about four thousand cycles
+            # before the fault, which is where the read that delivered the
+            # pointer will be.
+            set_property TRIGGER_COMPARE_VALUE eq23'b11111111111111111111111 $P(addr)
+            set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
+            set qualify_done 1
+            set trigpos_override 4032 }
+
     caseq { # the boot PROM's Channel Attention routine, from its first
             # instruction onwards.  Triggers on the supervisor-program fetch
             # of the `bset #5' at 0xEF431E and stores one sample per completed
@@ -338,7 +388,7 @@ switch -- $mode {
     fc1  { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
            set_property TRIGGER_COMPARE_VALUE eq3'b001   $P(fc) }
     as   { set_property TRIGGER_COMPARE_VALUE eq6'b0XXXXX $P(hand) }
-    default { puts "ERROR: MODE must be err, fc1, as, supw, scc, ether, etherseq, caseq, caclk, dvma, dvmaseq, scp, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz, fbprobe or reset, not '$mode'"; exit 1 }
+    default { puts "ERROR: MODE must be err, fc1, as, supw, scc, ether, etherseq, caseq, caclk, wildptr, lateerr, dvma, dvmaseq, scp, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz, fbprobe or reset, not '$mode'"; exit 1 }
 }
 
 # Capture control: keep bus cycles, drop the idle clocks between them.  4096
@@ -371,6 +421,10 @@ if {[info exists qualify_prog]} {
     set_property CAPTURE_COMPARE_VALUE eq6'b0XXXXX $P(hand)
 }
 
+if {$armdelay > 0} {
+    puts "== waiting $armdelay s before arming, to get past the boot's probes =="
+    after [expr {$armdelay * 1000}]
+}
 puts "== armed: mode $mode, depth $depth, trigger at [expr {$depth / 2}] =="
 run_hw_ila $ila
 wait_on_hw_ila -timeout $waitmin $ila
