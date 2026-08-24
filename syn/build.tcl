@@ -94,11 +94,14 @@ if {$fb == 1} {
 #   720p60     1650x750 at the same half clock, a raster more sinks accept.
 #              Diagnostic only -- 900 lines do not fit in 720 -- so FBDEBUG=1.
 #
-if {$hdmimode ne "1080p60" && $fb != 1} {
-    puts "ERROR: HDMI_MODE=$hdmimode needs FB=1; there is no display without it"
-    exit 1
-}
-switch -- $hdmimode {
+# Only when there is a display to apply it to.  Without FB=1 the mode is not a
+# question at all -- every consumer of these defines is inside `ifdef SUN2_FB --
+# and the check this replaces was "you asked for a mode with no display to put
+# it on", which was fair while the default was 1080p60 and became a refusal to
+# build anything without FB=1 the moment the default became 1280x1024.  That is
+# every regression bitstream this tree makes, and it broke them all.
+if {$fb == 1} {
+ switch -- $hdmimode {
     1080p60   { }
     1080p30   { lappend defines SUN2_HDMI_HALFRATE }
     1280x1024 { lappend defines SUN2_HDMI_SXGA }
@@ -117,6 +120,7 @@ switch -- $hdmimode {
         puts "       not '$hdmimode'"
         exit 1
     }
+ }
 }
 
 # FBDEBUG=1: drive the display from a test pattern rather than fb_scanout, and
