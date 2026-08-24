@@ -29,6 +29,10 @@ module tb_dvma;
    reg reset = 1'b1;
    always #5 clk = ~clk;
 
+   // Declared here rather than beside the memory model, because the always
+   // blocks that police arbitration sit above it and count into them.
+   int fail = 0, checks = 0;
+
    // ------------------------------------------------------------------
    // Wishbone side
    // ------------------------------------------------------------------
@@ -46,7 +50,13 @@ module tb_dvma;
    wire [23:1] dvma_a;
    wire [2:0]  dvma_fc;
    wire [15:0] dvma_dout;
-   reg  [15:0] dvma_din = 16'hxxxx;
+   // What memory is returning on the bus this cycle.  Both masters see the
+   // same wires, because on the machine they are the same wires.  Declared
+   // here, above every use: xvlog rejects a wire used before its declaration
+   // where Vivado would invent an undriven one and say nothing.
+   reg  [15:0] bus_din_r = 16'hxxxx;
+   wire [15:0] bus_din   = bus_din_r;
+   wire [15:0] dvma_din  = bus_din;
    reg         P_DTACK_n = 1'b1, P_BERR_n = 1'b1;
    reg         P_BG_n = 1'b1, BUS_EN = 1'b1, cpu_as_n = 1'b1;
    reg         EN_DVMA = 1'b1, ether_reset = 1'b0;
@@ -66,19 +76,86 @@ module tb_dvma;
                  .ether_reset(ether_reset), .dvma_err(dvma_err));
 
    // ------------------------------------------------------------------
-   // A 68010 that grants the bus when asked
+   // A 68010 that runs bus cycles, and grants the bus when asked
    // ------------------------------------------------------------------
+   // The CPU side used to be three regs that never moved: cpu_as_n was tied
+   // high for the whole test, so no CPU cycle was ever modelled and the one
+   // question a bus arbiter exists to answer -- what happens when the two
+   // masters want the bus at once -- was never put.  It has these signals now,
+   // and section 11 drives them.
+   reg  [23:1] cpu_a     = 23'h0;
+   reg         cpu_rw_n  = 1'b1, cpu_uds_n = 1'b1, cpu_lds_n = 1'b1;
+   reg  [15:0] cpu_dout  = 16'h0;
+
+   // rtl/sun2-common/top_fpga.v, verbatim in shape: one master drives the
+   // 68010 wires and everything downstream is told nothing about which.
+   wire [23:1] bus_a     = dvma_active ? dvma_a     : cpu_a;
+   wire        bus_as_n  = dvma_active ? dvma_as_n  : cpu_as_n;
+   wire        bus_rw_n  = dvma_active ? dvma_rw_n  : cpu_rw_n;
+   wire        bus_uds_n = dvma_active ? dvma_uds_n : cpu_uds_n;
+   wire        bus_lds_n = dvma_active ? dvma_lds_n : cpu_lds_n;
+   wire [15:0] bus_dout  = dvma_active ? dvma_dout  : cpu_dout;
+
    // Two-wire arbitration, as on the 2/50: BG follows BR, and BUS_EN drops to
    // say the core has genuinely let go of the address and strobes.
+   //
+   // A real 68010 finishes the cycle it is in before it grants, which is why
+   // the grant waits on cpu_as_n.  `hostile_grant' takes that away on purpose:
+   // it grants mid-cycle, so that what stops sun2_dvma from driving is its own
+   // reading of cpu_as_n and BUS_EN rather than the model's good manners.  A
+   // master that only behaves because the CPU never misbehaves is not one this
+   // machine can rely on.
+   // `cpu_busy' is the core's own knowledge that a cycle is starting -- set
+   // before the address goes out and cleared after AS is released.  Without it
+   // the model has a race it cannot win: there are clock edges between "the
+   // bus looks free" and "AS is asserted", and a grant landing in that window
+   // makes the model, not the arbiter, produce the overlap.  A real 68010 has
+   // no such gap because its arbitration is inside it.
+   bit cpu_busy = 1'b0;
+   bit hostile_grant = 1'b0;
+   // How long after BG the core keeps driving the pins.  Long by default, so
+   // that BUS_EN is load-bearing; short under a hostile grant, so that the
+   // pins are released while a cycle is still in progress and cpu_as_n is
+   // load-bearing too.  One window cannot do both: with the pins held for
+   // twelve clocks the CPU's cycle is always over before they drop, and
+   // mutating cpu_as_n out of sun2_dvma goes unnoticed.
+   int busen_dly = 12;
    int grant_dly = 0;
    always @(posedge clk) begin
       if (!P_BR_n) begin
-         grant_dly <= grant_dly + 1;
-         if (grant_dly >= 2) begin P_BG_n <= 1'b0; BUS_EN <= 1'b0; end
+         if ((cpu_as_n && !cpu_busy) || hostile_grant) begin
+            grant_dly <= grant_dly + 1;
+            // BG first, the pins some clocks later.  A core does not do both
+            // at once, and the gap is what gives BUS_EN any meaning here: with
+            // the two dropping together a master that ignores BUS_EN entirely
+            // behaves exactly like one that honours it, so mutating the term
+            // out of sun2_dvma passed.  Twelve clocks is generous on purpose
+            // -- the master's own state machine takes several clocks to get
+            // from its start condition to driving, and a window shorter than
+            // that closes before the mutant can be caught in it.
+            if (grant_dly >= 2)          P_BG_n <= 1'b0;
+            if (grant_dly >= busen_dly)  BUS_EN <= 1'b0;
+         end
       end else begin
          grant_dly <= 0;
          P_BG_n <= 1'b1;
-         BUS_EN <= 1'b1;
+         // The pins come back only once the master has actually let go.
+         if (!dvma_active) BUS_EN <= 1'b1;
+      end
+   end
+
+   // The contract the whole of section 11 rests on, checked on every edge of
+   // every test rather than only where it is being provoked.
+   always @(posedge clk) begin
+      if (dvma_active && !cpu_as_n) begin
+         $display("FAIL: [%t] DVMA drove the bus while the CPU had a cycle in progress (hostile=%0d BG_n=%0d BUS_EN=%0d dvma_as_n=%0d)",
+                  $realtime, hostile_grant, P_BG_n, BUS_EN, dvma_as_n);
+         fail++;
+      end
+      if (dvma_active && BUS_EN) begin
+         $display("FAIL: [%t] DVMA drove the bus while the CPU still owned the pins (hostile=%0d BG_n=%0d cpu_as_n=%0d)",
+                  $realtime, hostile_grant, P_BG_n, cpu_as_n);
+         fail++;
       end
    end
 
@@ -90,16 +167,15 @@ module tb_dvma;
    int         err_lo = -1, err_hi = -1;   // byte range that bus-errors
    int         ws_count = 0;
    int         n_cycles = 0;
-   int         fail = 0, checks = 0;
 
    reg [15:0]  rd_next;
    reg         rd_valid = 1'b0;
 
-   wire [23:0] cyc_byte = {dvma_a, 1'b0};
+   wire [23:0] cyc_byte = {bus_a, 1'b0};
    wire        cyc_err  = (err_lo >= 0) && (cyc_byte >= err_lo) && (cyc_byte <= err_hi);
 
    always @(posedge clk) begin
-      if (dvma_as_n) begin
+      if (bus_as_n) begin
          P_DTACK_n <= 1'b1;
          P_BERR_n  <= 1'b1;
          ws_count  <= 0;
@@ -110,14 +186,14 @@ module tb_dvma;
             P_BERR_n <= 1'b0;
          end else begin
             n_cycles <= n_cycles + 1;
-            if (dvma_rw_n) begin
+            if (bus_rw_n) begin
                // read: even byte on the upper lane, odd on the lower
-               rd_next  <= {dvma_uds_n ? 8'h00 : mem[cyc_byte],
-                            dvma_lds_n ? 8'h00 : mem[cyc_byte + 1]};
+               rd_next  <= {bus_uds_n ? 8'h00 : mem[cyc_byte],
+                            bus_lds_n ? 8'h00 : mem[cyc_byte + 1]};
                rd_valid <= 1'b1;
             end else begin
-               if (!dvma_uds_n) mem[cyc_byte]     <= dvma_dout[15:8];
-               if (!dvma_lds_n) mem[cyc_byte + 1] <= dvma_dout[7:0];
+               if (!bus_uds_n) mem[cyc_byte]     <= bus_dout[15:8];
+               if (!bus_lds_n) mem[cyc_byte + 1] <= bus_dout[7:0];
             end
             P_DTACK_n <= 1'b0;
          end
@@ -132,11 +208,11 @@ module tb_dvma;
    // instead of quietly collecting the previous cycle's data -- which is
    // exactly the bug this test failed to catch the first time round.
    always @(posedge clk)
-     if (dvma_as_n) begin
+     if (bus_as_n) begin
         rd_valid <= 1'b0;
-        dvma_din <= 16'hxxxx;
+        bus_din_r <= 16'hxxxx;
      end else begin
-        dvma_din <= rd_valid ? rd_next : 16'hxxxx;
+        bus_din_r <= rd_valid ? rd_next : 16'hxxxx;
      end
 
    // Function code must be supervisor data on every DVMA cycle.
@@ -179,6 +255,80 @@ module tb_dvma;
       errored = wb_err;
       wb_cyc <= 1'b0; wb_stb <= 1'b0;
       @(posedge clk);
+   endtask
+
+   // ------------------------------------------------------------------
+   // The CPU running bus cycles of its own
+   // ------------------------------------------------------------------
+   // One 68010 read cycle: address and strobes out, wait for DTACK, latch the
+   // data the clock *after* the acknowledge -- which is where a 68010 latches
+   // and, more to the point, where the memory model above puts it.  A master
+   // that sampled on the DTACK edge would collect the previous cycle's data,
+   // which is the bug this file already records catching once.
+   task automatic cpu_read_word(input [23:1] a, output [15:0] d);
+      int guard;
+      // Claim the bus, and keep re-checking until AS is actually out.
+      //
+      // The check has to be repeated because a grant can land between "the bus
+      // looks free" and "AS is asserted" -- there are clock edges in between,
+      // and a model that only looks once drives on top of the master it just
+      // granted to and then reports the arbiter for it.  Two earlier versions
+      // of this task did exactly that; the failures looked like a real defect
+      // and were the testbench's.  A real 68010 has no such gap: its
+      // arbitration is inside it and it knows a cycle is starting.
+      forever begin
+         while (dvma_active || !BUS_EN) @(posedge clk);
+         cpu_busy = 1'b1;
+         @(posedge clk);
+         if (dvma_active || !BUS_EN) begin cpu_busy = 1'b0; continue; end
+         cpu_a <= a; cpu_rw_n <= 1'b1;
+         @(posedge clk);
+         if (dvma_active || !BUS_EN) begin cpu_busy = 1'b0; continue; end
+         cpu_as_n <= 1'b0; cpu_uds_n <= 1'b0; cpu_lds_n <= 1'b0;
+         break;
+      end
+      guard = 0;
+      forever begin
+         @(posedge clk);
+         if (!P_DTACK_n) break;
+         if (++guard > 500) begin
+            $display("FAIL: CPU read of %06x never acknowledged", {a, 1'b0});
+            fail++;
+            break;
+         end
+      end
+      // Latch the clock after the acknowledge, which is where a 68010 latches
+      // and where the memory model above puts the data.
+      @(posedge clk);
+      d = bus_din;
+      cpu_as_n <= 1'b1; cpu_uds_n <= 1'b1; cpu_lds_n <= 1'b1;
+      @(posedge clk);
+      cpu_busy = 1'b0;
+   endtask
+
+   //
+   // A longword read, which is what makes this interesting.
+   //
+   // The 68010 has a 16-bit bus, so `moveal (An),%a0' is *two* word cycles
+   // with a gap between them, and the bus may legally be granted in that gap.
+   // On a VME 2/50 that is exactly what happens: the boot PROM's Channel
+   // Attention routine reloads its pointer with
+   //
+   //     ef4322  moveal %a5@(1118),%a0
+   //
+   // in the window where the 82586 -- just given the attention the preceding
+   // `bset' raised -- is fetching its SCP, and the pointer comes back wrong.
+   // The `bclr' at ef4326 then clears bit 5 of address 0x000004 instead of the
+   // Ethernet control register, CA is never dropped, the next attention makes
+   // no rising edge, and the machine hangs waiting for a chip that was never
+   // asked to do anything.  `gap' is the tunable that places the interleave.
+   //
+   task automatic cpu_read_long(input [23:1] a, input int gap, output [31:0] d);
+      logic [15:0] hi, lo;
+      cpu_read_word(a, hi);
+      repeat (gap) @(posedge clk);
+      cpu_read_word(a + 23'd1, lo);
+      d = {hi, lo};
    endtask
 
    task automatic expect_byte(input int addr, input [7:0] want, input string what);
@@ -328,6 +478,102 @@ module tb_dvma;
       if (!err) begin $display("FAIL: DVMA ran with EN_DVMA clear"); fail++; end
       expect_byte(22'h010*4, 8'h5A, "memory untouched with EN_DVMA clear");
       EN_DVMA <= 1'b1; @(posedge clk);
+
+      // --- 11. DVMA inside a CPU longword read --------------------------
+      //
+      // The failure this section exists for is not a wrong byte lane or a
+      // dropped cycle -- those are covered above -- but a CPU read whose
+      // *data* is wrong because a master took the bus in the middle of it.
+      // Nothing here had ever run a CPU cycle at all, so the arbiter's whole
+      // reason for existing was untested.
+      //
+      // A recognisable pointer, so a corrupted read is obvious rather than
+      // merely unequal: 0x00EE3000 is the Ethernet control register, which is
+      // the value the PROM's moveal is supposed to load.
+      begin
+         logic [31:0] got;
+         int          g;
+         int          n_before;
+
+         mem[22'h100*4 + 0] = 8'h00;
+         mem[22'h100*4 + 1] = 8'hEE;
+         mem[22'h100*4 + 2] = 8'h30;
+         mem[22'h100*4 + 3] = 8'h00;
+
+         // (a) baseline: no master anywhere near it.
+         cpu_read_long(23'h000200, 0, got);
+         checks++;
+         if (got !== 32'h00EE3000) begin
+            $display("FAIL: quiet longword read gave %08x, expected 00ee3000", got);
+            fail++;
+         end
+
+         // (b) a master asking for the bus at every offset through the read.
+         // The gap is swept because the damaging alignment is not known in
+         // advance -- on the board it is wherever the 82586's SCP fetch
+         // happens to fall, and a single hand-picked gap would prove only that
+         // one alignment is safe.
+         for (g = 0; g <= 12; g++) begin
+            n_before = n_cycles;
+            fork
+               begin
+                  logic [31:0] rd2;
+                  bit          e2;
+                  repeat (g) @(posedge clk);
+                  wb_access(1'b0, 22'h200, 4'b1111, 32'h0, rd2, e2);
+               end
+               begin
+                  cpu_read_long(23'h000200, g, got);
+               end
+            join
+            checks++;
+            if (got !== 32'h00EE3000) begin
+               $display("FAIL: longword read with DVMA at gap %0d gave %08x, expected 00ee3000",
+                        g, got);
+               fail++;
+            end
+            checks++;
+            if (n_cycles == n_before) begin
+               $display("FAIL: gap %0d -- the master never got the bus, so nothing was interleaved", g);
+               fail++;
+            end
+         end
+
+         // (c) the same, with the CPU granting mid-cycle.  Nothing but
+         // sun2_dvma's own reading of cpu_as_n and BUS_EN stops it driving on
+         // top of a cycle in progress; the always block above is what fails if
+         // it does.
+         // A cycle long enough to still be running when the grant lands.  With
+         // the memory answering immediately the CPU's cycle is over in three
+         // clocks, the grant always arrives after it, and cpu_as_n never has
+         // to be honoured -- so mutating it out of sun2_dvma goes unnoticed.
+         // Wait states are how a real device makes that window.
+         wait_states   = 6;
+         hostile_grant = 1'b1;
+         busen_dly     = 2;      // pins released while the cycle is running
+         for (g = 0; g <= 6; g++) begin
+            fork
+               begin
+                  logic [31:0] rd3;
+                  bit          e3;
+                  repeat (g) @(posedge clk);
+                  wb_access(1'b0, 22'h200, 4'b1111, 32'h0, rd3, e3);
+               end
+               begin
+                  cpu_read_long(23'h000200, g, got);
+               end
+            join
+            checks++;
+            if (got !== 32'h00EE3000) begin
+               $display("FAIL: hostile grant at gap %0d gave %08x, expected 00ee3000", g, got);
+               fail++;
+            end
+         end
+         hostile_grant = 1'b0;
+         busen_dly     = 12;
+         wait_states   = 0;
+         @(posedge clk);
+      end
 
       // --- the bus is given back ----------------------------------------
       checks++;
