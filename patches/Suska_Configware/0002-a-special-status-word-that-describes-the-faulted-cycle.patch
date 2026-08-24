@@ -1,0 +1,96 @@
+--- a/68K10/wf68k10_bus_interface.vhd
++++ b/68K10/wf68k10_bus_interface.vhd
+@@ -272,18 +272,58 @@
+     P_DF: process
+     -- This is the logic which provides the fault flags for data cycles and
+     -- input and output buffer information.
+-    variable SIZEVAR : std_logic_vector(1 downto 0) := "00";
++    --
++    -- The special status word is built as of the MC68000 user's manual figure 6-9:
++    --   15 = RR (rerun; always the processor rerun here), 14 reserved, 13 = IF,
++    --   12 = DF, 11 = RM, 10 = HB, 9 = BY, 8 = RW (0 = write!), 7..3 reserved,
++    --   2..0 = FC.
++    -- IF and DF name the buffer a faulted *read* is to be completed into, so a
++    -- write sets neither of them. BY is set for a byte transfer and clear for a
++    -- word; HB then selects which half of the transfer register that byte is.
++    --
++    -- FLT_HOLD freezes the word from the fault until the exception handler takes
++    -- over: with the prefetch pipeline running, the next opcode cycle starts
++    -- before BUSY_EXH is asserted and would otherwise overwrite the attributes of
++    -- the cycle which faulted with its own.
++    variable BY_I     : bit;
++    variable HB_I     : bit;
++    variable IS_OPC   : bit;
++    variable IS_RD    : bit;
++    variable IS_WR    : bit;
++    variable FLT_HOLD : bit := '0';
+     begin
+         wait until CLK = '1' and CLK' event;
++        if BUSY_EXH = '1' then
++            FLT_HOLD := '0'; -- The exception handler has the word now.
++        elsif BUS_FLT = '1' or AERR_I = '1' then
++            FLT_HOLD := '1';
++        end if;
++        --
+         if BUSY_EXH = '0' then -- Do not alter during exception processing.
+-            case OP_SIZE is
+-                when LONG => SIZEVAR := "10";
+-                when WORD => SIZEVAR := "01";
+-                when BYTE => SIZEVAR := "00";
+-            end case;
++            -- Which request this cycle serves, in the priority of ACCESSTYPE. The
++            -- READ_ACCESS, WRITE_ACCESS and OPCODE_ACCESS registers are written on
++            -- this very clock edge, so the requests themselves are used here.
++            IS_RD := RD_REQ;
++            IS_WR := WR_REQ and not RD_REQ;
++            IS_OPC := OPCODE_REQ and not RD_REQ and not WR_REQ;
++            --
++            -- A byte cycle is a data cycle of byte size, as in the UDSn/LDSn logic
++            -- below; opcode cycles are always words. The high byte is the even address.
++            if OP_SIZE = BYTE and IS_OPC = '0' then
++                BY_I := '1';
++                if ADR_OUT_I(0) = '0' then
++                    HB_I := '1';
++                else
++                    HB_I := '0';
++                end if;
++            else
++                BY_I := '0';
++                HB_I := '0';
++            end if;
+             --
+-            if BUS_CTRL_STATE = START_CYCLE and NEXT_BUS_CTRL_STATE = DATA_C1C4 then
+-                SSW <= To_StdLogicVector (RMC & '0' & OPCODE_REQ & RD_REQ & RMC) & SIZEVAR & RW_In & "00000" & FC_IN;
++            if BUS_CTRL_STATE = START_CYCLE and FLT_HOLD = '0' and
++               (NEXT_BUS_CTRL_STATE = DATA_C1C4 or AERR_I = '1') then
++                SSW <= To_StdLogicVector ('0' & '0' & IS_OPC & IS_RD & RMC & HB_I & BY_I & (not IS_WR) & "00000") & FC_IN;
+             end if;
+             
+             OUTBUFFER <= WP_BUFFER; -- Used for exception stack frame type A and B.
+@@ -489,8 +529,8 @@
+         --
+         if RESET_CPU_I = '1' then
+             DATA_VALID <= '1';
+-        elsif BUS_CTRL_STATE = DATA_C1C4 and BUS_FLT = '1' then
+-            DATA_VALID <= '0';
++        elsif (READ_ACCESS = '1' or WRITE_ACCESS = '1') and BUS_CTRL_STATE = DATA_C1C4 and BUS_FLT = '1' then
++            DATA_VALID <= '0'; -- Only a data cycle invalidates the data buffer.
+         elsif DATA_RDY_I = '1' then
+             DATA_VALID <= '1'; -- Reset after use, TRAP_BERR is asserted during DATA_RDY.
+         end if;
+--- a/68K10/wf68k10_control.vhd
++++ b/68K10/wf68k10_control.vhd
+@@ -750,10 +750,10 @@
+ 
+     TRAP_V <= '1' when OP = TRAPV and ALU_COND = true and FETCH_STATE = SLEEP and NEXT_FETCH_STATE = START_OP else '0';
+ 
+-    BERR <= '0' when FETCH_STATE = START_OP and EXEC_WB_STATE = IDLE else -- Disable when controller is not active.
+-            '0' when OP = BKPT else -- No bus error during breakpoint cycle.
++    BERR <= '0' when OP = BKPT else -- No bus error during breakpoint cycle.
++            '1' when OPD_ACK = '1' and OW_VALID = '0' else -- A faulted opcode is acknowledged in START_OP.
++            '0' when FETCH_STATE = START_OP and EXEC_WB_STATE = IDLE else -- Disable when controller is not active.
+             '1' when DATA_RDY = '1' and DATA_VALID = '0' else
+-            '1' when OPD_ACK = '1' and OW_VALID = '0' else
+             '1' when EW_ACK = '1' and OW_VALID = '0' else '0';
+ 
+     SFC_RD <= '1' when OP = MOVEC and BIW_0(0) = '0' and BIW_1(11 downto 0) = x"000" else '0';
