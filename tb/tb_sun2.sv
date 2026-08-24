@@ -1051,6 +1051,100 @@ module tb_sun2 #(
         $display("FAIL: DISPEN was never set -- a real display would stay black");
    endtask
 
+   // ------------------------------------------------------------------
+   // Longword reads with a bus master's cycle inside them
+   // ------------------------------------------------------------------
+   //
+   // A 68010 longword read is two word cycles with a gap between them, and a
+   // master may legally be granted in that gap.  On a VME 2/50 that is where
+   // the machine loses: the boot PROM's Channel Attention routine reloads its
+   // pointer with `moveal %a5@(1118),%a0' at ef4322, the 82586 -- just given
+   // the attention the preceding `bset' raised -- is fetching its SCP in that
+   // window, and the pointer comes back wrong.  The `bclr' at ef4326 then
+   // clears bit 5 of address 0x000004 instead of the Ethernet control
+   // register, CA is never dropped, and the next attention makes no edge.
+   //
+   // sun2_dvma is not the culprit: tb_dvma sweeps the interleave across every
+   // offset, against a hostile grant, and the CPU's data comes back right (and
+   // three mutations of its arbitration term are caught).  So this counts the
+   // situation rather than the fault: how often does a CPU longword read get
+   // split by a master's cycle *in simulation at all*?
+   //
+   // If the answer is never, that is the whole reason the board fails where
+   // simulation passes, and it is worth knowing before any more time goes on
+   // reproducing it here.
+   //
+   // Read straight off dbg_bus, which is the same view the board's ILA has:
+   // bit 101 is dvma_active, 73:51 the address, 47 AS, 46 RW, 43 DTACK.
+   int lw_total = 0, lw_split = 0, dvma_cycles = 0;
+
+   //
+   // Evaluate a bus cycle on its *last* clock, not on the first one where
+   // DTACK is seen.
+   //
+   // That distinction is the whole reason the first version of this counted
+   // nothing.  In simulation the memory model answers at once, so DTACK is
+   // already asserted at C_S4 -- with the map outputs still X and MATCH_MEM,
+   // which is qualified by C_S6, not yet true.  On the board DDR3 pushes DTACK
+   // out to C_S6 or later and every field is settled by then, which is why the
+   // ILA captures read cleanly and this did not.  Latching the last clock with
+   // AS asserted gets the settled view on both.
+   //
+   reg [101:0] cyc;                  // the final clock of the cycle in progress
+   reg         in_cyc = 1'b0;
+   reg         dvma_between = 1'b0;
+   reg [22:0]  last_cpu_a = 23'h0;
+   reg         last_cpu_rd = 1'b0;
+
+   //
+   // A memory-content checker lived here and has been taken out rather than
+   // left switched off.  The idea is right -- every CPU read from memory must
+   // return what memory holds, which would catch the corruption outright --
+   // but the version written disagreed with the machine on 279715 of 295828
+   // reads on a boot that completes, expecting the two halves of each
+   // Wishbone word transposed.  A check that calls a working machine broken
+   // is worse than no check: it trains you to ignore it.
+   //
+   // What it needs is the mapping between a 32-bit Wishbone word and the two
+   // 68010 words inside it, established by experiment rather than read off
+   // sun2_wishbone_bridge's big-endian arm as I did -- ram.fetch does not
+   // present a word the way wb_dat_i carries it.  The physical address side
+   // is right and worth keeping: sun2_fpga hands the bridge
+   // P_ADR_IN[23:1] = {1'h0, ma_pmap2devices[11:0], P_A[10:1]}, so the word is
+   // P_ADR_IN[23:2] and P_A[1] picks the half.
+   //
+   always @(posedge dut.C100) begin
+      if (!dbg_bus[47]) begin
+         in_cyc <= 1'b1;
+         cyc    <= dbg_bus;
+      end else if (in_cyc) begin
+         in_cyc <= 1'b0;
+         if (cyc[101]) begin
+            dvma_cycles++;
+            dvma_between <= 1'b1;
+         end else begin
+            // a longword read is two consecutive word reads at A and A+2
+            if (last_cpu_rd && cyc[46] && cyc[73:51] == last_cpu_a + 23'd1) begin
+               lw_total++;
+               if (dvma_between) begin
+                  lw_split++;
+                  if (lw_split <= 5)
+                    $display("[%t] longword read at %06x was split by a DVMA cycle",
+                             $realtime, {last_cpu_a, 1'b0});
+               end
+            end
+            last_cpu_a   <= cyc[73:51];
+            last_cpu_rd  <= cyc[46];
+            dvma_between <= 1'b0;
+         end
+      end
+   end
+
+   task automatic lw_report();
+      $display("longword reads: %0d, of which %0d split by DVMA (%0d master cycles seen)",
+               lw_total, lw_split, dvma_cycles);
+   endtask
+
    task automatic wrap_up(input string why);
       $display("");
       $display("=== %s at %t ===", why, $realtime);
@@ -1059,6 +1153,7 @@ module tb_sun2 #(
       if (n_dvma > 0) $display("%0d DVMA cycles in total", n_dvma);
       if (n_xread > 0) $display("%0d CPU reads returned X", n_xread);
       console_mon.report();
+      lw_report();
       ram.report();
       iack_report();
 `ifdef SUN2_FB
