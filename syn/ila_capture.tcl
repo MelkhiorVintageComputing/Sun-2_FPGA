@@ -442,7 +442,27 @@ switch -- $mode {
             # hit proves the DVMA path -- arbitration, sun2_dvma's cycle
             # generation, the MMU translation of a master that is not the CPU
             # -- and no hit proves none of it ran.
-            set_property TRIGGER_COMPARE_VALUE eq23'b11111111111111111111011 $P(addr) }
+            #
+            # dvma_active is part of the trigger, and has to be: the address
+            # alone is not the chip.  The PROM reads 0xFFFFF6 itself -- from
+            # 0xEF414A, two supervisor-data word reads -- and being earlier it
+            # fires an address-only trigger every time, so the capture shows the
+            # CPU and the comment above claims it showed the chip.  That cost a
+            # capture here.  top_fpga muxes the master onto the CPU's wires on
+            # purpose, so dbg_dvma is the only thing that separates them; probe
+            # 11 exists for exactly this.
+            set_property TRIGGER_COMPARE_VALUE eq23'b11111111111111111111011 $P(addr)
+            set_property TRIGGER_COMPARE_VALUE eq1'b1 $P(dvma) }
+
+    prot { # any cycle the MMU refuses on protection grounds, whether or not
+           # anything came of it.  verd = {VALID PROTERR_raw PROTERR TIMEOUT
+           # ERR MATCH_MEM}, so PROTERR is bit 3.
+           #
+           # This is the question "does gating the MATCH_* terms on ~PROTERR
+           # suppress anything here at all".  A device probe that times out is
+           # not this -- that is TIMEOUT, bit 2 -- so a boot full of probes
+           # will not trigger it.
+           set_property TRIGGER_COMPARE_VALUE eq6'bXX1XXX $P(verd) }
 
     scc  { # any access in the console SCC's device page, 0xEEC800..0xEECFFF.
            # dbg_addr is P_A[23:1], so the page is the top 13 bits of 0x776400

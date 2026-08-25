@@ -441,34 +441,40 @@ module sun2_fpga(input         cpu_clk,
    // matching the dozen or so device probes the PROM really does make -- and
    // the console is byte-identical to the 23,629 run.
    //
-   // STILL UNPROVEN: the PROM generates *zero* legitimate protection faults, so
-   // a monitor boot cannot show whether this preserves real ones or disables
-   // the mechanism.  SunOS needs them for copy-on-write and stack growth, and
-   // that run is what has to justify this change.
-   // An invalid entry must refuse every class, so VALID is a term in its own
-   // right.  It used to be reachable only as D4 below, which meant a *user*
-   // access to an invalid entry was not refused at all; after the shift below
-   // nothing would have checked it.  mon/h/buserr.h keeps the bit in the bus
-   // error register precisely so a handler can tell "not valid" from
-   // "protection refused it", which only makes sense if both raise the error.
-   // C_S6, not C_S8, and the difference between the two uses of this signal is
-   // the whole point.
+   // That was once marked STILL UNPROVEN, because the PROM generates *zero*
+   // legitimate protection faults and a monitor boot therefore cannot show
+   // whether the ~P_AS_n term preserves real ones or disables the mechanism.
+   // SunOS supplies the missing run: it faults for copy-on-write and stack
+   // growth constantly, and tools/ctxprobe cases A and H measure a protection
+   // violation on a user instruction fetch and on a user data write directly.
+   // Both report correctly, so the term preserves real faults.
+   // Three signals, kept apart, where one used to serve every purpose.
    //
-   // PROTERR is used twice: to raise the bus error (through ERR, below), and --
-   // once the matches are gated on it -- to stop a cycle reaching anything
-   // behind the MMU.  The second needs the answer while the MATCH_* terms are
-   // being evaluated, which is C_S6: `ma_pmap2devices' is already trusted there
-   // by MATCH_MEM, and `ps_pmap2devices' comes out of the same pmap_sram, on the
-   // same clock, from the same index.
+   //   MMU_REFUSE  the cycle must not reach anything behind the MMU, and must
+   //               raise a bus error.  Either the permission field refuses this
+   //               class of access, or there is no valid translation at all.
+   //   PROTERR     the bit reported in the bus error register, and *only* that:
+   //               a permission refusal.  An invalid entry is reported by the
+   //               VALID bit beside it, which is why mon/h/buserr.h keeps the
+   //               two separate -- a handler can then tell "no translation"
+   //               from "the translation refused this access".
+   //   ERR         when the error is raised.  C_S8, below.
    //
-   // Moving this to C_S6 while ERR still fired on C_S4 put 243,836 phantom
+   // C_S6 for the refusal, because the MATCH_* terms are evaluated there and
+   // need the answer while they are: `ma_pmap2devices' is already trusted at
+   // C_S6 by MATCH_MEM, and `ps_pmap2devices' comes out of the same pmap_sram,
+   // on the same clock, from the same index.
+   //
+   // C_S8 for the report, and the separation is not cosmetic.  Moving the
+   // refusal to C_S6 while ERR still fired on C_S4 put 243,836 phantom
    // protection violations into the reference boot, with undefined permission
-   // bits -- the same shape as the 23,607 the ~P_AS_n term was added to kill.
-   // That measured the *reporting*, not the map: C_S8 was doing double duty as
+   // bits -- the shape of the 23,607 the ~P_AS_n term was added to kill.  That
+   // measured the *reporting*, not the map: C_S8 had been doing double duty as
    // "the map has settled" and "report now", because the C_S4 on ERR was inert
-   // (PROTERR demanded C_S8 and TIMEOUT is not set before C_S24).  The two are
-   // separated now -- the answer at C_S6, the report at C_S8.
-   assign PROTERR   = (PROTERR_raw | ~VALID) & C_S6 & FC_GENERAL & ~P_AS_n;
+   // (PROTERR demanded C_S8 anyway, and TIMEOUT is not set before C_S24).
+   wire MMU_REFUSE;
+   assign MMU_REFUSE = (PROTERR_raw | ~VALID) & C_S6 & FC_GENERAL & ~P_AS_n;
+   assign PROTERR   = PROTERR_raw & C_S6 & FC_GENERAL & ~P_AS_n;
 
    // Nothing behind the MMU may see a cycle the MMU is rejecting.
    //
@@ -494,11 +500,36 @@ module sun2_fpga(input         cpu_clk,
    // return address: init's child returns from fork's rts into its own stack
    // and runs until something is illegal.
    //
-   // A read did not need this -- the CPU discards the data when BERR ends the
-   // cycle -- but gating both is simpler and costs nothing, and a device read
-   // with side effects would need it anyway.
+   // Reads are gated as well as writes.  A read of *memory* would not need it
+   // -- the CPU discards the data when BERR ends the cycle -- but MATCH_DEV,
+   // MATCH_MBMEM, MATCH_MBIO and MATCH_FBCTL are behind this same gate, and a
+   // read there can have side effects: a status register that clears on read, a
+   // FIFO data port, an interrupt acknowledge.  A refused access must reach
+   // none of them, so "the CPU throws the data away" is not a reason to let the
+   // cycle out.
+   //
+   // KNOWN OPEN, and it is not understood: a VME 2/50 with this gate stalls in
+   // the PROM at "Probing I/O bus: ie", spinning at 0xEF07E8..F0, where the
+   // same machine built from the same tree without the gate reaches a full
+   // autoconfig -- 3 boots to 0, repeated from clean builds.  MultiBus is
+   // unaffected and boots SunOS to a shell.
+   //
+   // The gate is *inert* on VME, which is what makes it strange.  The `prot'
+   // capture mode triggers on PROTERR alone, is validated on MultiBus (it
+   // catches SunOS's SEGINV faults), and armed one second after reset it never
+   // fires on VME across four minutes -- so nothing there is ever refused and
+   // MMU_OK is permanently 1.  Simulation agrees: the VME reference passes with
+   // the gate, Ethernet included, with X-valued maps and with MAPS_ZERO=1.
+   //
+   // So the difference is not logic.  The suspicion is placement: MMU_OK adds a
+   // term to eleven decode paths and gives MATCH_* a fresh combinational path
+   // back through the page map, and the gated VME build carries a hold path of
+   // 64 ps inside the Ethernet MAC's receive unit
+   // (machine/ethernet/mac/u_ru/buf_addr_reg[3] -> acc_addr_reg[3]) that
+   // MultiBus does not have among its tightest.  A margin that small is a
+   // latent fault whatever provoked it; see BRINGUP.md.
    wire MMU_OK;
-   assign MMU_OK = ~PROTERR;
+   assign MMU_OK = ~MMU_REFUSE;
    //assign PROTERR_n = PROTERR_raw_n | ~C_S8 & FC_GENERAL;
    
    // The permission check.  Select is {P_FC[2], P_FC[1], ~P_RW_n}, so the eight
@@ -590,11 +621,19 @@ module sun2_fpga(input         cpu_clk,
    wire [7:0] 			 berr_out;
    assign berr_in = {VALID, 1'b0, 1'b0, 1'b0, PROTERR, TIMEOUT, 1'b0, 1'b0};
    wire 			 ERR;
-   // C_S8, where the C_S4 used to be.  The old term was inert -- nothing it
-   // gated could assert before C_S8 anyway -- and it is what kept the bus error
-   // register from latching a transient once PROTERR moved earlier.  TIMEOUT is
-   // unaffected: it is not set until C_S24, and C_S8 is still asserted then.
-   assign ERR = (PROTERR | TIMEOUT) & C_S8;
+   // C_S8, where an inert C_S4 used to be, and MMU_REFUSE rather than PROTERR.
+   //
+   // C_S8 is what keeps the bus error register from latching a transient now
+   // that the refusal is decided at C_S6.  TIMEOUT is unaffected: it is not set
+   // until C_S24, and C_S8 is still asserted then.
+   //
+   // MMU_REFUSE and not PROTERR, because PROTERR no longer covers an invalid
+   // entry.  Were ERR driven from PROTERR, such an access would be suppressed
+   // by the gate, answered by nothing, run to C_S24 and be reported as TIMEOUT
+   // -- which sys/sun2/trap.c reads as "the MMU was satisfied, the memory
+   // system failed" and refuses to recover from.  That is the bug that killed
+   // pid 1 earlier in this project; it must not come back through this door.
+   assign ERR = (MMU_REFUSE | TIMEOUT) & C_S8;
 
    // The acknowledge: any write to the register, data discarded.  And a read,
    // which is the part that took a board and an ILA to find.
