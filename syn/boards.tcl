@@ -17,11 +17,34 @@
 # -1 are met by a -2, but not the reverse.  If the chip on the bench turns out
 # to be a -2, nothing here needs to change.
 #
-# v1s1 is a V1 board -- V1 pins, V1 everything -- built for the SLOWER -1 grade.
-# QMTech sold the V1 as a -2, but is known to have shipped -1 dice on some
-# boards, and a design signed off against -2 timing on a -1 die has been
-# analysed optimistically.  It is a diagnostic target, not a third revision:
-# same XDC as v1, and the same MIG as v3 because the part is identical.
+# v1s1 is a V1 board -- V1 pins, V1 everything -- built for the SLOWER -1 grade,
+# and on this bench it is the one to use.
+#
+# QMTech sold the V1 as a -2 and is known to have shipped -1 dice on some
+# boards.  A design signed off against -2 timing on a -1 die has been analysed
+# optimistically, and that is not theoretical here: a VME 2/50 built for -2
+# stalled in the PROM at "Probing I/O bus: ie" on four builds out of four, with
+# timing reported MET throughout, while the identical RTL built for -1 reaches a
+# full autoconfig and boots SunOS.  The -2 build had put a hold path inside the
+# Ethernet MAC's receive unit at 64 ps (machine/ethernet/mac/u_ru/buf_addr_reg[3]
+# -> acc_addr_reg[3]); the -1 build, placed against a much tighter setup
+# constraint (WNS 1.281 -> 0.213), does not have it among its tightest at all.
+# MultiBus builds and boots on -1 as well, WNS 0.968.
+#
+# Building -1 is safe in both directions for the same reason the V3 entry gives:
+# constraints met on a -1 are met by a -2, never the reverse.  So this costs
+# nothing if the die turns out to be a -2 after all.
+#
+# What this does NOT prove is that the die is a -1.  It proves the -2 build was
+# violating something the -2 timing model said was fine, which is equally
+# consistent with placement luck.  The discriminator, if it is ever worth the
+# board time, is a -2 build with a different placer directive: same part, same
+# clock, placement the only variable.
+#
+# Same XDC as v1, and the same MIG as v3 because the part is identical -- but
+# NOT the same ILA: build/ip/<board>/sun2_ila is per board, and seeding v1s1
+# from v3 brought a stale 11-probe core that failed synthesis with "probe11 does
+# not exist".  Regenerate it (make -C syn ip-ila BOARD=v1s1) rather than copy.
 #
 # The board is also sold as an XC7A200T in the same package with the same
 # pinout.  Adding it would be one more entry below plus its own MIG generation;
