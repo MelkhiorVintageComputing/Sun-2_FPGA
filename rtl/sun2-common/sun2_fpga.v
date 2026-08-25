@@ -451,7 +451,54 @@ module sun2_fpga(input         cpu_clk,
    // nothing would have checked it.  mon/h/buserr.h keeps the bit in the bus
    // error register precisely so a handler can tell "not valid" from
    // "protection refused it", which only makes sense if both raise the error.
-   assign PROTERR   = (PROTERR_raw | ~VALID) & C_S8 & FC_GENERAL & ~P_AS_n;
+   // C_S6, not C_S8, and the difference between the two uses of this signal is
+   // the whole point.
+   //
+   // PROTERR is used twice: to raise the bus error (through ERR, below), and --
+   // once the matches are gated on it -- to stop a cycle reaching anything
+   // behind the MMU.  The second needs the answer while the MATCH_* terms are
+   // being evaluated, which is C_S6: `ma_pmap2devices' is already trusted there
+   // by MATCH_MEM, and `ps_pmap2devices' comes out of the same pmap_sram, on the
+   // same clock, from the same index.
+   //
+   // Moving this to C_S6 while ERR still fired on C_S4 put 243,836 phantom
+   // protection violations into the reference boot, with undefined permission
+   // bits -- the same shape as the 23,607 the ~P_AS_n term was added to kill.
+   // That measured the *reporting*, not the map: C_S8 was doing double duty as
+   // "the map has settled" and "report now", because the C_S4 on ERR was inert
+   // (PROTERR demanded C_S8 and TIMEOUT is not set before C_S24).  The two are
+   // separated now -- the answer at C_S6, the report at C_S8.
+   assign PROTERR   = (PROTERR_raw | ~VALID) & C_S6 & FC_GENERAL & ~P_AS_n;
+
+   // Nothing behind the MMU may see a cycle the MMU is rejecting.
+   //
+   // This is the fix for the failure that stopped SunOS in /sbin/init.  The
+   // MATCH_* terms below are evaluated at C_S6 and raise the transaction --
+   // for memory, the Wishbone request with wb_we_o already set -- while the
+   // protection answer used to arrive at C_S8, one bus state later.  So a write
+   // to a write-protected page was committed to memory and *then* refused.
+   //
+   // Measured with tools/ctxprobe case H, on the board: a page holding
+   // c0ffee00, a longword write of 12345678 through `moves' at FC_UD, the entry
+   // fa000181 (valid, user read and execute, USR_WRITE denied).  The fault was
+   // raised correctly -- 0088 <VALID,PROTERR> -- and memory was left at
+   // 1234ee00.  The write is two word cycles; the first committed before the
+   // refusal and the second never issued, which is why only the high half
+   // changed.
+   //
+   // SunOS 4.x fork is copy-on-write and arms it by removing write permission
+   // (sys/vm/seg_vn.c, hat_chgprot(seg, ..., ~PROT_WRITE); anon_dup's comment
+   // says it assumes the caller has done so).  So the first write after a fork
+   // faults *and corrupts the page the fault was protecting*, and whichever
+   // process keeps that page sees the damage.  On a stack it is a mangled
+   // return address: init's child returns from fork's rts into its own stack
+   // and runs until something is illegal.
+   //
+   // A read did not need this -- the CPU discards the data when BERR ends the
+   // cycle -- but gating both is simpler and costs nothing, and a device read
+   // with side effects would need it anyway.
+   wire MMU_OK;
+   assign MMU_OK = ~PROTERR;
    //assign PROTERR_n = PROTERR_raw_n | ~C_S8 & FC_GENERAL;
    
    // The permission check.  Select is {P_FC[2], P_FC[1], ~P_RW_n}, so the eight
@@ -543,7 +590,11 @@ module sun2_fpga(input         cpu_clk,
    wire [7:0] 			 berr_out;
    assign berr_in = {VALID, 1'b0, 1'b0, 1'b0, PROTERR, TIMEOUT, 1'b0, 1'b0};
    wire 			 ERR;
-   assign ERR = (PROTERR | TIMEOUT) & C_S4;
+   // C_S8, where the C_S4 used to be.  The old term was inert -- nothing it
+   // gated could assert before C_S8 anyway -- and it is what kept the bus error
+   // register from latching a transient once PROTERR moved earlier.  TIMEOUT is
+   // unaffected: it is not set until C_S24, and C_S8 is still asserted then.
+   assign ERR = (PROTERR | TIMEOUT) & C_S8;
 
    // The acknowledge: any write to the register, data discarded.  And a read,
    // which is the part that took a board and an ILA to find.
@@ -661,7 +712,7 @@ module sun2_fpga(input         cpu_clk,
    // VME -- see the device space map in the Architecture Manual.  DEV_PAGE_BASE
    // selects which, so the same decode serves both machines.
    wire 			 MATCH_DEV;
-   assign MATCH_DEV      = (FC_GENERAL) & (TYPE == 3'h1) & C_S6 &
+   assign MATCH_DEV      = (FC_GENERAL) & MMU_OK & (TYPE == 3'h1) & C_S6 &
                            (ma_pmap2devices[11:3] == (`DEV_PAGE_BASE >> 3));
 
    wire 			 MATCH_PROM, MATCH_RSVD, MATCH_DPC, MATCH_PARALLEL, MATCH_SERIAL, MATCH_TIMER, MATCH_ROPS, MATCH_RTC;
@@ -708,14 +759,14 @@ module sun2_fpga(input         cpu_clk,
    // bottom six bits, so the same wires pick the 2 KiB within the aperture.
 `ifdef SUN2_FB
  `ifdef SUN2_VME
-   assign MATCH_FB       = (FC_GENERAL) & (TYPE == 3'h1) & C_S6 &
+   assign MATCH_FB       = (FC_GENERAL) & MMU_OK & (TYPE == 3'h1) & C_S6 &
                            (ma_pmap2devices[11:6] == 6'h0);
-   assign MATCH_FBCTL    = (FC_GENERAL) & (TYPE == 3'h1) & C_S6 &
+   assign MATCH_FBCTL    = (FC_GENERAL) & MMU_OK & (TYPE == 3'h1) & C_S6 &
                            (ma_pmap2devices == 12'h040);
  `else
-   assign MATCH_FB       = (FC_GENERAL) & (TYPE == 3'h0) & C_S6 &
+   assign MATCH_FB       = (FC_GENERAL) & MMU_OK & (TYPE == 3'h0) & C_S6 &
                            (ma_pmap2devices[11:8] == 4'hE);
-   assign MATCH_FBCTL    = (FC_GENERAL) & (TYPE == 3'h0) & C_S6 &
+   assign MATCH_FBCTL    = (FC_GENERAL) & MMU_OK & (TYPE == 3'h0) & C_S6 &
                            (ma_pmap2devices[11:8] == 4'hF) &
                            (ma_pmap2devices[1:0] == 2'b11);
  `endif
@@ -726,15 +777,15 @@ module sun2_fpga(input         cpu_clk,
 
 
 `ifdef MEM_SIM_ONLY
-   assign MATCH_MEM      = (FC_GENERAL) & (TYPE == 3'h0) & (ma_pmap2devices[11:8] == 4'h0) & C_S6; // "physically" installed (simulation => reduced)
+   assign MATCH_MEM      = (FC_GENERAL) & MMU_OK & (TYPE == 3'h0) & (ma_pmap2devices[11:8] == 4'h0) & C_S6; // "physically" installed (simulation => reduced)
 `else
    // "physically" installed memory, in 2 KiB pages -- see MEM_PAGES in sun2_config.vh
-   assign MATCH_MEM      = (FC_GENERAL) & (TYPE == 3'h0) & (ma_pmap2devices[11:0] < `MEM_PAGES) & C_S6;
+   assign MATCH_MEM      = (FC_GENERAL) & MMU_OK & (TYPE == 3'h0) & (ma_pmap2devices[11:0] < `MEM_PAGES) & C_S6;
 `endif
    // Addressable memory space, for DTACK: auto-sizing works by reading back
    // wrong values rather than by taking a bus error, so everything the PROM
    // probes has to answer.  See MEM_SPACE_PAGES in sun2_config.vh.
-   assign MATCH_MEMX     = (FC_GENERAL) & (TYPE == 3'h0) & (ma_pmap2devices < `MEM_SPACE_PAGES) & C_S6;
+   assign MATCH_MEMX     = (FC_GENERAL) & MMU_OK & (TYPE == 3'h0) & (ma_pmap2devices < `MEM_SPACE_PAGES) & C_S6;
 
    // System bus space -- TYPE 2, MPM_BUSMEM on a MultiBus machine, VPM_VME0 on
    // a VME one.  1 MiB of it on MultiBus (512 pages of 2 KiB), so only nine of
@@ -749,7 +800,7 @@ module sun2_fpga(input         cpu_clk,
    // would make ecprobe() -- which is nothing but "did it answer?" -- report a
    // 3Com card that is not there.
    wire 			 MATCH_MBMEM;
-   assign MATCH_MBMEM    = (FC_GENERAL) & (TYPE == 3'h2) & C_S6 &
+   assign MATCH_MBMEM    = (FC_GENERAL) & MMU_OK & (TYPE == 3'h2) & C_S6 &
                            (ma_pmap2devices[11:9] == 3'h0);
    assign mb_sel         = MATCH_MBMEM;
    assign mb_addr        = {ma_pmap2devices[8:0], P_A[10:1], 1'b0};
@@ -786,7 +837,7 @@ module sun2_fpga(input         cpu_clk,
    // before, and xyprobe()'s second address at 0xEE48 still has to fail for
    // the monitor to report one controller rather than two.
    wire 			 MATCH_MBIO;
-   assign MATCH_MBIO     = (FC_GENERAL) & (TYPE == 3'h3) & C_S6;
+   assign MATCH_MBIO     = (FC_GENERAL) & MMU_OK & (TYPE == 3'h3) & C_S6;
    assign mbio_sel       = MATCH_MBIO;
    assign mbio_addr      = {ma_pmap2devices[4:0], P_A[10:1], 1'b0};
    assign mbio_we        = ~P_RW_n;
@@ -1030,7 +1081,7 @@ module sun2_fpga(input         cpu_clk,
  `define KBM_HERE
    // The video board decodes A19, A12 and A11 and nothing else above 0x700000,
    // so the SCC repeats every 8 KiB up to 0x7FFFFE just as the real one does.
-   assign MATCH_KBM = (FC_GENERAL) & (TYPE == 3'h0) & C_S6 &
+   assign MATCH_KBM = (FC_GENERAL) & MMU_OK & (TYPE == 3'h0) & C_S6 &
                       (ma_pmap2devices[11:8] == 4'hF) &
                       (ma_pmap2devices[1:0] == 2'b00);
 `endif
