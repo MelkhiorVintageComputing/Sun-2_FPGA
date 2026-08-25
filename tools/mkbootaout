@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+#
+# Wrap a boot-block image in a Sun a.out header so the standalone bootloader
+# will load it over the network in place of /vmunix.
+#
+# The probes in tools/*probe/ are built for the *disk* path: tools/mkxydisk
+# puts the raw image in the boot block and the monitor loads it to 0x4000 and
+# jumps there.  A netbooted machine has no disk, and the chain is
+#
+#     PROM -> RARP/TFTP -> `boot' -> NFS -> /vmunix
+#
+# so the file the bootloader fetches has to be something it recognises.  It
+# wants an a.out, and `sun/sys/sunstand/readfile.c' says exactly what it does
+# with one:
+#
+#     read the 32-byte struct exec; accept OMAGIC (or ZMAGIC/NMAGIC)
+#     for OMAGIC:  a_text += a_data;  a_data = 0
+#     lseek(N_TXTOFF); read(LOAD, a_text)      <- LOAD is -DLOAD=0x4000
+#     zero a_bss bytes after it
+#     return LOAD                              <- a_entry is IGNORED
+#
+# So an OMAGIC image is loaded at 0x4000 and entered at 0x4000, which is where
+# every probe here is linked and where each one puts `_start' first.  Nothing
+# in the probe has to change; it only needs the header.
+#
+# a_bss is zero because the probes' linker script places .bss *inside* the
+# image and `_start' clears it -- objcopy -O binary drops NOBITS whatever the
+# script says, so the bytes are really there and the loader must not add more.
+#
+# Usage:
+#   tools/mkbootaout build/disk/ctxprobe.bin -o build/disk/ctxprobe.vmunix
+#
+# Then put that file on the NFS server as the machine's /vmunix.  Output goes
+# to the serial console exactly as it does from a disk boot; the probe ends in
+# a tight loop, so reset the board when it has printed.
+
+import argparse
+import struct
+import sys
+
+OMAGIC = 0o407
+M_68010 = 1
+LOAD = 0x4000
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="wrap a boot-block image in a Sun a.out header for netboot")
+    ap.add_argument("image", help="raw binary, linked at 0x4000")
+    ap.add_argument("-o", "--output", required=True)
+    ap.add_argument("--entry", default=hex(LOAD),
+                    help="a_entry; recorded but ignored by the bootloader")
+    ap.add_argument("--pad", type=lambda v: int(v, 0), default=0,
+                    help="pad the FILE out to this many bytes with zeros, "
+                         "leaving a_text as the real image size.  The loader "
+                         "reads exactly a_text bytes, so the padding is never "
+                         "loaded -- it only guarantees the file cannot be "
+                         "short.  A first attempt at this failed with the "
+                         "loader's `Truncated file', which is what "
+                         "`read(LOAD, a_text) < a_text' prints, so it is worth "
+                         "removing file length from the list of suspects.")
+    args = ap.parse_args()
+
+    with open(args.image, "rb") as f:
+        raw = f.read()
+    if not raw:
+        sys.exit("%s is empty" % args.image)
+
+    hdr = struct.pack(">BBH7I",
+                      0x01,            # a_dynamic:1 = 0, a_toolversion:7 = 1
+                      M_68010,         # a_machtype
+                      OMAGIC,          # a_magic
+                      len(raw),        # a_text -- the whole image
+                      0,               # a_data
+                      0,               # a_bss   -- already inside the image
+                      0,               # a_syms
+                      int(args.entry, 0),
+                      0,               # a_trsize
+                      0)               # a_drsize
+    out = hdr + raw
+    if args.pad and len(out) < args.pad:
+        out += b"\0" * (args.pad - len(out))
+    with open(args.output, "wb") as f:
+        f.write(out)
+    print("%s: %d bytes of text, file %d bytes, loads at 0x%x, enters at 0x%x"
+          % (args.output, len(raw), len(out), LOAD, LOAD))
+
+
+if __name__ == "__main__":
+    main()

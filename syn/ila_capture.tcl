@@ -195,7 +195,19 @@ switch -- $mode {
             # the capture qualifier.  The buffer then holds 4096 clocks of
             # actual user-mode execution and nothing else: which addresses ran,
             # and how far each process got before it stopped running.
+            #
+            # KCX narrows the trigger to one context, which is how you get a
+            # *particular* process rather than the first one to run.  Armed
+            # from boot with no KCX the buffer fills with pid 1's own startup
+            # and never reaches its children; KCX=3 skips to the first process
+            # that is not init and shows it from its very first instruction.
+            # The context number is whatever ctxalloc handed out, so read it
+            # off an earlier capture (dbg_cx) rather than assuming.
             set_property TRIGGER_COMPARE_VALUE eq3'b010 $P(fc)
+            if {[info exists ::env(KCX)]} {
+                puts "== uprog: only context $::env(KCX) =="
+                set_property TRIGGER_COMPARE_VALUE eq3'b[format %03b $::env(KCX)] $P(cx)
+            }
             set qualify_prog 1 }
     uprogerr { # a bus error on a user *instruction* fetch: a process faulting on
                # its own text, which is what a child dying before it can exec
@@ -203,6 +215,61 @@ switch -- $mode {
                # kernel's own MOVES into user space.
                set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
                set_property TRIGGER_COMPARE_VALUE eq3'b010   $P(fc) }
+    kpc { # a supervisor instruction fetch of one named kernel routine, given
+          # as a byte address in the KPC environment variable:
+          #
+          #   KPC=6958a vivado ... -tclargs OUTDIR kpc ...     (_setregs)
+          #
+          # tools/pcsym KERNEL --list is where the address comes from.  This is
+          # the "did the kernel ever get here" question, which a symbolised
+          # trace can only answer for the few hundred cycles a buffer holds --
+          # a routine that runs once per process is not going to be in one.
+          # P_A is A[23:1], so the byte address is shifted down by one.
+          if {![info exists ::env(KPC)]} {
+              error "mode kpc needs KPC=<kernel byte address in hex>"
+          }
+          set kaddr [expr {[scan $::env(KPC) %x] >> 1}]
+          # KFC picks the function code (default 6, a supervisor instruction
+          # fetch).  KFC=5 with KRW turns this into "any supervisor data access
+          # to one address", which is how you ask what happened to a particular
+          # word of memory rather than to a particular routine.
+          set kfc 6
+          if {[info exists ::env(KFC)]} { set kfc $::env(KFC) }
+          puts "== kpc: FC $kfc at byte address 0x[format %x [scan $::env(KPC) %x]] =="
+          set_property TRIGGER_COMPARE_VALUE eq3'b[format %03b $kfc] $P(fc)
+          set_property TRIGGER_COMPARE_VALUE eq23'h[format %06x $kaddr] $P(addr)
+          # KCX narrows to one context, which is how a capture picks out a
+          # particular process: the parent and the child run the same code at
+          # the same address, and only the context tells them apart.
+          if {[info exists ::env(KCX)]} {
+              puts "== kpc: only context $::env(KCX) =="
+              set_property TRIGGER_COMPARE_VALUE eq3'b[format %03b $::env(KCX)] $P(cx)
+          }
+          # KQUSER stores only user-mode clocks, the way `uonly' does.  The
+          # trigger is per *sample*, not per bus cycle, so it cannot be made to
+          # skip a faulting access: ERR only asserts at the end of the cycle and
+          # its early samples look error-free.  What works instead is to trigger
+          # on the fault and let the buffer reach far enough forward to hold the
+          # retry -- which it does once the kernel's fault handling, thousands of
+          # supervisor cycles of it, is not being stored.
+          if {[info exists ::env(KQUSER)]} { set qualify_user 1 }
+          # KERR selects on the error terms: KERR=1 only the cycle that faults,
+          # KERR=0 only one that does not.  That is how you catch the *retry*
+          # of a faulted access rather than the fault -- the first matching
+          # cycle is always the fault, and the interesting one is the read that
+          # follows once the handler has fixed the mapping, because that is the
+          # value the instruction actually gets.
+          # verd = {VALID PROTERR_raw PROTERR TIMEOUT ERR MATCH_MEM}, ERR bit 1.
+          if {[info exists ::env(KERR)]} {
+              if {$::env(KERR)} { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd) } \
+              else              { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX0X $P(verd) }
+          }
+          # hand = {AS RW UDS LDS DTACK BERR}, active low, so RW is bit 4 and a
+          # read leaves it high.  KRW=1 reads only, KRW=0 writes only.
+          if {[info exists ::env(KRW)]} {
+              if {$::env(KRW)} { set_property TRIGGER_COMPARE_VALUE eq6'bX1XXXX $P(hand) } \
+              else             { set_property TRIGGER_COMPARE_VALUE eq6'bX0XXXX $P(hand) }
+          } }
     ctxwr { # a write to either context register.  They live in one word at
             # FC_MAP offset 6 -- supervisor in the even byte, user in the odd
             # -- so P_A[23:1] is 3 for both and UDS/LDS says which.  A context
@@ -399,6 +466,11 @@ switch -- $mode {
 # even look at the trigger, and if qualified samples are rare it never arms.
 # That is what "did not trigger, core status IDLE" meant the first time.
 if {[info exists qualify_prog]} { set trigpos 16 }
+# KPOS moves the trigger for any mode.  A `kpc' capture of a routine that is
+# entered once and then runs for longer than a buffer wants almost all of its
+# samples *after* the trigger -- the question is what the routine went on to
+# do, not what called it.  KPOS=16 gives 4080 clocks of that.
+if {[info exists ::env(KPOS)]} { set trigpos $::env(KPOS) }
 if {[info exists trigpos_override]} { set trigpos $trigpos_override }
 set_property CONTROL.TRIGGER_POSITION $trigpos $ila
 puts "== trigger position $trigpos of $depth =="

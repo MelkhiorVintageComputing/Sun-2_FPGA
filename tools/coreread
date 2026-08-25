@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+#
+# Decode a SunOS 4.x core file: which signal killed the process, and where.
+#
+# A core dump appearing on the NFS root is the machine telling us a user
+# process died, and nothing else in this project can read one -- tools/pcsym
+# wants an a.out with a symbol table, tools/ufsread wants a disk image.  The
+# header of a core file carries the killing signal, the exception code and the
+# full register set, which is the difference between "init is stuck" and
+# "SIGSEGV at 0x2020, the first instruction of its text".
+#
+# Usage:
+#   tools/coreread core                    the header
+#   tools/coreread core --exe /sbin/sh     also resolve pc/a6 against the a.out
+#   tools/coreread core --hexdump          the raw struct, for a format argument
+#
+# --exe just shells out to the resolver in tools/pcsym, so it wants the same
+# thing pcsym does: the unstripped a.out of the program that dumped -- NOT the
+# kernel.  Pull it out of the netboot root archive:
+#
+#   tar xzOf .../root-4.0.3.tar.gz ./sbin/sh > /tmp/sh
+#
+# Be warned that every binary in the 4.0.3 netboot root IS stripped -- sh,
+# init, mount and the rest all have a_syms == 0 -- so --exe has nothing to say
+# about them and this tool does not need it.  The check that matters, "is the
+# pc inside the text segment at all", uses the a.out header the kernel copied
+# into the core itself and so always works.
+#
+# ---------------------------------------------------------------------------
+# The file format
+# ---------------------------------------------------------------------------
+# From the 4.0.3 headers themselves, in the netboot root archive:
+# usr/include/sys/core.h, usr/include/sun2/reg.h (which is just m68k/reg.h)
+# and usr/include/sys/exec.h.  Big-endian throughout.
+#
+#   struct core {
+#       int   c_magic;            0x080456
+#       int   c_len;              sizeof (struct core) -- as this kernel built it
+#       struct regs c_regs;       8 data + 8 address ints, then sr and pc
+#       struct exec c_aouthdr;    the 32-byte a.out header of the dead program
+#       int   c_signo;            killing signal
+#       int   c_tsize, c_dsize, c_ssize;
+#       char  c_cmdname[17];
+#   #ifdef FPU
+#       struct fpu c_fpu;
+#   #endif
+#       int   c_ucode;            exception number from u_code
+#   };
+#
+# then the data segment, the stack, and the u area.
+#
+# Everything up to c_cmdname is at a fixed offset; c_ucode is not, because the
+# FPU block may or may not be there and core.h also reserves CORE_PADLEN for a
+# struct that changed size between releases.  So c_ucode is read as the last
+# word of the header -- c_len - 4 -- rather than at a computed offset.  That is
+# the one field worth being careful about, and c_len is in the file precisely
+# so a reader does not have to guess.
+
+import argparse
+import struct
+import subprocess
+import sys
+import os
+
+CORE_MAGIC = 0x080456
+
+# The offsets above, named once.
+O_MAGIC, O_LEN, O_REGS, O_AOUT = 0, 4, 8, 80
+O_SIGNO, O_TSIZE, O_DSIZE, O_SSIZE, O_CMDNAME = 112, 116, 120, 124, 128
+CMDNAME_LEN = 17
+
+# /usr/include/sys/signal.h, SunOS 4.  Only the ones a fault can raise are
+# interesting, but a wrong guess about the signal would send the whole
+# diagnosis somewhere else, so the table is complete.
+SIGNALS = {
+    1: "SIGHUP", 2: "SIGINT", 3: "SIGQUIT", 4: "SIGILL", 5: "SIGTRAP",
+    6: "SIGIOT/SIGABRT", 7: "SIGEMT", 8: "SIGFPE", 9: "SIGKILL",
+    10: "SIGBUS", 11: "SIGSEGV", 12: "SIGSYS", 13: "SIGPIPE", 14: "SIGALRM",
+    15: "SIGTERM", 16: "SIGURG", 17: "SIGSTOP", 18: "SIGTSTP", 19: "SIGCONT",
+    20: "SIGCHLD", 21: "SIGTTIN", 22: "SIGTTOU", 23: "SIGIO", 24: "SIGXCPU",
+    25: "SIGXFSZ", 26: "SIGVTALRM", 27: "SIGPROF", 28: "SIGWINCH",
+    29: "SIGLOST", 30: "SIGUSR1", 31: "SIGUSR2",
+}
+
+# What each fatal one means on a Sun-2, from sys/sun2/trap.c.  This is the
+# whole point of the tool: the signal names the failing subsystem.
+MEANING = {
+    4:  "illegal instruction or privilege violation -- the process is not "
+        "executing its own text (trap.c T_ILLINST/T_PRIVVIO+USER)",
+    5:  "trace/breakpoint trap (trap.c T_TRACE+USER)",
+    7:  "emulator trap -- an unimplemented instruction (trap.c T_EMU*+USER)",
+    8:  "arithmetic: divide by zero, CHK or TRAPV (trap.c T_ZERODIV/T_CHKINST/T_TRAPV)",
+    10: "address error -- an odd PC, or a word/long access to an odd address "
+        "(trap.c T_ADDRERR+USER).  This is the ONLY source of SIGBUS here",
+    11: "bus error that pagefault() and grow() could not fix (trap.c pferr).  "
+        "Note trap.c takes this branch WITHOUT calling pagefault() whenever the "
+        "bus error register shows BE_TIMEOUT or BE_VMEBUSERR",
+    12: "bad system call (trap.c T_SYSCALL)",
+}
+
+# The a.out magics, as tools/pcsym names them.
+AOUT_MAGIC = {0o407: "OMAGIC (impure)", 0o410: "NMAGIC (read-only text)",
+              0o413: "ZMAGIC (demand paged)"}
+
+
+def be32(d, off):
+    return struct.unpack_from(">I", d, off)[0]
+
+
+def s32(d, off):
+    return struct.unpack_from(">i", d, off)[0]
+
+
+def load(path):
+    with open(path, "rb") as f:
+        d = f.read()
+    if len(d) < 132:
+        sys.exit("%s: %d bytes; too short to be a core file" % (path, len(d)))
+    magic = be32(d, O_MAGIC)
+    if magic != CORE_MAGIC:
+        sys.exit("%s: c_magic is 0x%x, not the 0x%x of a SunOS core file"
+                 % (path, magic, CORE_MAGIC))
+    return d
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="decode the header of a SunOS 4.x (Sun-2) core file")
+    ap.add_argument("core")
+    ap.add_argument("--exe", help="unstripped a.out of the program that dumped, "
+                                  "for symbol resolution via tools/pcsym")
+    ap.add_argument("--hexdump", action="store_true",
+                    help="also dump the raw header bytes")
+    args = ap.parse_args()
+
+    d = load(args.core)
+    clen = be32(d, O_LEN)
+
+    # c_ucode is the last word of the header; see the note at the top.
+    ucode = be32(d, clen - 4) if 4 <= clen <= len(d) else None
+
+    dreg = [be32(d, O_REGS + 4 * i) for i in range(8)]
+    areg = [be32(d, O_REGS + 32 + 4 * i) for i in range(8)]
+    sr = be32(d, O_REGS + 64)
+    pc = be32(d, O_REGS + 68)
+
+    signo = be32(d, O_SIGNO)
+    tsize, dsize, ssize = (be32(d, O_TSIZE), be32(d, O_DSIZE), be32(d, O_SSIZE))
+    cmd = d[O_CMDNAME:O_CMDNAME + CMDNAME_LEN].split(b"\0")[0].decode("latin-1")
+
+    # The a.out header of the dead program, same layout tools/pcsym parses.
+    a_dyn_tool, a_mach, a_magic = struct.unpack_from(">BBH", d, O_AOUT)
+    a_text, a_data, a_bss, a_syms, a_entry = struct.unpack_from(">5I", d, O_AOUT + 4)
+
+    print("%s: %d bytes, header %d" % (args.core, len(d), clen))
+    print()
+    print("command   %s" % (cmd or "(none)"))
+    print("signal    %d  %s" % (signo, SIGNALS.get(signo, "unknown")))
+    if signo in MEANING:
+        print("          %s" % MEANING[signo])
+    if ucode is not None:
+        print("u_code    0x%x" % ucode)
+    print()
+    print("pc        %08x" % pc)
+    print("sr        %04x   (%s mode, ipl %d%s)"
+          % (sr & 0xFFFF,
+             "supervisor" if sr & 0x2000 else "user",
+             (sr >> 8) & 7,
+             ", trace" if sr & 0x8000 else ""))
+    for i in range(0, 8, 4):
+        print("D%d-D%d     %s" % (i, i + 3, " ".join("%08x" % v for v in dreg[i:i+4])))
+    for i in range(0, 8, 4):
+        print("A%d-A%d     %s" % (i, i + 3, " ".join("%08x" % v for v in areg[i:i+4])))
+    print()
+    print("text %d  data %d  stack %d   (dumped)" % (tsize, dsize, ssize))
+    print("a.out     magic 0%o %s, machtype %d, entry %08x"
+          % (a_magic, AOUT_MAGIC.get(a_magic, "?"), a_mach, a_entry))
+    print("          text %d  data %d  bss %d  syms %d"
+          % (a_text, a_data, a_bss, a_syms))
+
+    # A dead process whose PC is not inside its own text is the single most
+    # useful thing this tool can say, so say it outright rather than leaving it
+    # to be worked out from the numbers above.
+    if a_magic in (0o410, 0o413):
+        lo = 0x2000            # USRTEXT, sun2/vmparam.h
+    else:
+        lo = 0
+    if not (lo <= pc < lo + a_text):
+        print()
+        print("NOTE: pc %08x is outside the text segment [%08x, %08x) --"
+              % (pc, lo, lo + a_text))
+        print("      the process was not executing its own instructions.")
+
+    if args.exe:
+        pcsym = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pcsym")
+        print()
+        with open(args.exe, "rb") as f:
+            exe_syms = struct.unpack_from(">I", f.read(32), 16)[0]
+        if exe_syms == 0:
+            print("%s is stripped (a_syms == 0); no symbols to resolve against."
+                  % args.exe)
+            return
+        print("symbols from %s:" % args.exe)
+        addrs = ["%x" % pc] + ["%x" % v for v in areg[5:7] if v]
+        try:
+            out = subprocess.run([pcsym, args.exe] + addrs,
+                                 capture_output=True, text=True)
+            sys.stdout.write(out.stdout)
+            sys.stderr.write(out.stderr)
+        except OSError as e:
+            print("  could not run %s: %s" % (pcsym, e))
+
+    if args.hexdump:
+        print()
+        for off in range(0, min(clen, len(d)), 16):
+            row = d[off:off + 16]
+            print("%04x  %-47s  %s"
+                  % (off, " ".join("%02x" % b for b in row),
+                     "".join(chr(b) if 32 <= b < 127 else "." for b in row)))
+
+
+if __name__ == "__main__":
+    main()

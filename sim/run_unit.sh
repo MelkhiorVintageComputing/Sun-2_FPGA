@@ -5,6 +5,7 @@
 #   ./run_unit.sh clkgen    measures what wukong_clkgen actually generates
 #   ./run_unit.sh adapter   wb_to_mig_ui against wb_ram_model, randomised
 #   ./run_unit.sh dvma      sun2_dvma: Wishbone master -> 68010 bus cycles
+#   ./run_unit.sh bridge    sun2_wishbone_bridge against back-to-back (loop mode) cycles
 #   ./run_unit.sh phy       phy_rtl8211_init + wb_mdio against a PHY model
 #   ./run_unit.sh mbether   sun2_mb_ether against the boot PROM's own sequences
 #   ./run_unit.sh xy450     sun2_xy450's registers, as the PROM and SunOS probe them
@@ -93,6 +94,17 @@ scanout)
 		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	xsim scanout_sim -R ${XSIMARGS:-} \
 		| grep -E '===|PASS|FAIL|checked|beats read|line starts|white|wrote'
+	;;
+
+bridge)
+	# The bridge alone, driven the way the 68010's loop mode drives it: one
+	# memory cycle immediately after another with no fetch between them.  See
+	# the header of tb/tb_wb_bridge.sv for why that is the only case that can
+	# leave `done' set across a cycle boundary.
+	if xvlog "$top/rtl/sun2-common/sun2_wishbone_bridge.v" | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xvlog --sv "$top/tb/tb_wb_bridge.sv" | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug off --timescale 1ns/1ps work.tb_wb_bridge -s bridge_sim | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	xsim bridge_sim -R | grep -E '===|PASS|FAIL|ok$|LOST|returned|timeout'
 	;;
 
 dvma)

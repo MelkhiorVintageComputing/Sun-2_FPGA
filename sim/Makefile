@@ -24,6 +24,7 @@
 #                                  PHY status register in device page 0xFE7
 #   make clkgen                    measure what the clock generator produces
 #   make adapter                   check the Wishbone-to-MIG adapter
+#   make bridge                    the Wishbone bridge against back-to-back cycles
 #   make dvma                      check the Wishbone-to-68010 DVMA bridge
 #   make phy                       check the RTL8211EG bring-up sequence
 #   make mbether                   check the MultiBus Ethernet board
@@ -199,7 +200,7 @@ board-phy:
 	$(MAKE) board-check MACHINE=vme
 
 # --- unit tests for the board layer ---------------------------------------
-clkgen adapter migddr3 dvma phy mbether xy450 scanout: rom
+clkgen adapter migddr3 dvma bridge phy mbether xy450 scanout: rom
 	BOARD=$(BOARD) XSIMARGS="$(XSIMARGS)" ./run_unit.sh $@
 
 # --- a picture of what the machine drew -----------------------------------
@@ -275,4 +276,4 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: all rom xsim board board-check board-phy iverilog check clean
-.PHONY: clkgen adapter migddr3 dvma phy mbether xy450 xychain scanout screenshot
+.PHONY: clkgen adapter migddr3 dvma bridge phy mbether xy450 xychain scanout screenshot
