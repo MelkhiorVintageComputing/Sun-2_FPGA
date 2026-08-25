@@ -21,6 +21,7 @@ top=$(cd "$here/.." && pwd)
 
 : "${XILINX_VIVADO:=/opt/Xilinx/2025.2/Vivado}"
 "$top/tools/patch_inputs.sh" Wish82586
+"$top/tools/patch_inputs.sh" z8530_scc
 
 if [ ! -x "$XILINX_VIVADO/bin/xvlog" ]; then
 	echo "xsim not found under $XILINX_VIVADO -- set XILINX_VIVADO" >&2
@@ -142,7 +143,7 @@ xvlog --sv --work sun2 \
 	"$top/rtl/sun2-vme/sun2_ethernet.sv" \
 	"$top/rtl/sun2-multibus/sun2_mb_ether.sv" \
 	"$top/rtl/sun2-multibus/sun2_xy450.sv" \
-	"$top/Inputs/z8530_scc/z8530_scc.sv" \
+	"$top/build/inputs/z8530_scc/z8530_scc.sv" \
 	"$top/tb/wb_ram_model.sv" \
 	"$top/tb/blk_file.sv" \
 	"$top/tb/mii_peer.sv" \

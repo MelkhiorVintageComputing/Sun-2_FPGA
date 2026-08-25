@@ -29,6 +29,7 @@ top=$(cd "$here/.." && pwd)
 "$top/tools/patch_inputs.sh" Wish82586
 "$top/tools/patch_inputs.sh" Wish5380
 "$top/tools/patch_inputs.sh" Suska_Configware
+"$top/tools/patch_inputs.sh" z8530_scc
 
 if [ ! -x "$XILINX_VIVADO/bin/xvlog" ]; then
 	echo "xsim not found under $XILINX_VIVADO -- set XILINX_VIVADO" >&2
@@ -171,7 +172,7 @@ xvlog --sv --work sun2 "${defargs[@]}" "${incargs[@]}" \
 	"$top/build/inputs/Wish5380/src/wish5380_pkg.sv" \
 	"$top/build/inputs/Wish5380/src/sd_spi.sv" \
 	"$top/build/inputs/Wish5380/src/blk_sd.sv" \
-	"$top/Inputs/z8530_scc/z8530_scc.sv" \
+	"$top/build/inputs/z8530_scc/z8530_scc.sv" \
 	"${board_src[@]}" \
 	"${tb_src[@]}"
 

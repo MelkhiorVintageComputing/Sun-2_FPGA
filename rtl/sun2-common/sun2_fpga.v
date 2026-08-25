@@ -991,7 +991,7 @@ module sun2_fpga(input         cpu_clk,
    /* serial port */
    wire [7:0] 			 serial_out;
    wire 			 serial_en;
-   wire 			 serial_int_n; // FIXME: DOME
+   wire 			 serial_int_n;
    wire 			 RxDA, TxDA, TxDA_EN;
 
    assign tx = TxDA;
@@ -1125,8 +1125,10 @@ module sun2_fpga(input         cpu_clk,
                       (ma_pmap2devices[1:0] == 2'b00);
 `endif
 
+   // Both arms drive this: the SCC when one is fitted, a constant when not.
+   wire 			 kbm_int_n;
+
 `ifdef KBM_HERE
-   wire 			 kbm_int_n; // FIXME: level 6, not wired to the IPL encoder yet
 
    z8530_scc  #(.SOFT_RESET_EN(1),
 		.RR8_CTRL_POP(1),
@@ -1187,6 +1189,11 @@ module sun2_fpga(input         cpu_clk,
    // mux and DTACK terms below fold away entirely.
    assign MATCH_KBM = 1'b0;
    assign kbm_out   = 8'h00;
+   // Driven, not left open.  INT6_n below is the wired-OR of both SCCs, and an
+   // implicit undriven wire there is warning Synth 8-6901 in Vivado and an
+   // error in xvlog -- the shape that left fb_video_en dead in every bitstream
+   // this project ever built.
+   assign kbm_int_n = 1'b1;
 `endif
 `undef KBM_HERE
 
@@ -1427,7 +1434,14 @@ module sun2_fpga(input         cpu_clk,
    assign INT3_n = ~(EN_INT3 | ether_int);
    assign INT4_n = 1'b1; // FIXME
    assign INT5_n = ~timer_int[2] & ~timer_int[3] & ~timer_int[4] & ~timer_int[5];
-   assign INT6_n = serial_int_n;
+   // Both SCCs interrupt at level 6, and the Architecture Manual sections 8.3
+   // and 9.3 put "Serial Port" there on both machines.  zs1 -- the keyboard and
+   // mouse SCC on the video board -- is a configured device in SunOS
+   // (conf.sun2/GENERIC:76-77), so its interrupt has to arrive here too; it was
+   // driven and read nowhere until now, which made the keyboard unusable under
+   // SunOS however well the chip itself worked.  Open drain on the real board,
+   // so an AND is the wired-OR.
+   assign INT6_n = serial_int_n & kbm_int_n;
    assign INT7_n = ~timer_int[1];
 
    //

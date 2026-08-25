@@ -1,0 +1,58 @@
+WR2 and WR9 are chip-wide, and SunOS writes them through channel B
+
+WR2 (the interrupt vector base) and WR9 (Master Interrupt Control) are shared
+by both channels of a real Z8530 and may be written through either one.  The
+model's channel-B case has the two lines for them commented out, so a
+channel-B write to either lands in `default:' -- pointer reset, data silently
+dropped.  The comment stating the correct behaviour is still there, directly
+above them; only the code implementing it is disabled, and it arrived that way
+in the first upload, so there is no recorded reason.
+
+It matters because MIE is the single bit that decides whether the chip can
+raise an interrupt at all -- `int_n' is `master_int_enable' ANDed with every
+pending source -- and SunOS enables it through channel B.  zsattach()
+(sundev/zs_common.c:196-216) walks the two ports and leaves its pointer on
+port B, then does
+
+    ZWRITE(9, ZSWR9_MASTER_IE + ZSWR9_VECTOR_INCL_STAT);
+    if (vector)
+        ZWRITE(2, vector);
+
+so on a Sun-2 the SCC never interrupts, for the whole life of the machine.
+The boot PROM does not notice: it polls RR0 and writes the data register and
+never touches WR9 (mon/kernel/busyio.c:17-50).  The kernel does not notice
+either, because kernel printf goes out through the PROM's putchar vector
+(sys/sun/cons.c:332).  Only userspace does -- /dev/console goes through the
+interrupt-driven zs driver (sys/sun2/autoconf.c:614-624), where zsstart()
+writes the first byte itself and then waits forever for a transmit interrupt.
+
+WR9's reset commands (bits 7:6) already work from either channel, decoded
+separately at `wr9_write_evt', which is what makes the chip look healthy:
+ZWRITE(9, ZSWR9_RESET_WORLD) at zs_common.c:195 does take effect.
+
+The model's own testbench passes 22 tests over this because every WR9 write in
+it targets channel A (z8530_scc_tb.sv lines 316, 980, 1012, 1032, 1101, 1137),
+as does every WR2 write (line 1097).  The channel-B path for both is never
+exercised.
+
+Both branches are arms of the same always block, so restoring them introduces
+no second driver.
+
+--- a/z8530_scc.sv
++++ b/z8530_scc.sv
+@@ -1735,13 +1735,13 @@
+                     // WR2 and WR9 are chip-wide shared registers on the real
+                     // Z8530: writable through either channel. Stored as the
+                     // _a copies; channel-B writes land in the same regs.
+-                    //@4'd2: begin wr2_a <= data_in; reg_ptr_b <= 4'd0; end
++                    4'd2: begin wr2_a <= data_in; reg_ptr_b <= 4'd0; end
+                     4'd3: begin wr3_b <= data_in; reg_ptr_b <= 4'd0; end
+                     4'd4: begin wr4_b <= data_in; reg_ptr_b <= 4'd0; end
+                     4'd5: begin wr5_b <= data_in; reg_ptr_b <= 4'd0; end
+                     4'd6: begin wr6_b <= data_in; reg_ptr_b <= 4'd0; end
+                     4'd7: begin wr7_b <= data_in; reg_ptr_b <= 4'd0; end
+-                    //@4'd9: begin wr9_a <= data_in; reg_ptr_b <= 4'd0; end   // shared master-int-ctrl
++                    4'd9: begin wr9_a <= data_in; reg_ptr_b <= 4'd0; end     // shared master-int-ctrl
+                     4'd10: begin wr10_b <= data_in; reg_ptr_b <= 4'd0; end
+                     4'd11: begin wr11_b <= data_in; reg_ptr_b <= 4'd0; end
+                     4'd12: begin wr12_b <= data_in; reg_ptr_b <= 4'd0; end

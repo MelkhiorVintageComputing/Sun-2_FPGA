@@ -301,7 +301,7 @@ read_verilog -sv [list \
     $top/build/inputs/Wish5380/src/sd_spi.sv \
     $top/build/inputs/Wish5380/src/blk_sd.sv \
     $top/boards/Wukong/phy_rtl8211_init.sv \
-    $top/Inputs/z8530_scc/z8530_scc.sv \
+    $top/build/inputs/z8530_scc/z8530_scc.sv \
     $top/boards/Wukong/wukong_clkgen.sv \
     $top/boards/Wukong/hdmi_clkgen.sv \
     $top/boards/Wukong/reset_sync.sv \

@@ -9,6 +9,7 @@
 #   ./run_unit.sh phy       phy_rtl8211_init + wb_mdio against a PHY model
 #   ./run_unit.sh mbether   sun2_mb_ether against the boot PROM's own sequences
 #   ./run_unit.sh xy450     sun2_xy450's registers, as the PROM and SunOS probe them
+#   ./run_unit.sh scc       the Z8530's interrupts, driven as SunOS drives them
 #   ./run_unit.sh scanout   fb_scanout: DDR3 to pixels, a whole frame checked
 #
 set -e -o pipefail
@@ -85,6 +86,23 @@ xy450)
 		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	xsim xy450_sim -R -testplusarg blk_image=xy0.img \
 		| grep -E '===|PASS|FAIL|checks|blk\]|DVMA:'
+	;;
+
+scc)
+	# The console SCC, driven the way SunOS drives it rather than the way the
+	# chip's own testbench does: the Sun-2 bus protocol (cs_n tied low,
+	# rd_n/wr_n selecting), and every chip-wide register written through
+	# channel B, which is where zsattach() leaves its pointer.  Interrupts are
+	# the part no boot has ever exercised -- the PROM polls RR0 and never
+	# touches WR9.
+	"$top/tools/patch_inputs.sh" z8530_scc
+	if xvlog --sv \
+		"$top/build/inputs/z8530_scc/z8530_scc.sv" \
+		"$top/tb/tb_scc.sv" \
+		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug off --timescale 1ns/1ps work.tb_scc -s scc_sim \
+		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	xsim scc_sim -R | grep -E '===|PASS|FAIL|ok:|RR2'
 	;;
 
 scanout)

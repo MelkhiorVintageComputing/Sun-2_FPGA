@@ -58,6 +58,7 @@ make -C sim phy        # phy_rtl8211_init against an independent clause-22 PHY m
 make -C sim mbether    # the MultiBus Ethernet card, driven as the boot PROM drives it
 make -C sim xy450      # the Xylogics 450 disk controller, against a real disk image
 make -C sim xychain    # boots a 68010 program that drives chained IOPBs and takes the interrupt
+make -C sim scc        # the Z8530's interrupts, driven the way SunOS drives them
 make -C sim scanout    # fb_scanout: every pixel of a frame, against a known pattern
 ```
 
@@ -241,6 +242,38 @@ at 20 MHz with `CPU=rd68011` netboots SunOS 4.0.3 to a full autoconfig: RARP,
 and the core's bus-grant handover above — and neither could be found without the
 other, because the first one hung the machine before the second could show.
 
+**There is an interactive root shell on the serial console.** A MultiBus
+`BOARD=v1s1` build with `CPU=rd68011` at 20 MHz netboots SunOS 4.0.3, runs
+`/sbin/init` through `rc.boot` and `rc`, and puts a `#` prompt on
+`/dev/ttyUSB0` that echoes what is typed and runs what is entered. That is the
+first time anything the machine's *userspace* wrote has reached the outside
+world, and the first time a keystroke has reached a process.
+
+What stood in the way was `patches/z8530_scc/0001` -- see the trap below. Two
+things about the measurement are worth keeping:
+
+* **Userspace output ends its lines with a single `\r`, kernel output with
+  three.** `\r\r\r\n` is the PROM path (`cnputc` adds one, the monitor's
+  `putchar` adds another); a lone `\r` is the `zs` driver's own ONLCR. So the
+  line terminator alone says which path a line came out of, which is a free
+  check that a console fix is real rather than a coincidence.
+* **A short typed line looks exactly like dead input.** `zsa_rxint`
+  (`zs_async.c:670-676`) only raises the level-3 soft interrupt every 20
+  characters, so 19 characters and a return produce *nothing at all* -- no
+  echo, no prompt. 48 characters echo instantly. A first attempt with a short
+  command was nearly recorded here as "input still broken".
+
+The old logs' last byte was the proof, unread at the time. Every board capture
+before the fix ended with a lone `-` after the final kernel line. That `-` is
+`sh`'s own `argv[0]` for a login shell, the first character of
+`-: 51 Memory fault - core dumped`: `zsstart` primed it into the transmit
+buffer directly and the transmit interrupt that would have sent the rest never
+came. One stray character at the end of a log was the whole symptom.
+
+Every child the shell forks then dies with `Memory fault - core dumped`, which
+is the next thing to chase and is not a console problem: the shell itself is
+healthy and interactive.
+
 **SunOS runs on a board.** A MultiBus V3 build with `CPU=rd68011` at 20 MHz
 netboots SunOS 4.0.3 on a Wukong V1, past the creation of process 1 and into
 the scheduler -- `_swtch+0x18`, seen on the ILA, with the stack-growth fault
@@ -355,6 +388,26 @@ while it goes on executing. `ctx_reg.v` must therefore honour UDS/LDS; a write
 that lands on both halves is invisible to the PROM, which always sets the two
 to the same value (`mon/kernel/trap.s:398-400`), and fatal to SunOS, which is
 the first thing to make them differ.
+
+**The console has two entirely separate paths, and only one of them is the
+SCC driver.** Kernel `printf` reaches the serial port through the *PROM*:
+`cnputc` (`sys/sun/cons.c:332`) calls `romp->v_putchar`, which busy-waits on
+RR0 and writes the data register (`mon/kernel/busyio.c:17-50`). No interrupts,
+no WR9, no WR0 commands. Userspace goes somewhere else entirely --
+`consconfig` (`sys/sun2/autoconf.c:614-624`) sets `consdev = zs` minor 0
+whenever the PROM's `insource` and `outsink` are both UART A, which is what
+happens with no frame buffer fitted, and `cnwrite` then forwards every write
+to the interrupt-driven `zs` driver. The kernel comment says why: "check for
+console on same ascii port to allow full speed output by using the UNIX driver
+and avoiding the monitor."
+
+**Consequence:** kernel messages appearing on the console prove that RR0 bit 2
+and the transmit data register work, and *nothing else*. They say nothing
+about interrupts, and a machine can print its whole autoconfig perfectly while
+being unable to deliver one character of userspace output. Both SCCs
+interrupt at **level 6** -- Architecture Manual 8.3 and 9.3, and
+`sys/sun2/scb.s:50` names `zslevel6` at vector 0x1E "(UARTs)". The `priority
+3` in `conf.sun2/GENERIC` is a software spl level, not a wire.
 
 **Two Ethernets, sharing only the 82586.** The VME machine's is on board and
 reaches main memory by DVMA through the MMU (`rtl/sun2-vme/sun2_dvma.v`). The MultiBus
@@ -618,6 +671,37 @@ real bug, where a bad *data* address also killed the status writeback and the
 IOPB came back with the driver's own zeroes in it, reading as success.
 
 ## Traps that have already cost time
+
+* **A chip-wide register written through the other channel.** The Z8530's WR2
+  and WR9 belong to the chip, not to a channel, and may be written through
+  either one. `Inputs/z8530_scc/z8530_scc.sv` had both commented out of its
+  channel-B case -- falling into `default:`, pointer reset, data dropped, no
+  error -- with the comment stating the correct behaviour still sitting above
+  them. WR9 bit 3 is the Master Interrupt Enable, and `int_n` is that bit
+  ANDed with every pending source, so the SCC could not raise a level 6
+  interrupt at any point in the life of the machine. SunOS writes it through
+  channel B: `zsattach` (`sundev/zs_common.c:196-216`) walks the two ports and
+  leaves its pointer on port B before `ZWRITE(9, ZSWR9_MASTER_IE + ...)`.
+  `patches/z8530_scc/0001` restores the two lines.
+
+  **Nothing here could have caught it, and three things separately hid it.**
+  The PROM polls and never touches WR9. Kernel `printf` goes out through the
+  PROM's `putchar` vector, so a machine with a completely dead SCC interrupt
+  prints its whole autoconfig -- see the console note above. And WR9's *reset*
+  commands are decoded separately and do work from channel B, so
+  `ZWRITE(9, ZSWR9_RESET_WORLD)` took effect and the chip looked healthy.
+
+  The model's own testbench is the sharpest part. It has 22 tests, it covers
+  interrupts thoroughly, and it passes -- because **every** WR9 write in it
+  targets channel A (`z8530_scc_tb.sv` lines 316, 980, 1012, 1032, 1101, 1137),
+  as does every WR2 write. A test that exercises a feature through one path
+  says nothing about the other, and the path that matters is the one the real
+  software takes. `make -C sim scc` exists for that reason: it drives the chip
+  over the *Sun-2's* bus protocol (`cs_n` tied low, `rd_n`/`wr_n` selecting,
+  where upstream strobes `cs_n`), writes every chip-wide register through
+  channel B, and replays `zslevel6` (`sundev/zs_asm.s:24-51`) rather than a
+  plausible dispatch. It carries a control that writes MIE through channel A,
+  so a failure says which half is broken.
 
 * **A faster CPU clock is a slower simulation.** `CPU_HZ=40000000` is a real
   configuration — same bus-error count, byte-identical console — and boot to

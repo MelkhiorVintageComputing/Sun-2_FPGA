@@ -30,6 +30,8 @@ for d in $SUN2_DEFINES; do
 	defargs+=(-D "$d")
 done
 
+"$top/tools/patch_inputs.sh" z8530_scc
+
 cd "$rundir"
 
 suska="$top/Inputs/Suska_Configware/68K10"
@@ -74,7 +76,7 @@ iverilog -g2012 -o sun2_sim \
 	"$top/rtl/sun2-common/ttl_74LS148.v" \
 	"$top/rtl/sun2-common/sun2_wishbone_bridge.v" \
 	"$top/rtl/sun2-common/tolog.v" \
-	"$top/Inputs/z8530_scc/z8530_scc.sv" \
+	"$top/build/inputs/z8530_scc/z8530_scc.sv" \
 	"$top/tb/wb_ram_model.sv" \
 	"$top/tb/uart_monitor.sv" \
 	"$top/tb/tb_sun2.sv"
