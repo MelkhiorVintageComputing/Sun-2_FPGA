@@ -1,0 +1,85 @@
+A transmit data write clears the transmit interrupt pending
+
+The model clears the transmit IP only on WR0 command 101, Reset Tx Int Pending:
+
+    // TX int (IP): latched on TX FSM byte-grab ...
+    // cleared only by WR0 cmd 101 (Reset TX Int Pending).
+    if (reset_tx_int_cmd_a)
+        tx_int_pend_a <= 1'b0;
+
+A Z8530 clears it either way.  The IP means "the transmit buffer is empty";
+writing a new character makes it non-empty, so the condition that raised it has
+gone and the IP goes with it.  The explicit command exists for the other case --
+a driver with nothing more to send, which cannot clear the IP by writing.
+
+Note on sourcing, because the two halves of that are not equally documented
+here.  Inputs/doc/Z85C30.pdf is the product specification, and it states the
+setting rule outright -- "if the IE bit is not set by enabling interrupts, then
+the IP for that source is never set", which is what 0002 implements -- but it
+carries only the register diagrams for WR0, not the prose on what resets a Tx
+IP.  That prose is in the SCC User's Manual, which is not in the tree.
+
+The evidence that a data write clears it is therefore behavioural, and it is
+strong: NetBSD/sun2 shipped and ran on real Sun-2 hardware, its tty driver never
+issues Reset Tx Int Pending anywhere, and a transmitter whose IP is never
+cleared cannot send a second character.  If real silicon did not clear the IP on
+a data write, no NetBSD machine with an SCC console could ever have worked.
+
+A driver may use either, and the two here use different ones.  SunOS issues the
+command (sundev/zs_common.c:384 and zs_async.c:615), so on a Sun-2 this defect
+was invisible for the life of the project.  NetBSD never issues it: the only
+ZSWR0_RESET_TXINT in its whole tree is in zs_kgdb.c, the debugger stub, and
+zstty_txint (dev/ic/z8530tty.c:1583-1588) just writes the next byte --
+
+    if (zst->zst_tbc > 0) {
+            zs_write_data(cs, *zst->zst_tba);
+            zst->zst_tbc--;
+            zst->zst_tba++;
+    }
+
+-- and relies on that clearing the IP.  Against this model it does not, so with
+TxIE set the IP stays raised, /INT stays asserted, and zstty_txint is re-entered
+immediately.  Each re-entry writes another byte on top of the one still going
+out.  The result is not a race but a fixed loop, which is why it is byte-for-byte
+reproducible: on a Wukong V1 running NetBSD 2.0.2 the first line userspace
+prints comes out as
+
+    Wed Aug215: C26
+
+identically on every boot, where the kernel's own messages -- which go through
+the polled console path and never touch an interrupt -- are perfect.
+
+The write wins a tie with the byte-grab: if the FSM empties the buffer on the
+same clock the CPU refills it, the buffer ends up non-empty, so the IP must end
+up clear.
+
+Found while chasing that console, after 0002 turned out to be a real defect on
+the same registers but not this one.
+
+--- a/z8530_scc.sv	2026-08-26 18:46:52.527997102 +0200
++++ b/z8530_scc.sv	2026-08-26 18:46:52.535997281 +0200
+@@ -1604,14 +1604,20 @@
+         else if (rx_fifo_rempty_b)
+             rx_int_pend_b <= 1'b0;
+ 
+-        // TX int (IP): latched on TX FSM byte-grab *if WR1[1] is set*;
+-        // cleared only by WR0 cmd 101 (Reset TX Int Pending).
+-        if (reset_tx_int_cmd_a)
++        // TX int (IP): set when the buffer empties (the TX FSM grabs the byte)
++        // if WR1[1] is set, and cleared EITHER by WR0 cmd 101 (Reset TX Int
++        // Pending) OR by the CPU writing a new character -- the buffer is then
++        // no longer empty, so the condition that set it has gone.  A driver may
++        // rely on either; NetBSD's zstty_txint uses only the data write.
++        //
++        // The write wins a tie with the grab: if the FSM empties the buffer on
++        // the same clock the CPU refills it, the buffer ends up non-empty.
++        if (reset_tx_int_cmd_a | tx_fifo_wen_a)
+             tx_int_pend_a <= 1'b0;
+         else if (tx_byte_grab_pulse_a & wr1_a[1])
+             tx_int_pend_a <= 1'b1;
+ 
+-        if (reset_tx_int_cmd_b)
++        if (reset_tx_int_cmd_b | tx_fifo_wen_b)
+             tx_int_pend_b <= 1'b0;
+         else if (tx_byte_grab_pulse_b & wr1_b[1])
+             tx_int_pend_b <= 1'b1;

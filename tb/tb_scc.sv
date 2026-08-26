@@ -51,6 +51,7 @@ module tb_scc;
    localparam [7:0] ZSWR3_RX_ENABLE    = 8'h01;
    localparam [7:0] ZSWR4_INIT         = 8'h46;  // even parity + 1 stop + x16
    localparam [7:0] ZSWR5_INIT         = 8'hEA;  // DTR|TX_8|TX_ENABLE|RTS
+   localparam [7:0] ZSWR1_TIE          = 8'h02;  // transmit interrupt enable
    localparam [7:0] ZSWR9_RESET_WORLD  = 8'hC0;
    localparam [7:0] ZSWR9_MASTER_IE    = 8'h08;
    localparam [7:0] ZSWR9_VECTOR_INCL_STAT = 8'h01;
@@ -389,6 +390,110 @@ module tb_scc;
       bus_write(1'b1, 1'b1, 8'h42);
       repeat (20000) @(posedge clk);
       check(int_n === 1'b1, "int_n stays deasserted while MIE is clear");
+
+      // ---------------------------------------------------------------
+      // RR3, which is how NetBSD dispatches and SunOS never does.
+      //
+      // zsc_intr_hard (dev/ic/z8530sc.c:287-320) reads RR3 and calls rxint,
+      // stint and txint from its IP bits; SunOS's zslevel6 reads the
+      // status-modified vector in RR2 instead.  So RR3 is a path no boot
+      // before NetBSD ever took, and an IP that sets without its enable is
+      // invisible until something walks it.
+      //
+      // On a Z8530 an IP is set by its condition *and* its enable.  If the
+      // transmit IP could latch with TxIE clear it would stay set for ever --
+      // only an explicit WR0 command clears it -- so every interrupt from any
+      // source would also look like a transmit interrupt, and zstty_txint
+      // writes the next byte without checking the transmitter because being
+      // called is supposed to mean it is empty.  The byte still going out is
+      // overwritten and lost.
+      $display("-- RR3, the way NetBSD reads it --");
+
+      // Master reset, then bring channel A up with MIE on but every WR1
+      // source still disabled.
+      zwrite(1'b1, 4'd9, ZSWR9_RESET_WORLD);
+      repeat (200) @(posedge clk);
+      attach_port(1'b1);
+      zwrite(1'b0, 4'd9, ZSWR9_MASTER_IE | ZSWR9_VECTOR_INCL_STAT);
+      zwrite(1'b1, 4'd1, 8'h00);            // no Rx, no Tx, no Ext enables
+      zwrite(1'b1, 4'd0, ZSWR0_RESET_TXINT);
+
+      // Transmit a character with TxIE clear.  The buffer empties, so the
+      // condition happens; the enable is off, so no IP may latch.
+      bus_write(1'b1, 1'b1, 8'h41);
+      repeat (4000) @(posedge clk);
+      zread(1'b1, 4'd3, v);
+      check_eq(v & 8'h10, 8'h00,
+               "RR3: no TX IP with TxIE clear");
+      check(int_n === 1'b1, "int_n stays deasserted with every WR1 source off");
+
+      // A received character with the receive interrupt mode disabled must
+      // not raise an IP either.
+      send_char(8'h5a);
+      repeat (200) @(posedge clk);
+      zread(1'b1, 4'd3, v);
+      check_eq(v & 8'h20, 8'h00,
+               "RR3: no RX IP with the receive interrupt disabled");
+      zread(1'b1, 4'd8, v);                  // drain it again
+
+      // Now enable the transmitter's interrupt and send one.  The IP must
+      // appear, because this time the enable is set.
+      zwrite(1'b1, 4'd1, ZSWR1_TIE);
+      bus_write(1'b1, 1'b1, 8'h42);
+      repeat (4000) @(posedge clk);
+      zread(1'b1, 4'd3, v);
+      check_eq(v & 8'h10, 8'h10,
+               "RR3: TX IP does appear once TxIE is set");
+
+      // And NetBSD's own dispatch decision on that RR3: with only the
+      // transmitter enabled it must see exactly one source, not three.
+      check_eq(v & 8'h38, 8'h10,
+               "RR3: exactly the TX source, not RX or STAT as well");
+
+      // ---------------------------------------------------------------
+      // What clears the transmit IP, which is where the two drivers differ.
+      //
+      // The IP means "the transmit buffer is empty".  Writing a new character
+      // makes it non-empty, so the condition has gone and the IP goes with it;
+      // the explicit WR0 command exists for a driver with nothing more to send,
+      // which cannot clear it by writing.  SunOS issues the command
+      // (sundev/zs_common.c:384, zs_async.c:615); NetBSD never does -- the only
+      // ZSWR0_RESET_TXINT in its tree is in the kgdb stub -- and zstty_txint
+      // just writes the next byte and relies on that.
+      //
+      // If a write does not clear it, /INT never drops, zstty_txint is
+      // re-entered at once, and it writes another byte on top of the one still
+      // going out.  That is a fixed loop and not a race, which is why the loss
+      // is byte-for-byte reproducible on the board.
+      $display("-- what clears the transmit IP --");
+
+      // We are here with TxIE set and the TX IP raised by the last character.
+      zread(1'b1, 4'd3, v);
+      check_eq(v & 8'h10, 8'h10, "TX IP is raised before the write");
+
+      // Write a character the way zstty_txint does: data only, no command.
+      bus_write(1'b1, 1'b1, 8'h43);
+      zread(1'b1, 4'd3, v);
+      check_eq(v & 8'h10, 8'h00,
+               "a data write clears the TX IP, with no WR0 command");
+
+      // And the interrupt must go away with it, or the driver re-enters for
+      // ever.
+      check(int_n === 1'b1,
+            "int_n drops when the data write clears the TX IP");
+
+      // The explicit command still works, for the driver that uses it.  Wait
+      // for the interrupt rather than a fixed delay: the character just written
+      // sits in the FIFO until the one before it has shifted out at 9600 baud,
+      // which is a millisecond, not a few thousand clocks.
+      wait_int(1'b1, 200000, ok);
+      check(ok, "the transmitter raises its interrupt again");
+      zread(1'b1, 4'd3, v);
+      check_eq(v & 8'h10, 8'h10, "TX IP raised again once the buffer empties");
+      zwrite(1'b1, 4'd0, ZSWR0_RESET_TXINT);
+      zread(1'b1, 4'd3, v);
+      check_eq(v & 8'h10, 8'h00,
+               "Reset Tx Int Pending still clears it, as SunOS expects");
 
       $display("=== %0d checks, %0d failures ===", checks, errors);
       if (errors == 0) $display("PASS");

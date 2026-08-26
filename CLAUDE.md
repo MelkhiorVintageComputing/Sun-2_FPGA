@@ -916,6 +916,51 @@ below it**: synthesis printed `cpu 20000000 Hz (VCO/50, exact)` and produced a
 being connected and `HDMI30=1` being read by no file in the tree; check that a
 new knob changes the *reported* configuration before trusting the artefact.
 
+**Two more Z8530 defects, and the second one is the interesting story.**
+NetBSD 2.0 reaches userland on the MultiBus machine and its first printed line
+came out as `Wed Aug215: C26' -- a date with characters missing -- while the
+kernel's own messages were perfect.  Same discriminator as the WR9 bug in
+`patches/z8530_scc/0001': kernel output is polled, tty output is
+interrupt-driven, so a clean kernel console and a lossy tty means the interrupt
+path.
+
+`patches/z8530_scc/0002` gates the IP bits by their enables.  `Z85C30.pdf`
+states the rule outright -- "if the IE bit is not set by enabling interrupts,
+then the IP for that source is never set" -- where the model latched all six
+regardless and said so in its own comments.  It is a real defect.  **It is not
+what garbled the console**, and the patch says so: it was diagnosed
+confidently, it passed a testbench and a mutation, and on the board it changed
+the output *not at all* -- byte for byte the same loss.
+
+`patches/z8530_scc/0003` is the fix: **a transmit data write clears the
+transmit IP.**  The model cleared it only on WR0 command 101.  The IP means
+"the transmit buffer is empty", so refilling the buffer retires it; the command
+exists for a driver with nothing more to send, which cannot clear it by
+writing.  SunOS issues the command (`sundev/zs_common.c:384`,
+`zs_async.c:615`) and so never noticed.  NetBSD never issues it -- the only
+`ZSWR0_RESET_TXINT` in its whole tree is in the kgdb stub -- and
+`zstty_txint` just writes the next byte.  So the IP never cleared, `/INT`
+stayed asserted, `zstty_txint` was re-entered at once, and each re-entry wrote
+another byte on top of the one still going out.
+
+**The clue that mattered was that the loss was byte-identical between runs.**
+That rules out a race and means a fixed loop, and it is what sent the search
+from the dispatch side to the clearing side after the first fix did nothing.
+With 0003 the same boot prints `Wed Aug 26 15:54:27 UTC 2026'.
+
+Note what each patch can cite.  0002 quotes the datasheet.  0003 cannot: the
+product specification carries only the WR0 register diagrams, and the prose on
+what resets a Tx IP is in the SCC User's Manual, which is not in the tree.  Its
+evidence is behavioural instead, and sound -- NetBSD/sun2 shipped and ran on
+real Sun-2 hardware without ever issuing the command, and a transmitter whose
+IP never clears cannot send a second character.
+
+`make -C sim scc` is 28 checks now, and each patch's removal fails only its own
+two.  Both were driven over the Sun-2's bus protocol, and the RR3 checks exist
+because RR3 is a path SunOS never takes: `zslevel6` dispatches on the
+status-modified vector in RR2, `zsc_intr_hard` reads RR3's IP bits directly.
+A register the reference boot never reads is a register with no coverage.
+
 ## Traps that have already cost time
 
 * **A chip-wide register written through the other channel.** The Z8530's WR2
