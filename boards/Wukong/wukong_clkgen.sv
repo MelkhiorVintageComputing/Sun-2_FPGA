@@ -29,7 +29,22 @@
 //
 
 module wukong_clkgen #(
-    parameter int CPU_CLK_HZ = 12_500_000
+    parameter int CPU_CLK_HZ = 12_500_000,
+    // The MMCM's CLKOUT1 divider, when the frequency you want is not a whole
+    // number of hertz.  Zero means "derive it from CPU_CLK_HZ", which is the
+    // old behaviour and stays the default.
+    //
+    // The exactness check below exists so nobody silently gets a rounded
+    // clock, but it conflates two different things: an exact *divider* and an
+    // integer number of *hertz*.  VCO/51 is a perfectly good clock the MMCM
+    // can make -- 19.607843 MHz -- and there is no integer CPU_CLK_HZ that
+    // expresses it.  Naming the divider keeps the guarantee by construction:
+    // you get exactly VCO/CPU_DIV, and nothing is rounded.
+    //
+    // Useful because this design sits close to its ceiling at 20 MHz (VCO/50)
+    // and the next exactly-representable step down is 15.625 MHz (VCO/64) --
+    // a 22% cut where a few percent may do.
+    parameter int CPU_DIV    = 0
 ) (
     input  wire clk50,        // board oscillator, straight off the pin
     input  wire reset,        // active high, asynchronous
@@ -45,7 +60,8 @@ module wukong_clkgen #(
    // Divider arithmetic, checked at elaboration
    // ------------------------------------------------------------------
    localparam int    VCO_A_HZ      = 1_000_000_000;         // 50 MHz * 20 / 1
-   localparam int    CPU_DIVIDE    = VCO_A_HZ / CPU_CLK_HZ;
+   localparam int    CPU_DIVIDE    = (CPU_DIV != 0) ? CPU_DIV : (VCO_A_HZ / CPU_CLK_HZ);
+   localparam int    CPU_ACTUAL_HZ = VCO_A_HZ / CPU_DIVIDE;   // truncated, for the message only
 
    localparam real   SERIAL_TARGET = 4_915_200.0;
    localparam real   VCO_B_MHZ     = 615.625;               // 50 * 24.625 / 2
@@ -53,14 +69,17 @@ module wukong_clkgen #(
    localparam real   SERIAL_MHZ    = VCO_B_MHZ / SERIAL_DIV;
 
    initial begin
-      if (CPU_DIVIDE * CPU_CLK_HZ != VCO_A_HZ)
-        $fatal(1, "wukong_clkgen: CPU_CLK_HZ=%0d does not divide the %0d Hz VCO exactly; pick a divisor of it (12.5 MHz, 20 MHz, 25 MHz, 40 MHz, 50 MHz, ...)",
+      // Only when the divider was derived from a frequency.  If CPU_DIV names
+      // it outright the result is exact by definition and there is nothing to
+      // check -- that is the whole point of the knob.
+      if (CPU_DIV == 0 && CPU_DIVIDE * CPU_CLK_HZ != VCO_A_HZ)
+        $fatal(1, "wukong_clkgen: CPU_CLK_HZ=%0d does not divide the %0d Hz VCO exactly; pick a divisor of it (12.5 MHz, 20 MHz, 25 MHz, 40 MHz, 50 MHz, ...) or name the divider with CPU_DIV",
                CPU_CLK_HZ, VCO_A_HZ);
       if (CPU_DIVIDE < 1 || CPU_DIVIDE > 128)
         $fatal(1, "wukong_clkgen: CPU_CLK_HZ=%0d needs CLKOUT1_DIVIDE=%0d, outside the 1..128 the MMCM allows",
                CPU_CLK_HZ, CPU_DIVIDE);
       $display("wukong_clkgen: cpu %0d Hz (VCO/%0d, exact), serial %.6f MHz (%.4f%% from %.4f MHz)",
-               CPU_CLK_HZ, CPU_DIVIDE, SERIAL_MHZ,
+               CPU_ACTUAL_HZ, CPU_DIVIDE, SERIAL_MHZ,
                100.0 * (SERIAL_MHZ * 1.0e6 - SERIAL_TARGET) / SERIAL_TARGET,
                SERIAL_TARGET / 1.0e6);
    end

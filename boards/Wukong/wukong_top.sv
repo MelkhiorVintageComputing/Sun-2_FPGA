@@ -35,7 +35,13 @@
 //
 
 module wukong_top #(
-    parameter int CPU_CLK_HZ = 12_500_000
+    parameter int CPU_CLK_HZ = 12_500_000,
+    // Passed straight through to wukong_clkgen.  It has to be a parameter of
+    // *this* module and not only of the one that uses it: synth_design
+    // -generic reaches the top level and nothing below it, so a knob declared
+    // two levels down is silently ignored and you get the default clock with
+    // no warning at all.
+    parameter int CPU_DIV    = 0
 ) (
     input  wire        clk50,
     input  wire        cpu_reset,     // board button, active low
@@ -208,7 +214,7 @@ module wukong_top #(
    wire [1:0]  phy_speed;
 
 
-   wukong_clkgen #(.CPU_CLK_HZ(CPU_CLK_HZ)) clkgen (
+   wukong_clkgen #(.CPU_CLK_HZ(CPU_CLK_HZ), .CPU_DIV(CPU_DIV)) clkgen (
        .clk50       (clk50_g),
        .reset       (board_reset),
        .clk_mig_sys (clk_mig_sys),

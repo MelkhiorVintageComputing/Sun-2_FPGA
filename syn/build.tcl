@@ -37,6 +37,7 @@ set allowpw  0
 set fbprobe  0
 set fbforce  0
 set eth5     224
+set cpu_div  0
 if {[llength $argv] > 0} { set cpu_hz   [lindex $argv 0] }
 if {[llength $argv] > 1} { set machine  [lindex $argv 1] }
 if {[llength $argv] > 2} { set mb_ether [lindex $argv 2] }
@@ -51,6 +52,7 @@ if {[llength $argv] > 10} { set allowpw [lindex $argv 10] }
 if {[llength $argv] > 11} { set fbprobe [lindex $argv 11] }
 if {[llength $argv] > 12} { set fbforce [lindex $argv 12] }
 if {[llength $argv] > 13} { set eth5    [lindex $argv 13] }
+if {[llength $argv] > 14} { set cpu_div [lindex $argv 14] }
 if {$cpu ne "suska" && $cpu ne "rd68011"} {
     puts "ERROR: CPU must be suska or rd68011, not '$cpu'"
     exit 1
@@ -69,6 +71,31 @@ switch -- $machine {
 # automatically, so only this one byte moves.
 if {$eth5 != 224} {
     lappend defines SUN2_IDPROM_ETH5=$eth5
+}
+
+# The time-of-day clock's power-up value.  A real MM58167 has a battery; this
+# one starts at whatever is baked in, so bake in the build date and a board
+# comes up roughly right with no network.  Note this makes two bitstreams built
+# from identical sources differ, in the RTC's reset constants only -- set
+# RTC_DATE to a fixed "MM DD WD HH MM SS" to defeat that.
+if {[info exists ::env(RTC_DATE)]} {
+    set rtc [split $::env(RTC_DATE)]
+} else {
+    set now [clock seconds]
+    set rtc [list [scan [clock format $now -format %m] %d] \
+		 [scan [clock format $now -format %d] %d] \
+		 [expr {[clock format $now -format %w] + 1}] \
+		 [scan [clock format $now -format %H] %d] \
+		 [scan [clock format $now -format %M] %d] \
+		 [scan [clock format $now -format %S] %d]]
+}
+foreach {n v} [list SUN2_RTC_MON  [lindex $rtc 0] \
+		   SUN2_RTC_DAY  [lindex $rtc 1] \
+		   SUN2_RTC_WDAY [lindex $rtc 2] \
+		   SUN2_RTC_HOUR [lindex $rtc 3] \
+		   SUN2_RTC_MIN  [lindex $rtc 4] \
+		   SUN2_RTC_SEC  [lindex $rtc 5]] {
+    lappend defines $n=$v
 }
 
 if {$mb_ether == 1} {
@@ -201,7 +228,7 @@ set ipdir   $top/build/ip/$board
 # -- make reported one path while Vivado wrote to another, quietly overwriting
 # the bitstream the new knob existed to leave alone.  Add to both, or to
 # neither.
-set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu[expr {$cpu_hz / 1000000}][expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$fbdebug == 1 ? "-fbdbg" : ""}][expr {$fbprobe == 1 ? "-fbprobe" : ""}][expr {$fbforce == 1 ? "-fbforce" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}]
+set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu[expr {$cpu_hz / 1000000}][expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$fbdebug == 1 ? "-fbdbg" : ""}][expr {$fbprobe == 1 ? "-fbprobe" : ""}][expr {$fbforce == 1 ? "-fbforce" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir
@@ -288,6 +315,7 @@ read_verilog [list \
     $top/rtl/sun2-common/sun2_fb_ctl.v \
     $top/rtl/sun2-vme/sun2_dvma.v \
     $top/rtl/sun2-common/ttl_am9513.v \
+    $top/rtl/sun2-common/mm58167.v \
     $top/rtl/sun2-common/ttl_74F151.v \
     $top/rtl/sun2-common/ttl_74LS148.v \
     $top/rtl/sun2-common/sun2_wishbone_bridge.v \
@@ -409,6 +437,7 @@ synth_design -top wukong_top -part $part \
     -include_dirs [list $top/rtl/sun2-common $top/build/rom] \
     -verilog_define $defines \
     -generic CPU_CLK_HZ=$cpu_hz \
+    -generic CPU_DIV=$cpu_div \
     -directive Default
 
 write_checkpoint -force $outdir/post_synth.dcp

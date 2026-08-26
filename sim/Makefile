@@ -200,7 +200,7 @@ board-phy:
 	$(MAKE) board-check MACHINE=vme
 
 # --- unit tests for the board layer ---------------------------------------
-clkgen adapter migddr3 dvma bridge phy mbether xy450 scc scanout: rom
+clkgen adapter migddr3 dvma bridge phy mbether xy450 scc mm58167 scanout: rom
 	BOARD=$(BOARD) XSIMARGS="$(XSIMARGS)" ./run_unit.sh $@
 
 # --- a picture of what the machine drew -----------------------------------
@@ -276,4 +276,4 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: all rom xsim board board-check board-phy iverilog check clean
-.PHONY: clkgen adapter migddr3 dvma bridge phy mbether xy450 xychain scanout screenshot
+.PHONY: clkgen adapter migddr3 dvma bridge phy mbether xy450 xychain mm58167 scanout screenshot

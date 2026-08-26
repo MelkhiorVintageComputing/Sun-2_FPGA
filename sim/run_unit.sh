@@ -88,6 +88,24 @@ xy450)
 		| grep -E '===|PASS|FAIL|checks|blk\]|DVMA:'
 	;;
 
+mm58167)
+	# The MM58167 time-of-day clock at MultiBus device page 7, driven over
+	# the Sun-2's bus protocol -- cs_n tied low, rd_n/wr_n selecting, and
+	# strobes several clocks wide, because a 68010 holds its data strobes
+	# for the whole data portion of a cycle.  The two drivers disagree about
+	# the rollover status bit in opposite directions: SunOS retries while it
+	# is set, NetBSD's loop exits only when it *is* set, so a bit that never
+	# sets hangs NetBSD at boot and one stuck at 1 makes SunOS print "TOD
+	# chip has gone berserk".  Both sequences are replayed here.
+	if xvlog "$top/rtl/sun2-common/mm58167.v" \
+		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xvlog --sv "$top/tb/tb_mm58167.sv" \
+		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug off --timescale 1ns/1ps work.tb_mm58167 -s mm58167_sim \
+		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	xsim mm58167_sim -R | grep -E '===|PASS|FAIL|--|took'
+	;;
+
 scc)
 	# The console SCC, driven the way SunOS drives it rather than the way the
 	# chip's own testbench does: the Sun-2 bus protocol (cs_n tied low,

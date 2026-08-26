@@ -846,7 +846,7 @@ module sun2_fpga(input         cpu_clk,
    assign MATCH_SERIAL   = MATCH_DEV & (ma_pmap2devices[2:0] == 3'h4);
    assign MATCH_TIMER    = MATCH_DEV & (ma_pmap2devices[2:0] == 3'h5);
    assign MATCH_ROPS     = MATCH_DEV & (ma_pmap2devices[2:0] == 3'h6); // not in prime
-   assign MATCH_RTC      = MATCH_DEV & (ma_pmap2devices[2:0] == 3'h7); // not in prime
+   assign MATCH_RTC      = MATCH_DEV & (ma_pmap2devices[2:0] == 3'h7); // MM58167 TOD, MultiBus
 
    // The frame buffer.  Both machines have the same 1152x900 screen, both boot
    // PROMs map it at the same *virtual* addresses -- 0xEC0000 for the pixels
@@ -1345,6 +1345,10 @@ module sun2_fpga(input         cpu_clk,
    // term, so a write times out into a bus error, as writing the ID PROM does.
    wire [15:0] 			 phy_status_out;
    wire 			 MATCH_PHY;
+   // Both arms drive these: xvlog rejects an undeclared net and Vivado invents
+   // an undriven one, which is how fb_video_en reached a board dead.
+   wire [7:0] 			 tod_out;
+   wire 			 MATCH_TOD;
 `ifdef SUN2_VME
    assign MATCH_PHY = MATCH_RTC;
 
@@ -1360,9 +1364,84 @@ module sun2_fpga(input         cpu_clk,
 			   .phy_speed(phy_speed),
 			   .crs_stuck(phy_crs_stuck)
 			   );
+   assign MATCH_TOD  = 1'b0;
+   assign tod_out    = 8'h00;
 `else
    assign MATCH_PHY       = 1'b0;
    assign phy_status_out  = 16'h0000;
+
+   /* The time-of-day clock -- MultiBus only */
+   //
+   // Architecture Manual 8.2 puts a National 58167 real-time clock at
+   // [0x003800], on-board I/O page 7, on Machine Type 1; Machine Type 2 has
+   // "Reserved" there instead and keeps its clock on the VME bus at 0x200800,
+   // which is why this is the `ifndef SUN2_VME arm and why the PHY status
+   // register above can have the same page to itself on the other machine.
+   //
+   // It is unconditional, like the Am9513 and the SCCs and unlike the cards:
+   // a 2/120 has this chip soldered down, and a card cage can be empty.  It
+   // costs the reference boot nothing, because the boot PROM never touches
+   // the page -- CLOCK_BASE appears in mon/kernel/sunmon.c only as data in the
+   // two page-map tables, and 0x00EE1000 occurs exactly once in the shipped
+   // rev-R image, at struct pginit spacing inside that table.
+   //
+   // Registers are a byte each on every *other* address, so the chip's A0..A4
+   // are on P_A[5:1] and it lives on the upper data lane; sys/sundev/todreg.h
+   // is `struct { u_char val; u_char :8; }' throughout.  Writes are qualified
+   // by UDS for the reason ctx_reg.v records: a 68010 byte write drives the
+   // byte on both halves of the data bus.
+   //
+   // reset_n is por_reset, not sys_reset.  A battery-backed clock is the same
+   // category as the Am9513 and the SCCs -- see the reset discussion above --
+   // and a button press or a watchdog must not set the time back to zero.
+   assign MATCH_TOD = MATCH_RTC;
+
+   // What the clock reads at configuration.  There is no battery here, so it
+   // has to start somewhere, and it matters which: SunOS's todget() rejects
+   // month < 1, day < 1 or weekday outside 1..7 as "not initialized" and
+   // rewrites all nine counters, and NetBSD feeds whatever it reads straight
+   // into clock_ymdhms_to_secs() with no range check at all.
+   //
+   // syn/build.tcl passes the build date, so a freshly programmed board comes
+   // up roughly right without a network.  Simulation does not define these, so
+   // a simulated machine always starts at the same instant and a run stays
+   // reproducible.  Plain decimals, converted to BCD inside the module: 8'hXX
+   // does not survive -verilog_define, as the ETH5 knob already found out.
+`ifndef SUN2_RTC_MON
+ `define SUN2_RTC_MON  1
+`endif
+`ifndef SUN2_RTC_DAY
+ `define SUN2_RTC_DAY  1
+`endif
+`ifndef SUN2_RTC_WDAY
+ `define SUN2_RTC_WDAY 1
+`endif
+`ifndef SUN2_RTC_HOUR
+ `define SUN2_RTC_HOUR 0
+`endif
+`ifndef SUN2_RTC_MIN
+ `define SUN2_RTC_MIN  0
+`endif
+`ifndef SUN2_RTC_SEC
+ `define SUN2_RTC_SEC  0
+`endif
+
+   mm58167 #(.INIT_MON (`SUN2_RTC_MON),
+	     .INIT_DAY (`SUN2_RTC_DAY),
+	     .INIT_WDAY(`SUN2_RTC_WDAY),
+	     .INIT_HOUR(`SUN2_RTC_HOUR),
+	     .INIT_MIN (`SUN2_RTC_MIN),
+	     .INIT_SEC (`SUN2_RTC_SEC))
+   tod (.CLK(CLK),
+		.reset_n(~por_reset),
+		.DIN(P_DIN[15:8]),
+		.DOUT(tod_out),
+		.addr(P_A[5:1]),
+		.CS_n(1'b0),
+		.RD_n(~(MATCH_TOD & RD)),
+		.WR_n(~(MATCH_TOD & WR & ~P_UDS_n)),
+		.X2(clk4m9152)
+		);
 `endif
 
 
@@ -1389,6 +1468,7 @@ module sun2_fpga(input         cpu_clk,
 		   MATCH_KBM       ? {kbm_out, 8'h0} :
 		   MATCH_ETHER     ? {ether_out, 8'h0} :
 		   MATCH_PHY       ? phy_status_out :
+	   MATCH_TOD       ? {tod_out, 8'h0} :
 		   MATCH_FBCTL     ? fbctl_out :
 		   MATCH_FB        ? wishbone_out :
 		   mb_hit          ? mb_din :
@@ -1402,7 +1482,7 @@ module sun2_fpga(input         cpu_clk,
 			( P_RW_n & C_S4 & (MATCH_CTX | MATCH_IDPROM | MATCH_SYSEN | MATCH_BERR | MATCH_PROM_BOOT)) | // entering S4, quick devices
 			( P_RW_n & C_S4 & (MATCH_SMAP)) |  // entering S4, quick devices (CTX is 1 clock but went valid after being written, not affected by P_A)
 			( P_RW_n & C_S6 & (MATCH_PMAP_PS | MATCH_PMAP_MA)) |  // entering S6, physical map needed an extra cycle
-			( P_RW_n & C_S8 & (MATCH_TIMER | MATCH_PROM | MATCH_SERIAL | MATCH_KBM | MATCH_ETHER | MATCH_PHY | MATCH_FBCTL)) | // entering S8, devices going through the MMU
+			( P_RW_n & C_S8 & (MATCH_TIMER | MATCH_PROM | MATCH_SERIAL | MATCH_KBM | MATCH_ETHER | MATCH_PHY | MATCH_TOD | MATCH_FBCTL)) | // entering S8, devices going through the MMU
 			( P_RW_n & w_ack & (MATCH_FB)) | // the frame buffer is in DDR3
 `ifdef MEM_SIM_ONLY
 		        ( P_RW_n & C_S8 & (MATCH_MEMX)) | // entering S8, memory going through the MMU
@@ -1418,7 +1498,7 @@ module sun2_fpga(input         cpu_clk,
 			(~P_RW_n & C_S4 & (MATCH_CTX | MATCH_SYSEN | MATCH_DIAG | MATCH_BERR)) | // entering S4, quick devices
 			(~P_RW_n & C_S4 & (MATCH_SMAP)) |  // entering S4, quick devices (CTX is 1 clock but went valid after being written, not affected by P_A)
 			(~P_RW_n & C_S6 & (MATCH_PMAP_PS | MATCH_PMAP_MA)) |  // entering S6, physical map needed an extra cycle
-			(~P_RW_n & C_S8 & (MATCH_TIMER |              MATCH_SERIAL | MATCH_KBM | MATCH_ETHER | MATCH_FBCTL)) | // entering S8, devices going through the MMU
+			(~P_RW_n & C_S8 & (MATCH_TIMER |              MATCH_SERIAL | MATCH_KBM | MATCH_ETHER | MATCH_TOD | MATCH_FBCTL)) | // entering S8, devices going through the MMU
 			(~P_RW_n & w_ack & (MATCH_FB)) | // the frame buffer is in DDR3
 `ifdef MEM_SIM_ONLY
 		        (~P_RW_n & C_S8 & (MATCH_MEMX)) | // entering S8, memory going through the MMU

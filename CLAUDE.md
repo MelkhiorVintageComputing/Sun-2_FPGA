@@ -829,6 +829,93 @@ channel until told to forget it — modelling that latch immediately exposed a
 real bug, where a bad *data* address also killed the status writeback and the
 IOPB came back with the driver's own zeroes in it, reading as success.
 
+**The machine knows what time it is, and both operating systems needed it.**
+`rtl/sun2-common/mm58167.v` is a software-compatible National MM58167, the
+Sun-2/120's time-of-day chip at on-board I/O page 7.  It is MultiBus-only:
+Architecture Manual 8.2 lists `[0x003800] 7 REAL-TIME CLOCK` for Machine Type 1
+while 9.2 gives `[0x7F3800] Reserved` for Machine Type 2, and the PROM's own
+header agrees -- `MIOPG_CLOCK 7`, no `VIOPG_CLOCK`.  Page 7 was already decoded
+as `MATCH_RTC` and used only by the PHY status register under `` `ifdef
+SUN2_VME ``, so the two share the page without colliding.
+
+It is unconditional, like the Am9513 and the SCCs and unlike the cards, because
+a 2/120 has the chip soldered down and a card cage can be empty.  That costs the
+reference boot nothing: `CLOCK_BASE` appears in the PROM only as data in the two
+`mapinit` tables, and `0x00EE1000` occurs exactly once in the shipped rev-R
+image, at `struct pginit` spacing inside that table.  Measured, not assumed --
+MultiBus stays at **22 bus errors and 274 characters, byte-identical on both
+cores**, and VME at 10/312.
+
+**What "software-compatible" had to mean was decided by the drivers, and they
+disagree with each other.**  NetBSD's `mm58167_gettime` loops
+
+    } while ((mm58167_read(sc, mm58167_status) & 1) == 0);
+
+which exits only when the rollover bit reads **one** -- inverted with respect to
+its own comment and to the datasheet.  A status bit that never sets hangs NetBSD
+at spl7 for ever.  SunOS's `todget()` wants the opposite, retrying while the bit
+is set and printing `TOD chip has gone berserk` after 100 tries.  Both are
+satisfied by reading it as "has a 1 kHz tick happened since you last read 14H":
+set every millisecond, cleared by the read, returning the pre-clear value.
+SunOS's few-microsecond pass sees it clear; NetBSD's loop cannot wait more than
+a millisecond.
+
+SunOS's `todprobe()` is the stricter of the two probes and pins down three more
+things: register 0's **low nibble must read zero**, the status register's bits
+1..7 must read zero, and register 0 must **change within 2 ms** -- a frozen
+replica fails.  NetBSD's `tod_obio_match` is only
+`bus_space_peek_1(tag, bh, 0, NULL) == 0`, which returns an *error code*, so its
+entire presence test is "does a byte read of offset 0 avoid a bus error".
+
+`make -C sim mm58167` replays all four sequences over the Sun-2's own bus
+protocol -- `cs_n` low, `rd_n`/`wr_n` selecting, strobes several clocks wide --
+because a device tested through a one-clock handshake says nothing about a
+device driven by a 68010.  48 checks; three mutations were tried and all three
+caught, the important one being that a status bit stuck at zero fails
+"gettime: the inverted loop terminates".
+
+Two things about the model worth keeping.  **Both strobes are edge-detected**,
+not just the write: `ttl_am9513.v` gets away with a bare `read` level only
+because its reads have no side effects, and 10H and 14H here are read-to-clear.
+And **DOUT is loaded once at the leading edge and held**, which is what makes a
+read-to-clear register return its pre-clear value -- the CPU latches data at
+`C_S8`, several clocks after the strobe rose, so a combinational read port would
+hand it the value from after the clear.
+
+On the board: SunOS goes from `WARNING: no TOD clock` and a single-user `#` to
+`tod0 at obio 0x3800`, **no warnings at all, and a full multi-user boot with a
+login prompt** -- `rc` no longer drops to single user once the date is sane.
+`date` advances one second per second and traces back to the build-date constant
+`syn/build.tcl` bakes in.  NetBSD gets `tod0 at obio0 addr 0x3800: mm58167` and
+past `inittodr` -- the `trap type=0x0, code=0x1105, v=0x8` panic is gone.
+
+**20 MHz stopped closing, and the timing report did not say so.**  Adding the
+RTC's ~384 LUTs took WNS from 0.667 to 0.594 ns, which Vivado calls met, and the
+board disagreed: SunOS hung part-way through the NFS kernel download, twice at
+exactly 6144 bytes and once at 12288.  It is **setup, not hold** -- WHS was
+identical (0.053 ns) in every build, and only the clock period distinguishes
+them.  That fits the note above about the critical path being a half-period one
+inside the CPU core with as little as 0.060 ns to spare.
+
+`CPU_DIV` exists because of it.  `make -C syn bitstream CPU_DIV=51` names the
+MMCM divider directly and gives exactly VCO/51 = 19.607843 MHz, a clock no
+integer `CPU_HZ` can express -- the elaboration guard rejects a *frequency* that
+does not divide the 1 GHz VCO in whole hertz, which conflates an exact divider
+with an integer number of hertz.  Naming the divider keeps the no-silent-
+rounding guarantee by construction.  **19.607843 MHz boots and 20 MHz does
+not**, so a 2% cut was enough where 12.5 MHz was the next exactly-representable
+step down; below about 19 MHz a different path becomes critical and further
+slowing buys almost nothing (WNS 0.979 at VCO/51 against 1.276 at VCO/80).
+
+**A knob has to reach the logic, not just the build, and this was the third time
+that has cost a build here.**  `CPU_DIV` was declared on `wukong_clkgen` and
+passed with `synth_design -generic`, which reaches the **top level and nothing
+below it**: synthesis printed `cpu 20000000 Hz (VCO/50, exact)` and produced a
+20 MHz design in a directory named `-div51`.  The fix is one parameter on
+`wukong_top` forwarding to the instance.  Same shape as `fb_video_en` never
+being connected and `HDMI30=1` being read by no file in the tree; check that a
+new knob changes the *reported* configuration before trusting the artefact.
+
 ## Traps that have already cost time
 
 * **A chip-wide register written through the other channel.** The Z8530's WR2

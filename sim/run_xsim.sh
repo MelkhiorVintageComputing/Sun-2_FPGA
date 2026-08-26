@@ -118,6 +118,7 @@ xvlog --work sun2 \
 	"$top/rtl/sun2-common/sun2_fb_ctl.v" \
 	"$top/rtl/sun2-vme/sun2_dvma.v" \
 	"$top/rtl/sun2-common/ttl_am9513.v" \
+	"$top/rtl/sun2-common/mm58167.v" \
 	"$top/rtl/sun2-common/ttl_74F151.v" \
 	"$top/rtl/sun2-common/ttl_74LS148.v" \
 	"$top/rtl/sun2-common/sun2_wishbone_bridge.v" \
