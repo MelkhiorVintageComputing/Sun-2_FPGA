@@ -955,6 +955,15 @@ evidence is behavioural instead, and sound -- NetBSD/sun2 shipped and ran on
 real Sun-2 hardware without ever issuing the command, and a transmitter whose
 IP never clears cannot send a second character.
 
+**Still to verify: a VME boot with 0002+0003.**  MultiBus is confirmed at
+22/274 on both cores with both patches and a byte-identical console, and the
+board is confirmed, but the VME pair was never cleanly measured -- two VME
+RD68011 runs were launched into `build/sim/xsim-vme-rd68011` while the first was
+still executing, which is the clobber this file already warns about, so both
+results were discarded rather than reported.  The SCC is the same in both
+machines and MultiBus is clean, so a surprise is unlikely; run
+`make -C sim xsim MACHINE=vme MEM_MIB=1 CPU=rd68011` and expect 10/312.
+
 `make -C sim scc` is 28 checks now, and each patch's removal fails only its own
 two.  Both were driven over the Sun-2's bus protocol, and the RR3 checks exist
 because RR3 is a path SunOS never takes: `zslevel6` dispatches on the
