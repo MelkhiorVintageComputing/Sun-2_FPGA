@@ -270,9 +270,100 @@ before the fix ended with a lone `-` after the final kernel line. That `-` is
 buffer directly and the transmit interrupt that would have sent the rest never
 came. One stray character at the end of a log was the whole symptom.
 
-Every child the shell forks then dies with `Memory fault - core dumped`, which
-is the next thing to chase and is not a console problem: the shell itself is
-healthy and interactive.
+**Every command it forks now runs, and what stood in the way was the CPU
+core.** This paragraph used to end "every child the shell forks then dies with
+`Memory fault - core dumped`". The cause was RD68011 `252f0d7`, and the report
+this project filed named the wrong variable. It is not the predecrement
+addressing mode: it is `ea_latch`, which the addressing modes that prefetch
+before they access use to carry their address once `ir` has moved on. The frame
+has a word for that latch and the frame build destroyed it before writing it --
+every frame word goes out through an `aupd` on the stack pointer, and an `aupd`
+is exactly what loads the latch -- so the word recorded a stack address ten
+writes later and `RTE` repeated the mistake in reverse. **A faulted access
+resumed at whatever address the frame walk had reached.**
+
+The affected set is every access addressing through that latch: `MOVE` to
+`-(An)` in all its forms, every read-modify-write on `(An)`, `(An)+` and
+`-(An)`, the `-(Ay),-(Ax)` group, and **the return-address pushes of `JSR`,
+`BSR`, `PEA` and `LINK`** -- 257 microcode labels, which is every subroutine
+call in every program. `MOVE.L -(A0),D1`, predecrement as a *source*, resumes
+correctly, which is why "the predecrement itself" was the wrong thing to name.
+
+It only bites when the push itself faults, and that is the entire asymmetry a
+session was spent trying to explain. A fresh process's stack is fill-on-demand
+beyond the page `execve`'s `copyout` of argv/env touched, so its first `jsr`
+into new stack faults, `grow()` repairs it, and the `rte` resumes wrong. A
+long-lived shell's stack is already resident and never faults on a push. So the
+parent lived and every child died.
+
+**Nothing announced it, and that is worth remembering.** `trap.c`'s user
+bus-error path is silent -- `tudebug` is a compile-time 0 in `GENERIC`, so
+`showregs()` is unreachable -- and a corrupted return address is simply not the
+one that was pushed. The only symptom available was `sh` printing SIGSEGV.
+Note also that on sun2 a bus error can *only* ever produce SIGSEGV: `trap.c`
+`T_BUSERR+USER` never examines `BE_PROTERR` or `BE_VALID`, and SIGBUS comes
+only from `T_ADDRERR`. And `u.u_code` is never set on that path, so the faulted
+address is **not** in the core file -- only `r_pc` and the user SP are.
+
+`tools/ctxprobe` case E is the regression test: it now reads `E: -(An)
+restarted correctly` with controls C, F, G and H still passing. Suska still
+stops at case C, which is its own known instruction-restart defect and not a
+regression -- it never reaches E, so it says nothing about this bug either way.
+
+On the board, a `BOARD=v1s1` MultiBus build at 20 MHz: `/bin/ls -la /`, a
+`/bin/ls | /bin/sed` pipeline, `awk` running a 2000-iteration loop, and a
+ten-iteration `/bin/echo` fork loop all run correctly, with **no `Memory
+fault`, no core dump and no `stropen: out of streams`** anywhere in the boot.
+
+**What that exposed: nothing the machine writes ever reaches the NFS server.**
+Trying to compile `dhrystone.c` on the board fails with `ld: dhrystone.o:
+premature EOF`, and the object file is zero bytes. The minimal case is three
+commands:
+
+```
+# /bin/echo hello-write-test > /tmp/t1
+# /bin/ls -l /tmp/t1          ->  17 bytes
+# /usr/bin/od -c /tmp/t1      ->  0000000     (zero length)
+```
+
+`ls` reports 17 from locally cached attributes; the file reads back empty, and
+**the NFS server sees no WRITE RPC at all** -- confirmed on the server, not
+inferred. `sync` does not flush it. Reads are fine: `cat` of an existing file
+works, and the boot pulls a 604 KB kernel over the same path.
+
+That rules out the obvious suspects. A 17-byte file is one small WRITE RPC,
+well inside a single Ethernet frame, so it is not fragmentation, not a large
+transmit, and not the 82586 -- the client never generates the request.
+
+**The suspect is the page-map MOD bit, and it is a real gap whatever the
+outcome.** `sun2_fpga.v:404-405` decodes `ACC` (referenced) and `MOD`
+(modified) and *nothing else in the tree reads or writes them*; the page map's
+`ps` SRAM is written only by software. Real hardware maintains them --
+`s2map.h:96-98`, "If access is denied, the page referenced and modified bits
+will not be changed", which is only meaningful if a granted access does change
+them -- and the running 4.0.3 kernel carries `_hat_pagesync` and
+`_hat_ptesync`, whose whole job is harvesting them. A page that can never
+report itself modified is never pushed: `seg_vn.c:2088` is
+`if (pp->p_mod && pp->p_vnode) VOP_PUTPAGE(...)` and otherwise discards, and
+`vm_pageout.c:324` likewise sees every page as unreferenced, so the clock
+algorithm degenerates and everything looks stealable. The kernel's own `XXX`
+comment there says it has no software fallback for machines without reference
+bits.
+
+This was ranked in the plan as "needs memory pressure, would be intermittent".
+That was wrong, and the error is worth keeping: the modified bit gates *every*
+writeback, not just paging under pressure, which is why it presents as a
+totally silent failure to write anything rather than as occasional corruption.
+It also explains why every `core` file on the netboot root is zero bytes --
+the `CREATE` reaches the server and the data never does -- and so why the core
+files this project has been trying to read were never going to say anything.
+
+Not yet proven: check it directly before writing RTL, with a boot block on the
+`ctxprobe` harness -- grant a page, write it, read the entry back through FC 3
+and test entry bits 21 and 20 -- on both cores. Implementing it means a second
+writer into a single-port read-first SRAM currently written only by software at
+`C_S6`, so it touches MMU timing: it must not fire when access is denied, nor
+for FC 3 or FC 7, and it must fire for DVMA cycles too.
 
 **SunOS runs on a board.** A MultiBus V3 build with `CPU=rd68011` at 20 MHz
 netboots SunOS 4.0.3 on a Wukong V1, past the creation of process 1 and into

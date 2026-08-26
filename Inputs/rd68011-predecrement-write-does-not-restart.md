@@ -9,6 +9,33 @@ Observed against RD68011 as of `8e8a1b4`, in a Sun-2/120 (MultiBus) replica on
 a Xilinx Artix-7 (QMTech Wukong V1), at 20 MHz, with real DDR3 behind the
 memory path.
 
+**Fixed in `252f0d7`, and the report under-called its scope.** The cause was
+not the predecrement addressing mode as such: it was `ea_latch`, the latch that
+addressing modes which prefetch before they access use to carry their address
+once `ir` has moved on. The frame has a word for that latch, and the frame
+build destroyed it before writing it -- every frame write is an `aupd` on the
+stack pointer, and an `aupd` is exactly what loads the latch -- so the word
+recorded a stack address ten writes later, and `RTE` repeated the mistake in
+reverse. The resumed access therefore went wherever the frame walk had reached.
+
+So the affected set is every access that addresses through `ea_latch`: `MOVE`
+to `-(An)` in all its forms, every read-modify-write on `(An)`, `(An)+` and
+`-(An)`, the `-(Ay),-(Ax)` multiprecision group, and **the return-address
+pushes of `JSR`, `BSR`, `PEA` and `LINK`** -- 257 microcode labels. The two
+controls this report offered are still correct, and `MOVE.L -(A0),D1` --
+predecrement as a *source* -- resumes, which is why "the predecrement itself"
+was the wrong variable to name.
+
+The existing upstream test passed throughout because its slave model has no
+bus-error input, so a faulted write landed anyway and the memory halves were
+right whether or not the write was ever reissued; the cycle-count check the
+rest of the file uses for continuation was missing there.
+
+Confirmed in the Sun-2 project by `tools/ctxprobe` case E (`E: -(An) restarted
+correctly`, with controls C, F, G and H still passing) and, decisively, on
+hardware: SunOS 4.0.3 on a Wukong V1 now forks and execs normally, where every
+child the shell forked previously died with `Memory fault - core dumped`.
+
 
 ## Summary
 
