@@ -358,8 +358,27 @@ It also explains why every `core` file on the netboot root is zero bytes --
 the `CREATE` reaches the server and the data never does -- and so why the core
 files this project has been trying to read were never going to say anything.
 
-Not yet proven: check it directly before writing RTL, with a boot block on the
-`ctxprobe` harness -- grant a page, write it, read the entry back through FC 3
+**Confirmed at the software end, against the running kernel.** `hat_pagesync`
+(`0x65446` in the netbooted `vmunix`) walks the mappings calling `hat_ptesync`
+(`0x65bfc`), which reads the raw page-map entry through control space and then
+does exactly this -- the entry longword is at `fp@(-16)`, so `fp@(-15)` is
+entry bits 23..16:
+
+```
+moveb %fp@(-15),%d1 ; lsrl #5,%d1 ; andib #1,%d1    entry bit 21 -> p_ref
+moveb %fp@(-15),%d1 ; lsrl #4,%d1 ; andib #1,%d1    entry bit 20 -> p_mod
+bclr #4,%fp@(-15) ; bclr #5,%fp@(-15)               clear both, write back
+```
+
+Those are the same two bits `sun2_fpga.v:404-405` decodes as `ACC` and `MOD`
+and never sets.  So the kernel's only source of "this page is dirty" is entry
+bit 20, it clears the bit after reading it, and the hardware never puts it
+back -- `pp->p_mod` is permanently 0 and the page is discarded rather than
+written.  No simulation was needed for this; it is a disassembly of the kernel
+that is actually running.
+
+Still to do before writing RTL: confirm the hardware half with a boot block on
+the `ctxprobe` harness -- grant a page, write it, read the entry back through FC 3
 and test entry bits 21 and 20 -- on both cores. Implementing it means a second
 writer into a single-port read-first SRAM currently written only by software at
 `C_S6`, so it touches MMU timing: it must not fire when access is denied, nor
