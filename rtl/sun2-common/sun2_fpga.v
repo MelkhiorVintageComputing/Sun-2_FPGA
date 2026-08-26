@@ -343,6 +343,11 @@ module sun2_fpga(input         cpu_clk,
    assign RD = (~P_UDS_n | ~P_LDS_n) & ~P_AS_n &  P_RW_n;
 
 
+   // Built below, next to the protection verdict it is derived from.  Declared
+   // here because xvlog requires a wire to be declared before it is used and
+   // the terms it needs do not exist until the 74F151 further down.
+   wire 			 REFMOD_WR;
+
    sun2_mmu mmu(.CLK(C100),
 		/* matching */
 		.MATCH_CTX(MATCH_CTX),
@@ -360,6 +365,9 @@ module sun2_fpga(input         cpu_clk,
 		/* timing signals */
 		.C_S4(C_S4),
 		.C_S6(C_S6),
+		/* the statistics bits the MMU maintains itself */
+		.REFMOD_WR(REFMOD_WR),
+		.P_RW_n(P_RW_n),
 		/* MMU outputs */
 		.ctx_out(ctx_out),
 		.cx_dbg(cx_dbg),
@@ -530,6 +538,82 @@ module sun2_fpga(input         cpu_clk,
    // latent fault whatever provoked it; see BRINGUP.md.
    wire MMU_OK;
    assign MMU_OK = ~MMU_REFUSE;
+
+   // ------------------------------------------------------------------
+   // The page map's statistics bits, which the MMU maintains itself
+   // ------------------------------------------------------------------
+   //
+   // Architecture Manual 5.6.3: "The accessed and modified bits are set, as
+   // the name implies, whenever a page is accessed or modified (written into).
+   // The statistics bits will not be updated when the page is invalid or when
+   // the protection code does not allow the attempted operation ... However,
+   // the statistics bits will be updated on all other cycles, including cycles
+   // that terminate due to timeout."
+   //
+   // Nothing but the hardware ever sets them.  sys/sun2/map.s:69-77
+   // (unloadpgmap) reads the entry, shifts MMU_R 0x00200000 and MMU_M
+   // 0x00100000 down into the software pte, clears them and writes the entry
+   // back; loadpgmap preserves them across a pmeg reload; SunOS 4.0.3's
+   // hat_ptesync does the same.  With them dead, p_mod is permanently zero,
+   // seg_vn.c's `if (pp->p_mod && pp->p_vnode) VOP_PUTPAGE(...)' never fires,
+   // and every dirty page is discarded instead of written -- which on the board
+   // showed up as a file that reads back empty and an NFS server that never
+   // sees a WRITE.
+   //
+   // Each term:
+   //
+   //   FC_GENERAL & ~MATCH_PROM_BOOT
+   //       precisely the complement of the 2/50's Q.SPECIAL, which the
+   //       Engineering Manual 3.7.2 defines as "CPU space cycles (FC = 7) and
+   //       MMU space cycles (FC = 3) ... Supervisor program fetches in Boot
+   //       state, which are forced to read from the Boot PROM".  The boot-state
+   //       exclusion is load-bearing rather than tidy: diag.s's PMconst writes
+   //       a pattern to all 4096 entries and reads them all back comparing
+   //       under PMREALBITS 0xFFF00FFF, which includes bits 21 and 20, while
+   //       executing from a page whose entry it has just overwritten.  It gets
+   //       away with that only because those fetches are untranslated.  Its
+   //       first pass, 0x33333333, happens to have both bits set; the inverted
+   //       pass, 0xCCCCCCCC, does not, and would fail its own readback.
+   //
+   //   VALID & ~PROTERR_raw
+   //       "the MMU granted this", stated positively.  MMU_OK cannot be used:
+   //       it is ~MMU_REFUSE, a veto, and reads 1 for FC 3, for FC 7 and before
+   //       C_S6.  A denied entry must be left alone because SunOS keeps its own
+   //       data in the page number and type fields of one it has invalidated
+   //       (s2map.h:99-102).
+   //
+   //   ~P_AS_n
+   //       the same window that manufactured 23,607 phantom protection
+   //       violations, described at length above: AS is released a clock before
+   //       the C_S chain clears, and without this term the write would land on
+   //       an entry chosen by the *next* cycle's address.
+   //
+   //   C_S6
+   //       the earliest state in which ps_pmap2devices and the verdict are both
+   //       valid, and the only one every MMU-gated cycle is guaranteed to
+   //       reach -- a cycle acknowledged at C_S4 can end before C_S8 asserts at
+   //       all.  It is also early enough to satisfy 5.6.3's requirement that a
+   //       cycle terminating in a timeout still updates the bits: TIMEOUT is
+   //       not decided until C_S24, long after this has been written.
+   //
+   //   (~ACC | (~MOD & ~P_RW_n))
+   //       the write is idempotent, so this only decides how often it happens.
+   //       C_S6 is a level that stays asserted until AS rises, so without a
+   //       terminating term the entry would be rewritten every clock for the
+   //       rest of the cycle.  Because sram_sync is read-first the new value
+   //       does not appear on ps_pmap2devices until the second clock after the
+   //       write, so this settles after exactly two identical writes.
+   //
+   //       Deliberately a level and not a one-shot on C_S6 & ~C_S8.  A 68010
+   //       read-modify-write holds AS across both halves, so the C_S chain runs
+   //       once for the pair; a one-shot would set the accessed bit on the read
+   //       half and never set the modified bit on the write half.  The level
+   //       re-opens when P_RW_n falls, which is what the real machine does for
+   //       the same reason -- A103.pal's WR.UPDATE closes on Q.S7, which is
+   //       derived from DTACK and negates between the two halves.
+   assign REFMOD_WR = FC_GENERAL & ~MATCH_PROM_BOOT & ~P_AS_n & C_S6
+		      & VALID & ~PROTERR_raw
+		      & (~ACC | (~MOD & ~P_RW_n));
    //assign PROTERR_n = PROTERR_raw_n | ~C_S8 & FC_GENERAL;
    
    // The permission check.  Select is {P_FC[2], P_FC[1], ~P_RW_n}, so the eight

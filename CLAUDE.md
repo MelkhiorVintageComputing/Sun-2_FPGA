@@ -358,6 +358,55 @@ It also explains why every `core` file on the netboot root is zero bytes --
 the `CREATE` reaches the server and the data never does -- and so why the core
 files this project has been trying to read were never going to say anything.
 
+**Fixed, and the machine now compiles and runs a benchmark.** The MMU
+maintains both bits: `sun2_mmu.v` gives the page map's `ps` half a second
+writer, and `sun2_fpga.v` builds the qualifier beside the protection verdict it
+depends on. The one design choice worth knowing is that the enable is a
+*level*, terminated by its own idempotence gate, and not a one-shot on
+`C_S6 & ~C_S8`. A 68010 read-modify-write holds `AS` across both halves, so the
+`C_S` chain runs once for the pair; a one-shot would set accessed on the read
+half and never set modified on the write half. The real machine has the same
+requirement and solves it the same way -- `A103.pal`'s `WR.UPDATE` closes on
+`Q.S7`, which is DTACK-derived and negates between the halves.
+
+`tools/refmodprobe` is the regression test, and it exists as its own boot block
+because `ctxprobe` is 7549 bytes of the 7680 a boot block gets. Measured before
+and after, on both cores:
+
+```
+                 before      after
+  cleared       fe000181    fe000181
+  granted read  fe000181    fe200181     accessed set, modified not
+  granted write fe000181    fe300181     both set
+  denied access 80000181    80000181     neither changed, and it faulted
+```
+
+The denied case is the one that catches an over-eager qualifier, and it is not
+a formality: Manual 5.6.3 says the fields of a denied entry are not used, and
+SunOS keeps its own data in the page number and type fields of an entry it has
+invalidated.
+
+On the board: a file written on the machine reads back correctly where `od`
+used to show `0000000`, the NFS server sees the whole compiler toolchain write
+about 40 KB across five files, and `cc -O` builds and runs dhrystone --
+**1298 dhrystones/second at 20 MHz, 1508 with `-DREG=register`**. Nothing here
+could write a byte to a filesystem before this.
+
+Regressions all held: MultiBus 22/274 and VME 10/312 on both cores with
+byte-identical consoles, `xychain` PASS, and the bitstream came out at WNS
+0.667 ns / WHS 0.067 ns with pulse width clean -- both *better* than the
+0.597/0.034 of the build before it, which is placement variance rather than the
+change being free.
+
+**Three of the failures met along the way were the NFS server's, not the
+machine's**, and each looked like a machine fault first: an unhandled
+`FileNotFoundError` in the server left a call unanswered so the client wedged in
+`NFS server not responding still trying` (a Python exception sends no reply at
+all); `ESTALE` on the linker's sparse write, `l.outa00023` seeking from offset
+3072 to 16384; and `SETATTR` silently ignoring a mode change, so a freshly
+linked binary was not executable. Worth remembering before the next
+write-shaped symptom is blamed on the MMU.
+
 **Confirmed at the software end, against the running kernel.** `hat_pagesync`
 (`0x65446` in the netbooted `vmunix`) walks the mappings calling `hat_ptesync`
 (`0x65bfc`), which reads the raw page-map entry through control space and then

@@ -19,6 +19,14 @@ module sun2_mmu(input CLK,
 		input 	      C_S4,
 		input 	      C_S6,
 
+		// Hardware maintenance of the page map's statistics bits.
+		// REFMOD_WR is the qualified "this access was granted" term,
+		// built in sun2_fpga beside the protection verdict it depends
+		// on; P_RW_n says whether the modified bit joins the accessed
+		// one.  See the comment at the pmap instantiation below.
+		input 	      REFMOD_WR,
+		input 	      P_RW_n,
+
 		/* MMU outputs */
 		output [15:0] ctx_out,
 		// Which of the two contexts this access is translating through.
@@ -52,12 +60,36 @@ module sun2_mmu(input CLK,
 		  .ia_out(ia_smap2pmap) // 8-bits outputs: index in the PMap
 		  );
    // Page Map
+   //
+   // The ps half has two writers: software, through control space, and the
+   // MMU itself maintaining the accessed and modified bits.  They are mutually
+   // exclusive by function code -- a software map access is FC 3 and REFMOD_WR
+   // carries FC_GENERAL, which excludes it -- so the priority below is a
+   // formality, but it is declared rather than left to chance.
+   //
+   // Architecture Manual 5.6.3: the accessed bit is set on any access the MMU
+   // grants and the modified bit additionally on a write, and neither is ever
+   // cleared by hardware.  That is exactly what the 2/50 does: A103.pal
+   // computes MOD1 = MOD | WRITE and the write-back register takes its
+   // accessed input from VCC, so accessed is written as 1 unconditionally.
+   //
+   // The rest of the entry has to be rewritten unchanged, which is free here:
+   // sram_sync is read-first, so ps_pmap2devices already *is* the entry at the
+   // index being written and no extra read cycle is needed.  On the real board
+   // that is why register U316 exists -- the RAM nibble is 4 bits wide, so the
+   // type field has to be latched and written back alongside.
+   wire        ps_sw_wr = WR & MATCH_PMAP_PS & C_S6;
+   wire [11:0] ps_refmod = {ps_pmap2devices[11:2],        // valid, protection, type
+			    1'b1,                        // accessed: always set
+			    ps_pmap2devices[0] | ~P_RW_n // modified: sticky, set on a write
+			    };
+
    pmap_sram pmap(.CLK(CLK),
 		  .idx({ia_smap2pmap,P_A[14:11]}),
 		  .WR_ma(WR & MATCH_PMAP_MA & C_S6),
-		  .WR_ps(WR & MATCH_PMAP_PS & C_S6),
+		  .WR_ps(ps_sw_wr | REFMOD_WR),
 		  .ma_in(P_DIN[11:0]),
-		  .ps_in(P_DIN[15:4]),
+		  .ps_in(ps_sw_wr ? P_DIN[15:4] : ps_refmod),
 		  .ma_out(ma_pmap2devices), // 12-bits output #1: physical address bits
 		  .ps_out(ps_pmap2devices)  // 12-bits output #2: protection and status bits
 		  );
