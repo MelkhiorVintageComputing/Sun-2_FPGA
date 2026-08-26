@@ -36,6 +36,7 @@ set fbdebug  0
 set allowpw  0
 set fbprobe  0
 set fbforce  0
+set eth5     224
 if {[llength $argv] > 0} { set cpu_hz   [lindex $argv 0] }
 if {[llength $argv] > 1} { set machine  [lindex $argv 1] }
 if {[llength $argv] > 2} { set mb_ether [lindex $argv 2] }
@@ -49,6 +50,7 @@ if {[llength $argv] > 9} { set fbdebug  [lindex $argv 9] }
 if {[llength $argv] > 10} { set allowpw [lindex $argv 10] }
 if {[llength $argv] > 11} { set fbprobe [lindex $argv 11] }
 if {[llength $argv] > 12} { set fbforce [lindex $argv 12] }
+if {[llength $argv] > 13} { set eth5    [lindex $argv 13] }
 if {$cpu ne "suska" && $cpu ne "rd68011"} {
     puts "ERROR: CPU must be suska or rd68011, not '$cpu'"
     exit 1
@@ -59,6 +61,14 @@ switch -- $machine {
     multibus { set defines [list SUN2_MULTIBUS] }
     vme      { set defines [list SUN2_VME] }
     default  { puts "ERROR: MACHINE must be multibus or vme, not '$machine'"; exit 1 }
+}
+
+# The last byte of the ID PROM's Ethernet address.  224 (0xe0) is the identity
+# this project has always presented; a different one is how the board asks a
+# boot server for a different root.  The ID PROM checksum follows from it
+# automatically, so only this one byte moves.
+if {$eth5 != 224} {
+    lappend defines SUN2_IDPROM_ETH5=$eth5
 }
 
 if {$mb_ether == 1} {
@@ -186,7 +196,12 @@ if {$ila == 1} {
 
 set part    [board_part $board]
 set ipdir   $top/build/ip/$board
-set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu[expr {$cpu_hz / 1000000}][expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$fbdebug == 1 ? "-fbdbg" : ""}][expr {$fbprobe == 1 ? "-fbprobe" : ""}][expr {$fbforce == 1 ? "-fbforce" : ""}]
+# NOTE: this expression is duplicated in syn/Makefile as OUTDIR, and the two
+# MUST agree.  When they disagreed -- a knob added to the Makefile and not here
+# -- make reported one path while Vivado wrote to another, quietly overwriting
+# the bitstream the new knob existed to leave alone.  Add to both, or to
+# neither.
+set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu[expr {$cpu_hz / 1000000}][expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$fbdebug == 1 ? "-fbdbg" : ""}][expr {$fbprobe == 1 ? "-fbprobe" : ""}][expr {$fbforce == 1 ? "-fbforce" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir
