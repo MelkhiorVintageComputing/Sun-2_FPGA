@@ -150,7 +150,24 @@ module top(input         cpu_clk,
    // instruction for exactly that fear -- sun2/locore.s:144, "We should reset
    // the world here, but it screws the UART settings".
    //
-   assign P_RESET_n = ~machine_reset & ~RESET_OUT;
+   // Registered, and that is not tidiness.  This term is a combinational OR
+   // over two separately-routed registers, and it ends up on the *asynchronous*
+   // preset of `rx_rst_q'/`tx_rst_q' inside wish82586, two clock domains away
+   // in the 2.5 MHz MII clocks -- `report_cdc' calls that out as CDC-10,
+   // "Combinational logic detected before a synchronizer", Critical.  When
+   // machine_reset and RESET_OUT change in opposite directions on the same
+   // edge, the skew between their two routes is a glitch on that preset, and
+   // whether it is wide enough to take depends on placement.  That is exactly
+   // the shape of a fault that moves when nothing about the logic moved:
+   // updating the CPU core re-placed the design and a MultiBus netboot began
+   // dying part-way through the NFS read of vmunix, with the CPU still
+   // clocking and no bus cycle ever stalling.  One register makes the net
+   // glitch-free by construction; a Xilinx flip-flop configures to 0, so it
+   // comes out of configuration asserted, which is what this net wants.
+   reg P_RESET_n_q = 1'b0;
+   always @(posedge C100)
+     P_RESET_n_q <= ~machine_reset & ~RESET_OUT;
+   assign P_RESET_n = P_RESET_n_q;
 
    // HALT_INn is the input, and stays on the board reset alone: a CPU
    // executing its own RESET instruction must keep running.

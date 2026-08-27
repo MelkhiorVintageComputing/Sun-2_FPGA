@@ -388,8 +388,29 @@ invalidated.
 
 On the board: a file written on the machine reads back correctly where `od`
 used to show `0000000`, the NFS server sees the whole compiler toolchain write
-about 40 KB across five files, and `cc -O` builds and runs dhrystone --
-**1298 dhrystones/second at 20 MHz, 1508 with `-DREG=register`**. Nothing here
+about 40 KB across five files, and `cc -O` builds and runs dhrystone.
+
+**Those dhrystone numbers were wrong, and so is any other figure read off this
+machine's own clock.**  They used to read "1298 dhrystones/second at 20 MHz,
+1508 with `-DREG=register`", taken from what the benchmark printed.  Dhrystone
+divides its tick count by `HZ` = 100, and the kernel clock does not run at
+100 Hz here.  Timed against an external clock -- markers echoed either side of
+the run, timestamped on the host -- 50000 passes take **106.7 s on MultiBus
+while the machine reports 6 s**, and **69.3 s on VME while it reports 58 s**.
+That puts the tick at about **5.6 Hz on MultiBus and 83.7 Hz on VME**, against
+the `CLK_HZ(100)` `startrtclock()` asks for.  True rates are therefore about
+**469 dhry/s on MultiBus and 722 on VME** -- so the MultiBus machine is the
+*slower* of the two, where its own timer claimed it was nine times faster.
+
+The TOD is not involved and cannot be: `sun/sys/sun2/clock.c`'s
+`start_level5_clock()` arms Am9513 counter 2 at level 5, and that interrupt is
+what advances `lbolt`; the MM58167 is read once by `inittodr()` for the date and
+never ticks anything.  Both machines run the same `clock.c` against the same
+`ttl_am9513.v`, which is what makes 5.6 Hz against 83.7 Hz worth chasing.
+`tools/clkprobe` measures the counter from a boot block with no kernel in the
+way and is the instrument for it.  **Never quote a rate this machine timed
+itself without checking it against a wall clock** -- this file did, for
+months. Nothing here
 could write a byte to a filesystem before this.
 
 Regressions all held: MultiBus 22/274 and VME 10/312 on both cores with
@@ -889,13 +910,15 @@ login prompt** -- `rc` no longer drops to single user once the date is sane.
 `syn/build.tcl` bakes in.  NetBSD gets `tod0 at obio0 addr 0x3800: mm58167` and
 past `inittodr` -- the `trap type=0x0, code=0x1105, v=0x8` panic is gone.
 
-**20 MHz stopped closing, and the timing report did not say so.**  Adding the
-RTC's ~384 LUTs took WNS from 0.667 to 0.594 ns, which Vivado calls met, and the
-board disagreed: SunOS hung part-way through the NFS kernel download, twice at
-exactly 6144 bytes and once at 12288.  It is **setup, not hold** -- WHS was
-identical (0.053 ns) in every build, and only the clock period distinguishes
-them.  That fits the note above about the critical path being a half-period one
-inside the CPU core with as little as 0.060 ns to spare.
+**20 MHz was never a timing problem, and this file said it was for months.**
+The story used to run: adding the RTC's ~384 LUTs took WNS from 0.667 to
+0.594 ns, Vivado called it met, the board disagreed by hanging part-way through
+the NFS kernel download, and therefore it was setup timing on the CPU core's
+half-period path.  Every step of that is a correlation and the conclusion was
+wrong.  The real cause is `P_RESET_n`, below; the RTC's LUTs did nothing but
+re-place the design.  What should have been suspicious at the time is that
+*slowing the clock* is only one of the things a rebuild changes, and the
+symptom -- a hang with the CPU still running -- names no clock at all.
 
 `CPU_DIV` exists because of it.  `make -C syn bitstream CPU_DIV=51` names the
 MMCM divider directly and gives exactly VCO/51 = 19.607843 MHz, a clock no
@@ -955,20 +978,69 @@ evidence is behavioural instead, and sound -- NetBSD/sun2 shipped and ran on
 real Sun-2 hardware without ever issuing the command, and a transmitter whose
 IP never clears cannot send a second character.
 
-**Still to verify: a VME boot with 0002+0003.**  MultiBus is confirmed at
-22/274 on both cores with both patches and a byte-identical console, and the
-board is confirmed, but the VME pair was never cleanly measured -- two VME
-RD68011 runs were launched into `build/sim/xsim-vme-rd68011` while the first was
-still executing, which is the clobber this file already warns about, so both
-results were discarded rather than reported.  The SCC is the same in both
-machines and MultiBus is clean, so a surprise is unlikely; run
-`make -C sim xsim MACHINE=vme MEM_MIB=1 CPU=rd68011` and expect 10/312.
+**Verified: VME with 0002+0003 is 10/312**, byte-identical to the Suska VME
+console, with `Ethernet initialised, transmitted, and found no server` passing
+-- which matters twice over, because that check drives the 82586 through DVMA.
+MultiBus is 22/274 on both cores with both patches.
 
 `make -C sim scc` is 28 checks now, and each patch's removal fails only its own
 two.  Both were driven over the Sun-2's bus protocol, and the RR3 checks exist
 because RR3 is a path SunOS never takes: `zslevel6` dispatches on the
 status-modified vector in RR2, `zsc_intr_hard` reads RR3's IP bits directly.
 A register the reference boot never reads is a register with no coverage.
+
+**A combinational reset net is a glitch two clock domains away.**
+`top_fpga.v` drove `P_RESET_n` as `~machine_reset & ~RESET_OUT` -- one term over
+two separately-routed registers -- and that net ends up on the *asynchronous*
+preset of `rx_rst_q`/`tx_rst_q` inside `wish82586`, in the 2.5 MHz MII clocks.
+`report_cdc` calls it out as **CDC-10, "Combinational logic detected before a
+synchronizer", Critical**.  When the two inputs change in opposite directions on
+one edge, the skew between their routes is a glitch on that preset, and whether
+it is wide enough to take depends on placement.  It is one register now.
+
+**It presented as SunOS freezing part-way through the NFS read of `vmunix`**,
+with the machine otherwise alive, and it cost most of a session because every
+cheap explanation fit.  What ruled them out, in order:
+
+* the **LED ladder** -- `seen_stall` clear says *no bus cycle ever went
+  unanswered*, which exonerates the Wishbone bridge and DDR3 outright, and
+  `seen_err` lit with `fc_err` = 5 is only the PROM's own device probes, which
+  a healthy boot takes too.  Read that panel before building anything;
+* **`report_cdc` on the routed checkpoint**, which enumerates hazards instead of
+  reasoning from the symptom.  It is the tool that found this, in one run, after
+  three hypotheses argued from a single correlated variable had all failed.
+
+**WNS is not the discriminator, and the numbers invert.**  0.468 and 1.126 ns
+froze; 0.310 and 0.123 ns boot to multi-user.  A build with *more* setup margin
+failing than one with less is the tell that the path in question is not being
+timed at all.  Nor is frequency, quite: 17.54 MHz froze as a plain build and
+booted with the ILA fitted, same clock, different placement.
+
+**It was not a regression in the CPU core.**  `reset_busy` is byte-identical
+across `Inputs/RD68011` c40052c..930d8e1; updating the submodule re-placed the
+design and shook a latent defect loose.  A fault that moves when nothing about
+the logic moved is a placement-sensitive one, and that is a category, not a
+mystery.
+
+Measured after the fix: **MultiBus at 20 MHz boots to a login prompt three times
+out of three** with byte-identical 3490-byte consoles, and **VME at 20 MHz boots
+to a login prompt**, which also proves the 82586's DVMA handover on real
+hardware.  Simulation is unchanged -- MultiBus 22/274 byte-identical, VME 10/312
+byte-identical -- so the fingerprint costs nothing for a peripheral reset that
+releases one clock later.
+
+**Left undone, deliberately recorded:** `report_cdc` still reports 674 CDC-1
+"unknown CDC circuitry" and five more CDC-10s, two of them on the SCC's own
+reset synchronisers and two on `rst_cpu/chain_reg[0]`.  Much of that is inside
+MIG and benign; the Sun-2's own deserve a pass rather than waiting for the next
+symptom to point at one.  And **`MEM_LATENCY` was a genuine coverage hole** --
+every boot ever recorded here used the default one-cycle memory, so the bridge
+had never been simulated at the 7-to-13 clocks the board actually has.  It is
+clean at 13 (22/274, byte-identical), but that was luck rather than diligence.
+
+**`syn/ila_capture.tcl` returns `0 samples` while reporting the core armed and
+triggered.**  Hit on the first capture of this hunt and not chased, because the
+LEDs answered the question first.  It will need fixing before the next capture.
 
 ## Traps that have already cost time
 
