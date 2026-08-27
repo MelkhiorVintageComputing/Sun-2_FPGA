@@ -1184,8 +1184,29 @@ that stub correctly -- the file holds the unbound `nop; bsr` and memory the
 patched `jmp`, which is exactly right -- and it then faults *inside the shared
 C library* with an odd address in `a0`.  `SIGBUS` on sun2 means `T_ADDRERR`
 specifically, and only that.  `cron` spinning is the yearless MM58167 giving
-the machine a 1986 date.  The one genuine anomaly left is **`ld` taking SIGILL
-about once in eight compiles, with the identical compile succeeding on retry**.
+the machine a 1986 date.  The one genuine anomaly was **`ld` taking SIGILL
+about once in eight compiles, with the identical compile succeeding on retry**,
+and it has not been seen since `7dae188`.
+
+**The stability measurement that matters is a build, not a boot.**  A MultiBus
+`div50` bitstream carrying both clock-crossing fixes compiled **53 gcc 2.6.3
+sources over several hours with swap in use and no `ld` failure** -- 13 objects
+of 100 KiB or more, the largest 216312 bytes, so better than two hundred
+short-lived processes with real paging and sustained NFS writes behind them.
+Against the one-in-eight rate `ld` used to fail at, `(7/8)^53` is 0.08%.  That
+prior is soft -- it came from a single failure in about eight attempts -- but 53
+clean compiles is far stronger than any boot fingerprint, which only ever
+replays one fixed instruction sequence.
+
+Two caveats worth keeping.  The board was running an **ILA** build, and
+placement alone has flipped outcomes twice in this file, so a plain `div50`
+bitstream has not had the same workout.  And the run ended on a failure that is
+**not** the machine: `cc` gave `regclass.c", line 842: compiler error:
+expression causes compiler loop: try simplifying`, which is SunOS's pcc-era
+compiler reporting its own limit on an expression tree.  The discriminator is
+free and worth applying to anything similar -- an identical failure on retry is
+software, a failure that moves is the machine, which is exactly how `ld` was
+told apart from `lpd` in the first place.
 
 Two ways a capture lies about interrupts, both met here.  A 4096-sample window
 at 20 MHz is **205 us**: a 100 Hz interrupt is 10 ms apart, so an absent level 5
