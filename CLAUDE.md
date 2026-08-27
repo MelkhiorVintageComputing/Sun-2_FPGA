@@ -390,27 +390,39 @@ On the board: a file written on the machine reads back correctly where `od`
 used to show `0000000`, the NFS server sees the whole compiler toolchain write
 about 40 KB across five files, and `cc -O` builds and runs dhrystone.
 
-**Those dhrystone numbers were wrong, and so is any other figure read off this
-machine's own clock.**  They used to read "1298 dhrystones/second at 20 MHz,
-1508 with `-DREG=register`", taken from what the benchmark printed.  Dhrystone
-divides its tick count by `HZ` = 100, and the kernel clock does not run at
-100 Hz here.  Timed against an external clock -- markers echoed either side of
-the run, timestamped on the host -- 50000 passes take **106.7 s on MultiBus
-while the machine reports 6 s**, and **69.3 s on VME while it reports 58 s**.
-That puts the tick at about **5.6 Hz on MultiBus and 83.7 Hz on VME**, against
-the `CLK_HZ(100)` `startrtclock()` asks for.  True rates are therefore about
-**469 dhry/s on MultiBus and 722 on VME** -- so the MultiBus machine is the
-*slower* of the two, where its own timer claimed it was nine times faster.
+**The machine does about 850 dhrystones/second at 20 MHz, and every figure
+this file used to quote was wrong twice over.**  It said "1298 dhrystones/
+second at 20 MHz, 1508 with `-DREG=register`", which was what the benchmark
+printed.  Two independent errors sat under that:
 
-The TOD is not involved and cannot be: `sun/sys/sun2/clock.c`'s
+* **dhrystone.c divides by the wrong `HZ`.**  It has `#define HZ 100` with the
+  comment `times(2) returns 1/60 second (most)` beside it, and the comment is
+  the correct half.  `sys/h/param.h:30` is `#define HZ 60 /* ticks/second
+  according to syscalls that return values in ticks */` and `kern_xxx.c:249`
+  is `atms.tms_utime = scale60(&u.u_ru.ru_utime)` -- `times()` scales to
+  sixtieths, by a function actually called `scale60`.  So everything the
+  benchmark prints is inflated by exactly 100/60.
+* **A runaway `cron` was taking 70% of the machine.**  `ps -aux` showed it in
+  state R with 7:56 of CPU accumulated.  It cost nothing in the benchmark's own
+  `sys` -- another process never appears there, only in `real` -- so it was
+  invisible to every wall-clock measurement and inflated all of them.
+
+Measured with `/bin/time` and cron killed, 50000 passes cost **58.9 s of user,
+62.8 s of real, 0.8 s of sys**, and 50000/58.9 = **849/s**, which agrees with
+the printed 1433 once the 1.667 is taken out (860).  For calibration a real
+10 MHz 2/120 managed about 700, so the replica is roughly 60% of the original
+per clock -- a believable price for DDR3 at 7 to 13 clocks an access where the
+real machine had static RAM.
+
+**Quote `user`, not `real`, and never the benchmark's own figure.**  `user` is
+the only one of the three that held steady when cron was killed (60.0 to 58.9)
+while `real` halved.
+
+The TOD is not involved in any of it: `sun/sys/sun2/clock.c`'s
 `start_level5_clock()` arms Am9513 counter 2 at level 5, and that interrupt is
 what advances `lbolt`; the MM58167 is read once by `inittodr()` for the date and
-never ticks anything.  Both machines run the same `clock.c` against the same
-`ttl_am9513.v`, which is what makes 5.6 Hz against 83.7 Hz worth chasing.
-`tools/clkprobe` measures the counter from a boot block with no kernel in the
-way and is the instrument for it.  **Never quote a rate this machine timed
-itself without checking it against a wall clock** -- this file did, for
-months. Nothing here
+never ticks anything.  `tools/clkprobe` measures the counter from a boot block
+with no kernel in the way, and netbooted it takes a minute on real hardware. Nothing here
 could write a byte to a filesystem before this.
 
 Regressions all held: MultiBus 22/274 and VME 10/312 on both cores with
@@ -1038,9 +1050,98 @@ every boot ever recorded here used the default one-cycle memory, so the bridge
 had never been simulated at the 7-to-13 clocks the board actually has.  It is
 clean at 13 (22/274, byte-identical), but that was luck rather than diligence.
 
-**`syn/ila_capture.tcl` returns `0 samples` while reporting the core armed and
-triggered.**  Hit on the first capture of this hunt and not chased, because the
-LEDs answered the question first.  It will need fixing before the next capture.
+**An asynchronous clock used raw, and the counter that would not count.**
+`ttl_am9513.v` took `X2` -- the 4.9152 MHz oscillator, from mmcm_b -- sampled it
+into one flop on `cpu_clk` from mmcm_a, and then wrote `f1_tick = X2 & ~x2_d`,
+using the *raw* asynchronous net in a combinational term beside its own
+sampling flop.  `syn/wukong_common.xdc` puts those two clocks in different
+asynchronous groups, so the path is untimed and placement alone decides what
+the flop sees.  `report_cdc` says it outright: **CDC-1 Critical, "1-bit unknown
+CDC circuitry", `clkgen/mmcm_b/CLKOUT0` -> `timer/ctr_cntr_reg[1][*]/CE`** --
+the raw oscillator was reaching the counters' *clock enables*.  A glitched
+enable is a counter that does not count.
+
+`mm58167.v` had copied the idiom and cited this file as precedent, so the TOD
+was on the same cliff edge.  Both are two `ASYNC_REG` flops now, with the edge
+detector on synchronised values only.
+
+**The comment that justified it is the lesson.**  It argued the crossing was
+safe because the bus clock is more than twice the oscillator, so no edge can be
+missed.  That is a Nyquist argument about *edges*.  It says nothing about
+metastability, and nothing about one asynchronous net fanning out to several
+loads with different routing delays.  Grep for any other place a slow input is
+edge-detected without a synchroniser and assume it is wrong until measured.
+
+Measured on the board with `tools/clkprobe`, MultiBus, before and after:
+
+```
+                          before   after    VME (which always worked)
+  CLK_HZ(100) OUT2 edges       5      22      37
+  CLK_HZ(100) level 5 taken    0      21      34
+  load 16     OUT2 edges       0     386     373
+  load 16     level 5 taken    0    1558    1355
+```
+
+**What it fixed, measured the sound way.**  The two machines used to disagree
+by a factor of nine on the same benchmark and now agree to within 1%:
+
+```
+                       real     user      sys    dhrystone says
+  MultiBus, 20 MHz    128.7s    60.0s     0.8s      1407/s
+  VME,      20 MHz    126.2s    59.5s     0.9s      1414/s
+```
+
+Same CPU, same clock, same binary out of `/` on the shared NFS root -- and
+`real` matches an external stopwatch on both, which is what says the kernel's
+timekeeping is sound.
+
+**A benchmark's own report is not a measurement, and neither is a stopwatch
+around the whole command.**  This file used to carry a story about the tick
+running at 5.6 Hz on MultiBus and 83.7 on VME, derived by comparing what
+dhrystone printed against a marker-to-marker wall clock.  Both halves were
+wrong.  The wall clock included forking `echo`, the shell forking the binary,
+the NFS load of 24 KB and process exit; and the arithmetic assumed dhrystone's
+`HZ` matches the kernel's, which was never checked.  `/bin/time` settles it
+without either assumption -- and note dhrystone's own 35 s against `time`'s
+60 s of user, a factor of 1.71 that is suspiciously close to 100/60, so one of
+the two still has the wrong `HZ`.  **Use `/bin/time` and compare `real` against
+an external clock; quote `user` for CPU work.**
+
+**What looked like the machine losing half its time was a runaway `cron`**, and
+killing it took `real` from 128.7 s to 62.8 s while `user` stayed at 58.9.  VME's
+wall time doubling across this fix was the same daemon, not the fix.  Check
+`ps -aux` before believing any elapsed-time measurement on this machine; the
+date these boards come up with is wrong by decades (the MM58167 has no year
+register and SunOS loads it modulo SECDAY), which is a good way to make cron
+spin.
+
+**Simulation cannot see any of this** -- `clkprobe` passes every check in
+simulation on both machines, because a simulator has neither metastability nor
+routing delay.  The board is the only instrument for this class, and
+netbooting the probe (serving it in place of the primary bootloader) turns a
+measurement that needed a disk image into one that takes a minute on real
+hardware.  `clkprobe` masks to **spl4** rather than spl0 for exactly that: a
+netboot leaves the Ethernet armed, and its level 3 killed the probe with
+`Exception 6C` until the window admitted only level 5 and above.
+
+**The ILA can see the interrupt path now.**  `dbg_bus` is 118 bits: the top 16
+are `{EN_INT, IPL2_n..IPL0_n, INT7_n..INT1_n, timer_int[5:1]}`, which is the
+*request* side.  The acknowledge side alone cannot answer "which interrupts
+fire" -- a request asserted and never granted and one never asserted are the
+same absence -- and `timer_int` is what separates "the timer never asserted"
+from "the encoder ate it".  `syn/ila_capture.tcl` gains `iack` and `iackseq`;
+use `iackseq`, which qualifies capture on FC 7 so 4096 samples are 4096
+acknowledges however far apart.  Plain `iack` triggers on one and then holds
+4096 *clocks*, about 205 us, where a 100 Hz interrupt is 10 ms apart -- an
+absent level 5 there means nothing at all.
+
+Two traps met while reading captures, both of which produced confident
+nonsense first: a capture window that is mostly the machine *idling in the
+monitor after the probe finished*, where counter 2 is not armed and reads 0
+because that is correct; and `ila_capture.tcl` printing `0 samples captured`
+over a perfectly good 4096-sample CSV, because `STATUS.SAMPLE_COUNT` reads 0
+once the data has been uploaded.  The second was recorded in `a16c586` as an
+open defect and was not one.
 
 ## Traps that have already cost time
 

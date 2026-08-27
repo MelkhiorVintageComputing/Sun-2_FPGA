@@ -142,9 +142,36 @@ module ttl_am9513 #(parameter TRACE = 0) (
    // long as the bus clock is more than twice the oscillator: at 12.5 MHz the
    // 101.7 ns half-period is longer than the 80 ns sample period, so no edge
    // can be missed.
+   //
+   // X2 is synchronised before it is used, and that is not belt and braces.
+   //
+   // It arrives from mmcm_b (4.9152 MHz) while this module runs on cpu_clk
+   // from mmcm_a, and syn/wukong_common.xdc puts those two in different
+   // asynchronous groups -- so every path between them is untimed, and
+   // placement alone decides what the sampling flop sees.  Sampling into one
+   // flop and then using the *raw* X2 beside it in `X2 & ~x2_d' hands a
+   // combinational term built from an asynchronous signal straight to the
+   // prescaler, and report_cdc says so in as many words: CDC-1 Critical,
+   // "1-bit unknown CDC circuitry", from clkgen/mmcm_b/CLKOUT0 to
+   // ctr_cntr_reg[1][*]/CE.  A glitched clock enable is a counter that does
+   // not count.
+   //
+   // The comment that used to stand here argued the crossing was safe because
+   // the bus clock is more than twice the oscillator, so no edge can be
+   // missed.  That is a Nyquist argument about edges and says nothing about
+   // metastability or about one asynchronous net fanning out to several loads
+   // with different delays.  It was wrong: SunOS's level 5 clock ran at about
+   // 5.6 Hz instead of 100 on the MultiBus board while simulation, which has
+   // neither metastability nor routing delay, passed every clkprobe check.
+   //
+   // Two flops, then the edge detector on synchronised values only.  The
+   // sampling rate argument still holds and still matters -- it is what makes
+   // two flops sufficient rather than a handshake.
+   //
+   (* ASYNC_REG = "TRUE" *) reg x2_s1, x2_s2;
    reg 	      x2_d;
    wire       f1_tick;
-   assign f1_tick = X2 & ~x2_d;
+   assign f1_tick = x2_s2 & ~x2_d;
 
    reg [3:0]  presc2, presc3, presc4, presc5;
    wire [5:1] f_tick;
@@ -157,12 +184,16 @@ module ttl_am9513 #(parameter TRACE = 0) (
    always @(posedge clk)
      if (~reset_n)
        begin
+	  x2_s1  <= 1'b0;
+	  x2_s2  <= 1'b0;
 	  x2_d   <= 1'b0;
 	  presc2 <= 4'h0; presc3 <= 4'h0; presc4 <= 4'h0; presc5 <= 4'h0;
        end
      else
        begin
-	  x2_d <= X2;
+	  x2_s1 <= X2;
+	  x2_s2 <= x2_s1;
+	  x2_d  <= x2_s2;
 	  if (f_tick[1]) presc2 <= presc2 + 4'b1;
 	  if (f_tick[2]) presc3 <= presc3 + 4'b1;
 	  if (f_tick[3]) presc4 <= presc4 + 4'b1;

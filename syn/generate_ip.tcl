@@ -140,7 +140,7 @@ create_ip -name ila -vendor xilinx.com -library ip \
 # validated as a whole, so naming C_PROBE8_WIDTH while the core still has eight
 # probes invalidates the entire dict -- silently: the IP keeps its old
 # configuration and only the generated .xci shows it.
-set_property CONFIG.C_NUM_OF_PROBES {12} [get_ips sun2_ila]
+set_property CONFIG.C_NUM_OF_PROBES {13} [get_ips sun2_ila]
 
 set_property -dict [list \
     CONFIG.C_DATA_DEPTH        {4096} \
@@ -162,6 +162,7 @@ set_property -dict [list \
     CONFIG.C_PROBE9_WIDTH {8} \
     CONFIG.C_PROBE10_WIDTH {3} \
     CONFIG.C_PROBE11_WIDTH {1} \
+    CONFIG.C_PROBE12_WIDTH {16} \
 ] [get_ips sun2_ila]
 
 # And check it took.  The properties above are validated as a whole and can be
@@ -169,9 +170,9 @@ set_property -dict [list \
 # that setting it worked -- the failure mode is a bitstream that cannot be
 # built and a message that points at the wrong file.
 set got [get_property CONFIG.C_NUM_OF_PROBES [get_ips sun2_ila]]
-if {$got != 12} {
-    puts "ERROR: sun2_ila has $got probes, not the 12 asked for -- the"
-    puts "       configuration was rejected.  wukong_top.sv drives probe11,"
+if {$got != 13} {
+    puts "ERROR: sun2_ila has $got probes, not the 13 asked for -- the"
+    puts "       configuration was rejected.  wukong_top.sv drives probe12,"
     puts "       so synthesis would fail on a stale stub instead."
     exit 1
 }

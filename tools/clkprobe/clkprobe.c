@@ -236,7 +236,22 @@ __asm__(
     "       rte                           \n");
 
 static void spl7(void) { __asm__ volatile ("movew #0x2700,%sr"); }
-static void spl0(void) { __asm__ volatile ("movew #0x2000,%sr"); }
+
+/*
+ * spl4, not spl0, for the window where the level 5 interrupt is let through.
+ *
+ * This program is netbooted as often as it is booted off a disk now, and a
+ * netboot leaves the Ethernet armed: the first packet to arrive lands as a
+ * level 3 autovector, which nothing here handles, and the probe dies with
+ * `Exception 6C' part-way through its second measurement.  Installing a
+ * handler would not help, because a device that keeps asserting is re-entered
+ * the instant the handler returns.  Masking below 5 is what the measurement
+ * actually wants: level 5 is the only thing being counted.
+ *
+ * Level 7 still gets through -- it is non-maskable, and it is the monitor's
+ * own NMI, whose handler is already installed and already runs throughout.
+ */
+static void spl4(void) { __asm__ volatile ("movew #0x2400,%sr"); }
 
 /* ------------------------------------------------------------------------ */
 /* The measurements                                                         */
@@ -338,7 +353,7 @@ static void pass(const char *what, void (*arm)(u16), u16 load, u32 spins)
      * costs one interrupt rather than latching the line high for ever. */
     CLK->clk_cmd = CLK_CLEAR + CLKTIMER;
     irq_count = 0;
-    spl0();
+    spl4();
     (void)watch_out(spins);
     spl7();
 

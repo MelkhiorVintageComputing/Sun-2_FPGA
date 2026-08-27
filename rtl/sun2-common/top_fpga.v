@@ -15,7 +15,7 @@ module top(input         cpu_clk,
 	   output 	 en_boot,
 	   output [7:0]  todebug,
 `ifdef SUN2_ILA
-	   output [101:0] dbg_bus,
+	   output [117:0] dbg_bus,
 `endif
 
 	   /* Ethernet diagnostics, for the board top to surface: a PHY that

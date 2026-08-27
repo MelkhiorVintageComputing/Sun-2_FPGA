@@ -114,8 +114,16 @@ module mm58167
    // board's MMCM actually makes 4.915170 MHz (615.625 / 125.25), so the tick
    // is 6.2 ppm slow, about half a second a day -- the same error the SCC's
    // baud rate already carries, and well inside a watch crystal's tolerance.
+   // Synchronised, for the reason ttl_am9513.v now carries at length: X2 comes
+   // from mmcm_b and this runs on cpu_clk from mmcm_a, the two are in
+   // different asynchronous groups in the XDC, and using the raw X2 in a
+   // combinational term beside its own sampling flop puts an unsynchronised
+   // signal into the counter enables.  That cost the Am9513 a level 5 clock
+   // running at 5.6 Hz instead of 100 on a board where simulation was clean.
+   // The sampling-rate argument below is still what makes two flops enough.
+   (* ASYNC_REG = "TRUE" *) reg x2_s1, x2_s2;
    reg 		     x2_d;
-   wire 	     f_tick = X2 & ~x2_d;
+   wire 	     f_tick = x2_s2 & ~x2_d;
 
    reg [7:0] 	     div150;
    wire 	     tick32k = f_tick & (div150 == 8'd149);
@@ -261,11 +269,15 @@ module mm58167
    always @(posedge CLK)
      begin
 	// Before the reset arm, so reset still wins.
-	x2_d    <= X2;
+	x2_s1   <= X2;
+	x2_s2   <= x2_s1;
+	x2_d    <= x2_s2;
 	read_d  <= read;
 	write_d <= write;
 
 	if (~reset_n) begin
+	   x2_s1    <= 1'b0;
+	   x2_s2    <= 1'b0;
 	   x2_d     <= 1'b0;
 	   read_d   <= 1'b0;
 	   write_d  <= 1'b0;

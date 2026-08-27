@@ -106,7 +106,7 @@ module sun2_fpga(input         cpu_clk,
 		 // entry a later FC=3 read gets back?  Packed here, threaded
 		 // out the way todebug is, and sampled in the board layer --
 		 // see the field map at the assignment below.
-		 output [101:0] dbg_bus,
+		 output [117:0] dbg_bus,
 		 // DVMA, which this module cannot work out for itself -- see the
 		 // field map below.  Debug only: nothing downstream of here reads it.
 		 input         dbg_dvma_active,
@@ -1769,7 +1769,29 @@ module sun2_fpga(input         cpu_clk,
    // SCP there, and FC 5 covers both, so no combination of address and
    // function code can separate them.  One bit does.
    //
-   assign dbg_bus = { dbg_dvma_active,                              //    101
+   //
+   // 117:102  the interrupt path, added because the IACK side alone cannot
+   //          answer the question it looks like it answers.  A capture of
+   //          acknowledges shows what the CPU *took*; a request that is
+   //          asserted and never granted and one that is never asserted are
+   //          the same absence.  These are the request side.
+   //
+   //   117     EN_INT      sys_out[6], and it gates the encoder's EI_n -- with
+   //                       it clear *every* level is dead, level 7 included
+   //   116:114 IPL2_n..IPL0_n  what the encoder presents to the CPU
+   //   113:107 INT7_n..INT1_n  the seven request lines, all active low
+   //   106:102 timer_int[5:1]  the Am9513's own outputs, before any of it:
+   //                       counter 1 is INT7_n and counters 2..5 are INT5_n,
+   //                       so `the timer never asserted' and `the encoder ate
+   //                       it' are finally distinguishable
+   //
+   assign dbg_bus = { EN_INT,                                      //    117
+		      IPL2_n, IPL1_n, IPL0_n,                    // 116:114
+		      INT7_n, INT6_n, INT5_n, INT4_n,            // 113:110
+		      INT3_n, INT2_n, INT1_n,                    // 109:107
+		      timer_int[5], timer_int[4], timer_int[3],  // 106:104
+		      timer_int[2], timer_int[1],                // 103:102
+		      dbg_dvma_active,                              //    101
 		      cx_dbg,                                      // 100:98
 		      ctx_out[11:8], ctx_out[3:0],                //  97:90
 		      (P_RW_n ? P_DOUT : P_DIN),                  //  89:74

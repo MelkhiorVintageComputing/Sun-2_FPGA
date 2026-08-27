@@ -165,6 +165,16 @@ foreach k [array names P] {
 # hand = {AS RW UDS LDS DTACK BERR}, all active low, so AS asserted is bit 5 = 0
 switch -- $mode {
     err  { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd) }
+    iack { # an interrupt acknowledge: CPU space, FC 7, with the level the CPU
+           # is acknowledging on A3-A1.  Nothing else uses FC 7, so every
+           # sample is an IACK and dbg_addr[3:1] names the level.
+           #
+           # This is the free half of "which interrupts fire": it sees what the
+           # CPU *took*.  A request that is never taken -- the level 5 clock on
+           # the MultiBus machine -- shows up here only as an absence, so read
+           # a capture with no level 5 in it as a question, not an answer.
+           set_property TRIGGER_COMPARE_VALUE eq3'b111 $P(fc)
+           set_property TRIGGER_COMPARE_VALUE eq6'b0XXXXX $P(hand) }
     reset { set_property TRIGGER_COMPARE_VALUE eq3'b110 $P(fc)
             set_property TRIGGER_COMPARE_VALUE eq23'b[string repeat 0 23] $P(addr) }
     uerr { # any bus error on a user-mode access: FC 1 or 2, and FC 3 too,
@@ -333,6 +343,19 @@ switch -- $mode {
             # find.
             set_property TRIGGER_COMPARE_VALUE eq1'b1 $P(dvma) }
 
+    iackseq { # every interrupt acknowledge and nothing else, one sample each,
+            # trigger at the front.  This is the mode to use for "which
+            # interrupts fire": capture is qualified on FC 7, so 4096 samples
+            # are 4096 IACKs however far apart they are in time.
+            #
+            # Plain `iack' cannot answer that.  Its trigger fires on an IACK,
+            # so the buffer always contains one, and the window is 4096 clocks
+            # -- about 205 us at 20 MHz -- while a 100 Hz level 5 interrupt is
+            # 200,000 clocks apart.  An absent level 5 there means nothing.
+            set_property TRIGGER_COMPARE_VALUE eq3'b111 $P(fc)
+            set qualify_iack 1
+            set trigpos_override 64 }
+
     dvmaseq { # every DVMA cycle, one sample each, with the trigger at the
             # front: the master's whole conversation with memory rather than
             # its first word of it.  Capture is qualified on dvma_active, so
@@ -475,7 +498,7 @@ switch -- $mode {
     fc1  { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
            set_property TRIGGER_COMPARE_VALUE eq3'b001   $P(fc) }
     as   { set_property TRIGGER_COMPARE_VALUE eq6'b0XXXXX $P(hand) }
-    default { puts "ERROR: MODE must be err, fc1, as, supw, scc, ether, etherseq, caseq, caclk, wildptr, lateerr, dvma, dvmaseq, scp, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz, fbprobe or reset, not '$mode'"; exit 1 }
+    default { puts "ERROR: MODE must be err, fc1, as, supw, scc, ether, etherseq, caseq, caclk, wildptr, lateerr, dvma, dvmaseq, iack, iackseq, scp, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz, fbprobe or reset, not '$mode'"; exit 1 }
 }
 
 # Capture control: keep bus cycles, drop the idle clocks between them.  4096
@@ -505,6 +528,10 @@ if {[info exists qualify_prog]} {
 } elseif {[info exists qualify_dvma]} {
     # only cycles a master other than the CPU is driving
     set_property CAPTURE_COMPARE_VALUE eq1'b1 $P(dvma)
+} elseif {[info exists qualify_iack]} {
+    # only CPU-space cycles: FC 7, which on this machine is nothing but an
+    # interrupt acknowledge.  dbg_addr[2:0] is then A3-A1, the level.
+    set_property CAPTURE_COMPARE_VALUE eq3'b111 $P(fc)
 } elseif {[info exists qualify_done]} {
     # AS asserted *and* DTACK asserted: exactly one sample per completed bus
     # cycle.  hand is {AS RW UDS LDS DTACK BERR}, all active low.
@@ -561,4 +588,15 @@ puts "== wrote $outdir/ila.csv =="
 
 # A decoded window round the trigger.  The CSV has everything; this is what can
 # be read without leaving the terminal.
-puts "== [get_property STATUS.SAMPLE_COUNT $ila] samples captured =="
+# Count the rows we actually wrote, not STATUS.SAMPLE_COUNT.  That property
+# reads 0 once the data has been uploaded, so the script used to announce
+# "0 samples captured" over a perfectly good 4096-sample CSV -- which reads as
+# a failed capture and cost a session's worth of doubt about the ILA itself.
+set nrows 0
+if {![catch {set fh [open $outdir/ila.csv r]}]} {
+    while {[gets $fh line] >= 0} { incr nrows }
+    close $fh
+    # two header rows: the column names and the radix line
+    set nrows [expr {$nrows > 2 ? $nrows - 2 : 0}]
+}
+puts "== $nrows samples in $outdir/ila.csv =="
