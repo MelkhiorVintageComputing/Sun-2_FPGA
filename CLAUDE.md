@@ -990,6 +990,10 @@ evidence is behavioural instead, and sound -- NetBSD/sun2 shipped and ran on
 real Sun-2 hardware without ever issuing the command, and a transmitter whose
 IP never clears cannot send a second character.
 
+**Verified with everything in this file: VME is 10/312 and MultiBus 22/274,
+both byte-identical, with the 118-bit `dbg_bus` packing checked on every clock
+edge of both boots.**
+
 **Verified: VME with 0002+0003 is 10/312**, byte-identical to the Suska VME
 console, with `Ethernet initialised, transmitted, and found no server` passing
 -- which matters twice over, because that check drives the 82586 through DVMA.
@@ -1142,6 +1146,41 @@ because that is correct; and `ila_capture.tcl` printing `0 samples captured`
 over a perfectly good 4096-sample CSV, because `STATUS.SAMPLE_COUNT` reads 0
 once the data has been uploaded.  The second was recorded in `a16c586` as an
 open defect and was not one.
+
+**A dead process is `adb`'s question, not the ILA's.**  Four processes were
+seen to die or hang -- `ld` with SIGILL, `lpd` and `inetd` with cores, `cron`
+spinning -- and a bitstream with an ILA on `_core` was built to chase them.
+`adb` on the board answered it in three commands and no build at all:
+
+```
+# echo '$r' | adb /usr/lib/lpd /core     registers, and which signal
+# echo '$c' | adb /usr/lib/lpd /core     the frame that called the wild one
+# echo 'ADDR?i' | adb /usr/lib/lpd       the file's instructions
+# echo 'ADDR/i' | adb /usr/lib/lpd /core the *memory's* -- `?' file, `/' core
+```
+
+`?` against `/` is the sharp one: it compares what a page holds on disk with
+what it held in memory, which is how "the machine corrupted it" was ruled out.
+
+**And most of those deaths were not the machine.**  `lpd` dies identically on
+*every* boot: two cores taken three hours and several reboots apart are
+identical in 2,128,580 bytes of 2,132,118, differing only in the top-of-stack
+argv and environment.  Same PC, same stack, same data segment.  Nothing
+marginal in hardware reproduces to the byte.  It calls
+`openlog("lpd", LOG_PID, LOG_LPR)` through PLT stub `0x200b0`, `ld.so` binds
+that stub correctly -- the file holds the unbound `nop; bsr` and memory the
+patched `jmp`, which is exactly right -- and it then faults *inside the shared
+C library* with an odd address in `a0`.  `SIGBUS` on sun2 means `T_ADDRERR`
+specifically, and only that.  `cron` spinning is the yearless MM58167 giving
+the machine a 1986 date.  The one genuine anomaly left is **`ld` taking SIGILL
+about once in eight compiles, with the identical compile succeeding on retry**.
+
+Two ways a capture lies about interrupts, both met here.  A 4096-sample window
+at 20 MHz is **205 us**: a 100 Hz interrupt is 10 ms apart, so an absent level 5
+in a plain capture means nothing -- use `iackseq`, which qualifies on FC 7 so
+4096 samples are 4096 acknowledges.  And a window that runs on past the event
+is mostly the machine *idling in the monitor afterwards*, where an unarmed
+counter reads 0 because that is correct.
 
 ## Traps that have already cost time
 

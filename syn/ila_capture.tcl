@@ -165,6 +165,31 @@ foreach k [array names P] {
 # hand = {AS RW UDS LDS DTACK BERR}, all active low, so AS asserted is bit 5 = 0
 switch -- $mode {
     err  { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd) }
+    illegal { # the 68010 fetching the illegal-instruction vector.
+            # Vector 4 lives at 0x10, so A[23:1] is 0x000008, and the fetch is
+            # a supervisor data read.  Nothing else reads that word, so this
+            # triggers exactly when a process is about to take SIGILL -- and
+            # the point is the 2048 samples in front of it, which hold the
+            # instruction fetches that led there.
+            #
+            # SunOS leaves VBR at 0 on sun2 (locore.s sets it once, to the
+            # low vectors), so the vector address is the raw one.  If a
+            # capture never triggers while processes are still dying, suspect
+            # that first.
+            set_property TRIGGER_COMPARE_VALUE eq23'h000008 $P(addr)
+            set_property TRIGGER_COMPARE_VALUE eq3'b101     $P(fc)
+            set trigpos_override 3968 }
+
+    vecfetch { # any of the fatal exception vectors: bus error (0x08), address
+            # error (0x0C), illegal (0x10), privilege (0x20), line A (0x28) and
+            # line F (0x2C).  A[23:1] for 0x08..0x2F is 0x04..0x17, which one
+            # comparator cannot express, so this matches the top bits and lets
+            # the decode sort it out -- expect reset-vector and low-memory
+            # traffic in the capture too.
+            set_property TRIGGER_COMPARE_VALUE eq23'b000000000000000000XXXXX $P(addr)
+            set_property TRIGGER_COMPARE_VALUE eq3'b101 $P(fc)
+            set trigpos_override 3968 }
+
     iack { # an interrupt acknowledge: CPU space, FC 7, with the level the CPU
            # is acknowledging on A3-A1.  Nothing else uses FC 7, so every
            # sample is an IACK and dbg_addr[3:1] names the level.
@@ -498,7 +523,7 @@ switch -- $mode {
     fc1  { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
            set_property TRIGGER_COMPARE_VALUE eq3'b001   $P(fc) }
     as   { set_property TRIGGER_COMPARE_VALUE eq6'b0XXXXX $P(hand) }
-    default { puts "ERROR: MODE must be err, fc1, as, supw, scc, ether, etherseq, caseq, caclk, wildptr, lateerr, dvma, dvmaseq, iack, iackseq, scp, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz, fbprobe or reset, not '$mode'"; exit 1 }
+    default { puts "ERROR: MODE must be err, fc1, as, supw, scc, ether, etherseq, caseq, caclk, wildptr, lateerr, dvma, dvmaseq, iack, iackseq, illegal, vecfetch, scp, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz, fbprobe or reset, not '$mode'"; exit 1 }
 }
 
 # Capture control: keep bus cycles, drop the idle clocks between them.  4096
