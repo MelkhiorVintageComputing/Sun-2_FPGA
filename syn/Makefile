@@ -109,11 +109,28 @@ ILADIR  = $(TOP)/build/ip/$(BOARD)/sun2_ila
 # builds at "cpu19" could otherwise mean different clocks.
 CPU_DIV ?=
 
+# The clock that will actually exist.  CPU_DIV wins over CPU_HZ in
+# wukong_clkgen.sv, and build.tcl derives cpu_hz the same way -- both copies of
+# the OUTDIR rule below have to agree or make reports one directory while
+# Vivado writes another, which is how a working bitstream got overwritten once.
+CPU_HZ_EFF = $(if $(CPU_DIV),$(shell expr 1000000000 / $(CPU_DIV)),$(CPU_HZ))
+
+# ... and the tag that names it, in MHz with one decimal where there is one.
+# Truncating to whole MHz collides: VCO/51 is 19.607843 MHz and VCO/52 is
+# 19.230769, and both used to read `cpu19'.  The -div suffix disambiguated
+# them, but the frequency in the name was then worse than useless.  A whole
+# number keeps its old spelling, so cpu20 and cpu40 are unchanged; 12.5 MHz
+# becomes cpu12.5, which is what it always should have said.
+# build.tcl computes this the same way -- the two must agree.
+CPU_MHZ_TAG = $(shell h=$(CPU_HZ_EFF); i=$$(( $$h / 1000000 )); \
+                      f=$$(( ($$h % 1000000) / 100000 )); \
+                      if [ $$f -eq 0 ]; then echo $$i; else echo $$i.$$f; fi)
+
 ETH5   ?= e0
 ETH5_D  = $(shell printf '%d' 0x$(ETH5))
 
 TAG     = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)
-OUTDIR  = $(TOP)/build/syn/$(BOARD)-$(MACHINE)$(TAG)-cpu$(shell expr $(CPU_HZ) / 1000000)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(ILA)),-ila,)$(if $(filter 1,$(FB)),-$(HDMI_MODE),)$(if $(filter 1,$(FBDEBUG)),-fbdbg,)$(if $(filter 1,$(FBPROBE)),-fbprobe,)$(if $(filter 1,$(FBFORCE)),-fbforce,)$(if $(filter-out e0,$(ETH5)),-eth$(ETH5),)$(if $(CPU_DIV),-div$(CPU_DIV),)
+OUTDIR  = $(TOP)/build/syn/$(BOARD)-$(MACHINE)$(TAG)-cpu$(CPU_MHZ_TAG)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(ILA)),-ila,)$(if $(filter 1,$(FB)),-$(HDMI_MODE),)$(if $(filter 1,$(FBDEBUG)),-fbdbg,)$(if $(filter 1,$(FBPROBE)),-fbprobe,)$(if $(filter 1,$(FBFORCE)),-fbforce,)$(if $(filter-out e0,$(ETH5)),-eth$(ETH5),)$(if $(CPU_DIV),-div$(CPU_DIV),)
 # Absolute, because the recipes below run Vivado from $(WORKDIR) and $(OUTDIR)
 # is relative to here: a relative path resolves against the wrong directory and
 # program.tcl reports a bitstream that was never at that address.

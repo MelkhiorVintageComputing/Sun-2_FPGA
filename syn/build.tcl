@@ -53,6 +53,34 @@ if {[llength $argv] > 11} { set fbprobe [lindex $argv 11] }
 if {[llength $argv] > 12} { set fbforce [lindex $argv 12] }
 if {[llength $argv] > 13} { set eth5    [lindex $argv 13] }
 if {[llength $argv] > 14} { set cpu_div [lindex $argv 14] }
+
+# CPU_DIV names the MMCM divider directly and wins over CPU_HZ in
+# wukong_clkgen.sv:63, so from here on cpu_hz has to mean the clock that will
+# actually exist -- otherwise it describes one the design does not have.
+#
+# That is not cosmetic in all three places it is used.  The banner below and
+# $outdir are reporting, and a banner saying "CPU clock 20000000 Hz" over a
+# synthesis log saying "cpu 19607843 Hz (VCO/51, exact)" is exactly the kind of
+# thing this file has been caught by before -- see CLAUDE.md on knobs that
+# reach the build and not the logic.  But wukong_top.sv:453 computes
+# SD_CLK_PERIOD_PS from CPU_CLK_HZ and that is synthesised: with CPU_DIV giving
+# a *lower* frequency than CPU_HZ claims the SD clock merely comes out slow,
+# but the other way round -- CPU_DIV=25 against CPU_HZ=20000000 -- it would run
+# at twice the intended rate, and SD identification mode has a hard 400 kHz
+# ceiling.
+#
+# VCO_A_HZ is 1e9, and the truncation matches CPU_ACTUAL_HZ in the clkgen.
+if {$cpu_div != 0} {
+    set cpu_hz [expr {1000000000 / $cpu_div}]
+}
+
+# The MHz tag used in $outdir: one decimal where there is one, so VCO/51
+# (19.607843) and VCO/52 (19.230769) do not both read `cpu19'.  A whole number
+# keeps its old spelling.  syn/Makefile computes this identically and the two
+# must agree, or make reports one directory while Vivado writes another.
+set mhz_i [expr {$cpu_hz / 1000000}]
+set mhz_f [expr {($cpu_hz % 1000000) / 100000}]
+set cputag [expr {$mhz_f == 0 ? "$mhz_i" : "$mhz_i.$mhz_f"}]
 if {$cpu ne "suska" && $cpu ne "rd68011"} {
     puts "ERROR: CPU must be suska or rd68011, not '$cpu'"
     exit 1
@@ -228,7 +256,7 @@ set ipdir   $top/build/ip/$board
 # -- make reported one path while Vivado wrote to another, quietly overwriting
 # the bitstream the new knob existed to leave alone.  Add to both, or to
 # neither.
-set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu[expr {$cpu_hz / 1000000}][expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$fbdebug == 1 ? "-fbdbg" : ""}][expr {$fbprobe == 1 ? "-fbprobe" : ""}][expr {$fbforce == 1 ? "-fbforce" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}]
+set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu$cputag[expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$fbdebug == 1 ? "-fbdbg" : ""}][expr {$fbprobe == 1 ? "-fbprobe" : ""}][expr {$fbforce == 1 ? "-fbforce" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir

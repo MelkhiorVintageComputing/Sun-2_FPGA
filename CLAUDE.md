@@ -934,7 +934,19 @@ symptom -- a hang with the CPU still running -- names no clock at all.
 
 `CPU_DIV` exists because of it.  `make -C syn bitstream CPU_DIV=51` names the
 MMCM divider directly and gives exactly VCO/51 = 19.607843 MHz, a clock no
-integer `CPU_HZ` can express -- the elaboration guard rejects a *frequency* that
+integer `CPU_HZ` can express.  **Give it alone: `CPU_HZ` is then derived from
+it, not supplied beside it.**  `CPU_DIV` wins over `CPU_HZ` in
+`wukong_clkgen.sv`, so `syn/build.tcl` recomputes `cpu_hz` as VCO/`CPU_DIV`
+before anything reads it.  It used not to, and the banner said `CPU clock
+20000000 Hz` over a synthesis log saying `cpu 19607843 Hz (VCO/51, exact)` --
+the same knob-does-not-reach-the-report trap this file records twice already.
+Worse, `wukong_top.sv:453` computes `SD_CLK_PERIOD_PS` from `CPU_CLK_HZ` and
+that *is* synthesised: every `CPU_DIV` used so far gives a lower frequency than
+`CPU_HZ` claimed, so the SD clock only ever came out slow, but `CPU_DIV=25`
+against `CPU_HZ=20000000` would have run it at twice the rate, and SD
+identification mode has a hard 400 kHz ceiling.  The MHz tag in the output
+directory carries one decimal where there is one, because VCO/51 and VCO/52
+both truncated to `cpu19` -- the elaboration guard rejects a *frequency* that
 does not divide the 1 GHz VCO in whole hertz, which conflates an exact divider
 with an integer number of hertz.  Naming the divider keeps the no-silent-
 rounding guarantee by construction.  **19.607843 MHz boots and 20 MHz does
