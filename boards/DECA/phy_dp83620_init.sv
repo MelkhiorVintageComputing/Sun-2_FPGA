@@ -22,12 +22,27 @@
 //     falls back to half duplex, and the resulting duplex mismatch looks
 //     exactly like a broken MAC.
 //
-//   * The part must be in MII mode, not RMII.  RBR bit 5 RMII_MODE defaults
-//     from a **strap**, so what this board does is a board fact and not a
-//     datasheet one.  The DECA routes TXD[3:0], RXD[3:0], TX_CLK and RX_CLK,
-//     which only MII uses, so it is almost certainly strapped for MII -- and
-//     "almost certainly" is not a basis for a subsystem that fails silently, so
-//     this reads RBR, reports what it found, and clears the bit regardless.
+//   * The part must be in MII mode, not RMII.  RBR bit 5 RMII_MODE is latched
+//     from the MII_MODE strap on pin 39, which is the RX_DV pin, and the
+//     DP83620 pulls it down internally (datasheet 3.9: "Default operation is
+//     MII Mode with a value of 0 due to the internal pulldown").
+//
+//     The DECA schematic settles what the board does:
+//     Inputs/doc/DECA_board/Documents/Schematic_DECA.pdf runs NET_RX_DV from
+//     PHY pin 39 straight to FPGA PIN_P4 with **no external pull resistor** --
+//     the 2.2K parts around there (R74, R231, R237) sit on pins 23, 21 and 22,
+//     RESERVED1, CLK_OUT_EN and PCF_EN.  So the internal pulldown decides, and
+//     the board is MII.
+//
+//     This still clears the bit, and the reason is better than "in case":
+//     **the strap pin is shared with the FPGA**, and before the FPGA is
+//     configured its pins are tri-stated with a weak pull-UP by default.  In
+//     that window NET_RESET_n also floats high, so the PHY is not held in
+//     reset and latches MII_MODE = 1 -- RMII.  What saves it is that
+//     deca_top drives NET_RESET_n low from board_reset_raw once configured, so
+//     the part re-latches its straps with the FPGA now holding RX_DV as a
+//     plain input.  That recovery is load-bearing and was implicit; clearing
+//     RBR explicitly means the machine does not depend on it being right.
 //
 //   * There is no gigabit register to withdraw and no "assert CRS on transmit"
 //     to clear.  Both of those were GMII-specific problems on the Realtek part.
@@ -39,7 +54,17 @@
 // one, which is stronger, and a reset would return the straps.
 //
 module phy_dp83620_init #(
-    parameter logic [4:0]  PHY_ADDR = 5'd1,   // check the board straps
+    // Address 1, and that is the strapped default rather than a choice.
+    // PHYAD0 is on the COL pin with a weak internal pull-UP; PHYAD[4:1] are on
+    // RXD[3:0] with pull-DOWNs (datasheet 3.9), so an unstrapped board latches
+    // 00001.  The DECA schematic shows no external pull on NET_COL or NET_RXD,
+    // so the internal defaults stand.
+    //
+    // TI's pull-up on the least significant bit is deliberate and worth
+    // knowing: **address 0 puts the part into MII Isolate Mode**, where it
+    // ignores the MII bus altogether.  A board that strapped its way to 0 would
+    // have a PHY that answers management perfectly and passes no traffic.
+    parameter logic [4:0]  PHY_ADDR = 5'd1,
     // 10BASE-T, full and half duplex, with the IEEE 802.3 selector field.
     // Offering both lets a half-duplex-only partner link rather than fail --
     // and half duplex is what a Sun-2 expects anyway.

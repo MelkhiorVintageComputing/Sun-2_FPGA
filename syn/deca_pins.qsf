@@ -121,6 +121,21 @@ foreach p {NET_TX_CLK NET_RX_CLK NET_TX_EN NET_RX_DV NET_RX_ER NET_CRS \
            NET_COL NET_RESET_n NET_MDC NET_MDIO} {
     set_instance_assignment -name IO_STANDARD "2.5 V" -to $p
 }
+
+# Seven of these pins are the PHY's mode straps, latched when RESET_N is
+# released, and they are shared with ordinary MII function pins.  An FPGA weak
+# pull-up on one of them latches the wrong mode: RX_DV is MII_MODE (pin 39, and
+# the schematic shows no external pull, so the part's internal pulldown decides
+# and the board is MII), RX_ER is FX_EN_Z, CRS is LED_CFG, TXD_3 is RMII_MAS,
+# and RXD_[3:0] carry the PHY address.
+#
+# Quartus does not put a pull-up on an assigned input by default, so this is
+# belt and braces -- but the failure it prevents is a PHY in RMII mode answering
+# a four-bit MII MAC, which presents as a MAC that simply does not work.
+foreach p {NET_RX_DV NET_RX_ER NET_CRS NET_COL NET_RXD[0] NET_RXD[1] \
+           NET_RXD[2] NET_RXD[3]} {
+    set_instance_assignment -name WEAK_PULL_UP_RESISTOR OFF -to $p
+}
 foreach i {0 1 2 3} {
     set_instance_assignment -name IO_STANDARD "2.5 V" -to NET_TXD[$i]
     set_instance_assignment -name IO_STANDARD "2.5 V" -to NET_RXD[$i]
