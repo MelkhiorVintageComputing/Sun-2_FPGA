@@ -88,6 +88,24 @@ xy450)
 		| grep -E '===|PASS|FAIL|checks|blk\]|DVMA:'
 	;;
 
+decaphy)
+	# The DP83620 bring-up against a clause-22 PHY model.  Every register
+	# value in the sequencer is transcribed from Inputs/doc/dp83620.pdf, and
+	# each is wrong in a quiet way: a mismatched PHYIDR1 reports "no PHY" on
+	# a good board, an uncleared RMII strap makes the MII deaf, and PHYSTS
+	# bit 1 is named Speed10 and reads the opposite way round from instinct.
+	"$top/tools/patch_inputs.sh" Wish82586
+	if xvlog --sv \
+		"$top/build/inputs/Wish82586/src/wb_mdio.sv" \
+		"$top/boards/DECA/phy_dp83620_init.sv" \
+		"$top/tb/mdio_phy_model.sv" \
+		"$top/tb/tb_phy_dp83620.sv" \
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug off --timescale 1ns/1ps work.tb_phy_dp83620 -s decaphy_sim \
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	xsim decaphy_sim -R | grep -E '===|PASS|FAIL|ok:'
+	;;
+
 decaddr3)
 	# The Wishbone-to-DDR3 adapter against a model of BrianHG's command port.
 	# What is under test is a set of claims read out of someone else's

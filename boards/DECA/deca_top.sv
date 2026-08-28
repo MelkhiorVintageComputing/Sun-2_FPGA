@@ -164,6 +164,13 @@ module deca_top #(
    wire [7:0]  blk_buf_rdata;
 
    wire        mdio_i, mdio_o, mdio_oe;
+   wire        mdio_cyc, mdio_stb, mdio_we, mdio_ack;
+   wire [3:0]  mdio_sel;
+   wire [5:0]  mdio_adr;
+   wire [31:0] mdio_dat_w, mdio_dat_r;
+   wire [15:0] phy_id;
+   wire        phy_present, phy_cfg_done, phy_link, phy_fd;
+   wire [1:0]  phy_speed;
    wire        ev_rx_valid, ev_wr_data, ev_rd_valid, ev_tx_start;
 
    top machine (
@@ -185,14 +192,12 @@ module deca_top #(
        .eth_crs_stuck  (eth_crs_stuck),
        .fb_video_en    (fb_video_en),
 
-       // No PHY management yet; the status register in device page 0xFE7 will
-       // read "no PHY", which is true.
-       .phy_id         (16'h0000),
-       .phy_present    (1'b0),
-       .phy_cfg_done   (1'b0),
-       .phy_link       (1'b0),
-       .phy_fd         (1'b0),
-       .phy_speed      (2'b00),
+       .phy_id         (phy_id),
+       .phy_present    (phy_present),
+       .phy_cfg_done   (phy_cfg_done),
+       .phy_link       (phy_link),
+       .phy_fd         (phy_fd),
+       .phy_speed      (phy_speed),
 
        .mii_tx_clk     (NET_TX_CLK),
        .mii_txd        (NET_TXD),
@@ -434,20 +439,76 @@ module deca_top #(
    assign GPIO0_D = {diag_leds[7:3], con_frame_err, con_dropped, sun_tx};
    assign GPIO1_D = todebug;
 
-   // The PHY is held out of reset and left alone.  PCF_EN low disables the
-   // power-control-frame feature, which a Sun-2 knows nothing about.
-   assign NET_RESET_n = ~board_reset;
-   assign NET_MDC     = 1'b0;
+   // ------------------------------------------------------------------
+   // PHY management
+   //
+   // MDC well under the 2.5 MHz the standard allows, and deliberately slower
+   // than it needs to be: management bandwidth buys nothing and a slow bus
+   // tolerates whatever capacitance is on the trace.
+   // 12.5 MHz / (2 * (49 + 1)) = 125 kHz.
+   // ------------------------------------------------------------------
+   wb_mdio #(.DIV_RESET(49)) mdio_station (
+       .clk       (cpu_clk),
+       .rst       (sys_reset),
+       .wbs_cyc_i (mdio_cyc),
+       .wbs_stb_i (mdio_stb),
+       .wbs_we_i  (mdio_we),
+       .wbs_sel_i (mdio_sel),
+       .wbs_adr_i (mdio_adr),
+       .wbs_dat_i (mdio_dat_w),
+       .wbs_dat_o (mdio_dat_r),
+       .wbs_ack_o (mdio_ack),
+       .wbs_err_o (),
+       .mdc       (NET_MDC),
+       .mdio_o    (mdio_o),
+       .mdio_oe   (mdio_oe),
+       .mdio_i    (mdio_i)
+   );
+
+   // Quartus infers the tristate; there is no IOBUF to instantiate as there is
+   // on the Wukong, which is one of the few places the Altera side is simpler.
+   assign NET_MDIO = mdio_oe ? mdio_o : 1'bz;
+   assign mdio_i   = NET_MDIO;
+
+   // The DP83620 needs RESET_N low for only 1 us (datasheet 6.6), which the
+   // hold counter covers many times over -- unlike the RTL8211's 10 ms plus
+   // 30 ms of settling.  `enable' is simply "we are out of reset".
+   reg [15:0] phy_wait;
+   always @(posedge cpu_clk)
+     if (board_reset)          phy_wait <= 16'd0;
+     else if (!phy_wait[15])   phy_wait <= phy_wait + 16'd1;
+
+   phy_dp83620_init #(.PHY_ADDR(5'd1)) phy_init (
+       .clk         (cpu_clk),
+       .rst         (sys_reset),
+       .enable      (phy_wait[15]),
+       .wbm_cyc_o   (mdio_cyc),
+       .wbm_stb_o   (mdio_stb),
+       .wbm_we_o    (mdio_we),
+       .wbm_sel_o   (mdio_sel),
+       .wbm_adr_o   (mdio_adr),
+       .wbm_dat_o   (mdio_dat_w),
+       .wbm_dat_i   (mdio_dat_r),
+       .wbm_ack_i   (mdio_ack),
+       .phy_id      (phy_id),
+       .phy_present (phy_present),
+       .cfg_done    (phy_cfg_done),
+       .link        (phy_link),
+       .speed       (phy_speed),
+       .full_duplex (phy_fd)
+   );
+
+   assign NET_RESET_n = ~board_reset_raw;
+   // PCF_EN low disables the power-control-frame feature, which a Sun-2 knows
+   // nothing about.
    assign NET_PCF_EN  = 1'b0;
-   assign NET_MDIO    = 1'bz;
-   assign mdio_i      = NET_MDIO;
 
    // Tie-offs that exist so nothing above is silently unconnected.  Quartus
    // reports an assigned-but-never-read object, which is the warning we want:
    // it names a signal that is deliberately unused rather than one that got
    // lost.
    wire _unused = &{1'b0, en_boot, eth_crs_stuck, fb_video_en, blk_start,
-                    blk_we_o, blk_lba, blk_buf_rdata, mdio_i, mdio_o, mdio_oe,
-                    KEY[1], SW[1], 1'b0};
+                    blk_we_o, blk_lba, blk_buf_rdata,
+                    KEY[1], SW[1], ddr3_cal_pass, ddr3_rdcal, 1'b0};
 
 endmodule
