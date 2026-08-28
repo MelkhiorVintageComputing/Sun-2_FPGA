@@ -332,6 +332,34 @@ if {[catch {execute_module -tool fit} err]} {
 }
 puts "== fit ok =="
 
+if {[catch {execute_module -tool sta} err]} {
+    puts "== timing analysis FAILED =="; puts $err; project_close; exit 1
+}
+puts "== sta ok =="
+
+# What the PLLs were actually programmed with, and what the design closes at.
+# A comment claiming 12.5 MHz and 4.915254 MHz is not a measurement -- and this
+# is the flow where CPU_HZ finally reaches something, so it is the first build
+# in which that knob can be wrong in a way that matters.
+if {[file exists sun2.sta.rpt]} {
+    set fh [open sun2.sta.rpt]; set sta [read $fh]; close $fh
+    foreach line [split $sta "\n"] {
+        if {[regexp {^; *([^;]*pll_[ab][^;]*) *; *Generated *; *([0-9.]+) *; *([0-9.]+ [Mk]Hz)} \
+                 $line -> nm pd fq]} {
+            puts "== clock [string trim $nm]: [string trim $pd] ns, [string trim $fq] =="
+        }
+    }
+    # Fmax and the worst slack, which is the number this whole port has been
+    # heading towards: a MAX 10 running a 68010 at all.
+    set inf 0
+    foreach line [split $sta "\n"] {
+        if {[regexp {Slow 1200mV 85C Model Fmax Summary} $line]} { set inf 1 }
+        if {$inf && [regexp {^; *([0-9.]+ MHz) *; *([0-9.]+ MHz) *; *([^;]+) *;} $line -> f rf cn]} {
+            puts "== Fmax [string trim $cn]: [string trim $f] (restricted [string trim $rf]) =="
+        }
+    }
+}
+
 if {$opt(-stage) eq "fit"} { project_close; exit 0 }
 
 # The assembler is run even with no cable attached: it is the only end-to-end
