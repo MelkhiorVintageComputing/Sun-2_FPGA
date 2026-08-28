@@ -37,6 +37,8 @@ compile_cpu() {
 			"$rd/rtl/gen/rd68011_decode_rom.sv" \
 			"$rd/rtl/gen/rd68011_loop_rom.sv" \
 			"$rd/rtl/gen/rd68011_ucode_rom.sv" \
+			"$rd/rtl/gen/rd68011_uctl_rom.sv" \
+			"$rd/rtl/gen/rd68011_urq_rom.sv" \
 			"$rd/rtl/rd68011_dedge_ff.sv" \
 			"$rd/rtl/rd68011_sync.sv" \
 			"$rd/rtl/rd68011_alu.sv" \

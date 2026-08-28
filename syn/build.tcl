@@ -300,6 +300,8 @@ if {$cpu eq "rd68011"} {
         $rd68011/rtl/gen/rd68011_decode_rom.sv \
         $rd68011/rtl/gen/rd68011_loop_rom.sv \
         $rd68011/rtl/gen/rd68011_ucode_rom.sv \
+        $rd68011/rtl/gen/rd68011_uctl_rom.sv \
+        $rd68011/rtl/gen/rd68011_urq_rom.sv \
         $rd68011/rtl/rd68011_dedge_ff.sv \
         $rd68011/rtl/rd68011_sync.sv \
         $rd68011/rtl/rd68011_alu.sv \
