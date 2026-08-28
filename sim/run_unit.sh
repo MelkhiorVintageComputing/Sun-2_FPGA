@@ -88,6 +88,24 @@ xy450)
 		| grep -E '===|PASS|FAIL|checks|blk\]|DVMA:'
 	;;
 
+decaddr3)
+	# The Wishbone-to-DDR3 adapter against a model of BrianHG's command port.
+	# What is under test is a set of claims read out of someone else's
+	# source -- mask polarity, strobe-not-level handshake, no write ack,
+	# 128-bit line as four lanes -- each of which corrupts memory quietly
+	# rather than failing loudly if it is wrong.  The model varies CMD_busy
+	# and the read latency, because a handshake that only works when the far
+	# end is always ready is not a handshake.
+	if xvlog --sv \
+		"$top/boards/DECA/deca_wb_to_ddr3.sv" \
+		"$top/tb/tb_deca_wb_ddr3.sv" \
+		-i "$top/rtl/sun2-common" \
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug off --timescale 1ns/1ps work.tb_deca_wb_ddr3 -s decaddr3_sim \
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	xsim decaddr3_sim -R | grep -E '===|PASS|FAIL|ok:'
+	;;
+
 decaconsole)
 	# The console bridge against a model of the Avalon slave it talks to.
 	# The real IP ties its Atlantic port off under translate_off and cannot
