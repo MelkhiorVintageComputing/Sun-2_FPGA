@@ -382,7 +382,7 @@ read_verilog -sv [list \
     $top/build/inputs/z8530_scc/z8530_scc.sv \
     $top/boards/Wukong/wukong_clkgen.sv \
     $top/boards/Wukong/hdmi_clkgen.sv \
-    $top/boards/Wukong/reset_sync.sv \
+    $top/rtl/sun2-common/reset_sync.sv \
     $top/boards/Wukong/wb_to_mig_ui.sv \
     $top/boards/Wukong/mig_arb.sv \
     $top/boards/Wukong/fb_scanout.sv \

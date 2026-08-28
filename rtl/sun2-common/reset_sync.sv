@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+`include "sun2_attr.vh"
+
 //
 // Reset synchroniser: asserts asynchronously, releases synchronously.
 //
@@ -16,7 +18,14 @@
 // makes that safe.
 //
 // ASYNC_REG keeps the chain in one slice and tells the tools these registers
-// are expected to go metastable.
+// are expected to go metastable.  It is spelled through sun2_attr.vh because
+// this file is shared between two vendors now and each ignores the other's
+// attribute silently -- see that header.
+//
+// This lives in rtl/ rather than under a board because async-assert /
+// sync-release is not a property of any board: the Wukong assembles its reset
+// from a button, an MMCM lock and MIG's calibration, the DECA from a button and
+// two PLL locks, and both need the same synchroniser at the end of it.
 //
 
 module reset_sync #(
@@ -27,7 +36,7 @@ module reset_sync #(
     output wire rst_sync_out     // active high, released synchronously to clk
 );
 
-   (* ASYNC_REG = "TRUE" *) reg [STAGES-1:0] chain;
+   `SUN2_ASYNC_REG reg [STAGES-1:0] chain;
 
    always @(posedge clk or posedge rst_async_in) begin
       if (rst_async_in) chain <= {STAGES{1'b1}};

@@ -1,0 +1,128 @@
+# Pin assignments for the Arrow DECA (MAX 10 10M50DAF484C6GES).
+#
+# A .qsf is Tcl, so syn/quartus.tcl sources this directly and it still diffs
+# line for line against the board's own reference,
+# Inputs/doc/DECA_board/Templates/deca-template-full/deca_top.qsf.  Every
+# location here is cross-checked against that file and against Table 3-x of
+# Inputs/doc/DECA_board/Documents/DECA_User_manual.pdf.
+#
+# The twin of syn/wukong_v1.xdc and syn/wukong_common.xdc, which do the same
+# job in Vivado's spelling.
+#
+# ---------------------------------------------------------------- I/O banks
+#
+# The DECA mixes five I/O voltages and the fitter enforces them, which makes
+# this the one class of board mistake that cannot reach hardware:
+#
+#   1.2 V  bank 8: the eight LEDs
+#   1.5 V  bank 4: KEY, SW, the audio codec, the SD card, DDR3
+#   1.8 V  the HDMI transmitter and the USB ULPI
+#   2.5 V  MAX10_CLK1_50, ADC_CLK_10, the Ethernet PHY
+#   3.3 V  MAX10_CLK2_50, both GPIO headers, the QSPI flash
+#
+# So *every* pin below carries an explicit IO_STANDARD.  An omitted one defaults
+# to 2.5 V and the fitter stops with a bank conflict naming two pins -- a good
+# error, but only if the assignment was meant to be there at all.
+#
+# Note bank 8 at 1.2 V is why quartus.tcl turns the configuration pins off; the
+# board is JTAG-only as a consequence, which is what this port assumes anyway.
+
+# ------------------------------------------------------------------- clock
+set_location_assignment PIN_M8 -to MAX10_CLK1_50
+set_instance_assignment -name IO_STANDARD "2.5 V" -to MAX10_CLK1_50
+
+# ------------------------------------------------------- buttons and switches
+# Schmitt-trigger inputs at 1.5 V.  KEY is active low and there is no separate
+# reset button on this board, so KEY[0] is the machine's reset.
+set_location_assignment PIN_H21 -to KEY[0]
+set_location_assignment PIN_H22 -to KEY[1]
+set_instance_assignment -name IO_STANDARD "1.5 V SCHMITT TRIGGER" -to KEY[0]
+set_instance_assignment -name IO_STANDARD "1.5 V SCHMITT TRIGGER" -to KEY[1]
+
+set_location_assignment PIN_J21 -to SW[0]
+set_location_assignment PIN_J22 -to SW[1]
+set_instance_assignment -name IO_STANDARD "1.5 V SCHMITT TRIGGER" -to SW[0]
+set_instance_assignment -name IO_STANDARD "1.5 V SCHMITT TRIGGER" -to SW[1]
+
+# -------------------------------------------------------------------- LEDs
+# Bank 8, 1.2 V, and ACTIVE LOW -- the user manual is explicit that driving a
+# pin high turns its LED off.  deca_top inverts; do not invert twice.
+set_location_assignment PIN_C7 -to LED[0]
+set_location_assignment PIN_C8 -to LED[1]
+set_location_assignment PIN_A6 -to LED[2]
+set_location_assignment PIN_B7 -to LED[3]
+set_location_assignment PIN_C4 -to LED[4]
+set_location_assignment PIN_A5 -to LED[5]
+set_location_assignment PIN_B4 -to LED[6]
+set_location_assignment PIN_C5 -to LED[7]
+foreach i {0 1 2 3 4 5 6 7} {
+    set_instance_assignment -name IO_STANDARD "1.2 V" -to LED[$i]
+}
+
+# ------------------------------------------------------------ GPIO headers
+# P8 (GPIO0) carries the Sun-2 front panel, P9 (GPIO1) the todebug ladder.
+#
+# GPIO0_D[0] = PIN_W18 is what the DECA's own template calls UART_TXD, and
+# deca_top puts the console transmit line there deliberately: a USB-TTL cable on
+# P8 pin 3 then sees the monitor with no gateware change at all, which is the
+# fallback if the JTAG console gives trouble.  GPIO0_D[1] = PIN_Y18 is the
+# matching UART_RXD and is left unassigned for that day.
+set_location_assignment PIN_W18  -to GPIO0_D[0]
+set_location_assignment PIN_Y19  -to GPIO0_D[1]
+set_location_assignment PIN_AA17 -to GPIO0_D[2]
+set_location_assignment PIN_AA20 -to GPIO0_D[3]
+set_location_assignment PIN_AA19 -to GPIO0_D[4]
+set_location_assignment PIN_AB21 -to GPIO0_D[5]
+set_location_assignment PIN_AB20 -to GPIO0_D[6]
+set_location_assignment PIN_AB19 -to GPIO0_D[7]
+
+set_location_assignment PIN_Y5  -to GPIO1_D[0]
+set_location_assignment PIN_Y6  -to GPIO1_D[1]
+set_location_assignment PIN_W6  -to GPIO1_D[2]
+set_location_assignment PIN_W7  -to GPIO1_D[3]
+set_location_assignment PIN_W8  -to GPIO1_D[4]
+set_location_assignment PIN_V8  -to GPIO1_D[5]
+set_location_assignment PIN_AB8 -to GPIO1_D[6]
+set_location_assignment PIN_V7  -to GPIO1_D[7]
+
+foreach i {0 1 2 3 4 5 6 7} {
+    set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to GPIO0_D[$i]
+    set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to GPIO1_D[$i]
+}
+
+# ---------------------------------------------------------------- Ethernet
+# TI DP83620, 10/100, MII.  All 2.5 V except NET_PCF_EN.
+#
+# Connected from the first build even though nothing brings the PHY up yet.
+# With the two receive clocks tied to constants Quartus prunes most of the
+# 82586's receive unit, and then the resource and Fmax numbers describe a design
+# that is not the one which will run.  Seventeen pins buys honest measurements.
+set_location_assignment PIN_T5 -to NET_TX_CLK
+set_location_assignment PIN_T6 -to NET_RX_CLK
+set_location_assignment PIN_U2 -to NET_TXD[0]
+set_location_assignment PIN_W1 -to NET_TXD[1]
+set_location_assignment PIN_N9 -to NET_TXD[2]
+set_location_assignment PIN_W2 -to NET_TXD[3]
+set_location_assignment PIN_P3 -to NET_TX_EN
+set_location_assignment PIN_U5 -to NET_RXD[0]
+set_location_assignment PIN_U4 -to NET_RXD[1]
+set_location_assignment PIN_R7 -to NET_RXD[2]
+set_location_assignment PIN_P8 -to NET_RXD[3]
+set_location_assignment PIN_P4 -to NET_RX_DV
+set_location_assignment PIN_V1 -to NET_RX_ER
+set_location_assignment PIN_P5 -to NET_CRS
+set_location_assignment PIN_R4 -to NET_COL
+set_location_assignment PIN_R3 -to NET_RESET_n
+set_location_assignment PIN_R5 -to NET_MDC
+set_location_assignment PIN_N8 -to NET_MDIO
+set_location_assignment PIN_V9 -to NET_PCF_EN
+
+foreach p {NET_TX_CLK NET_RX_CLK NET_TX_EN NET_RX_DV NET_RX_ER NET_CRS \
+           NET_COL NET_RESET_n NET_MDC NET_MDIO} {
+    set_instance_assignment -name IO_STANDARD "2.5 V" -to $p
+}
+foreach i {0 1 2 3} {
+    set_instance_assignment -name IO_STANDARD "2.5 V" -to NET_TXD[$i]
+    set_instance_assignment -name IO_STANDARD "2.5 V" -to NET_RXD[$i]
+}
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to NET_PCF_EN

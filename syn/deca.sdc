@@ -1,0 +1,59 @@
+# Timing constraints for the Arrow DECA.
+#
+# The twin of syn/wukong_common.xdc, and it carries the same lesson about
+# ordering: a set_clock_groups naming a clock that has not been created yet
+# matches nothing and is dropped **silently**, surfacing much later as a real
+# hold violation on a crossing that should have been ignored.  So
+# derive_pll_clocks comes before every group below, not after.
+
+# ------------------------------------------------------------------ sources
+create_clock -name clk50 -period 20.000 [get_ports MAX10_CLK1_50]
+
+# The MII clocks come from the DP83620, not from us.  A Sun-2 only ever runs at
+# 10 Mb/s, where these are 2.5 MHz -- but the PHY autonegotiates and may come up
+# at 100 until something tells it otherwise, so constrain the tighter case.
+create_clock -name net_tx_clk -period 40.000 [get_ports NET_TX_CLK]
+create_clock -name net_rx_clk -period 40.000 [get_ports NET_RX_CLK]
+
+# ------------------------------------------------------------------ derived
+derive_pll_clocks -create_base_clocks
+
+# Quartus adds no clock uncertainty unless asked, where Vivado includes it by
+# default.  Omitting this is a silent optimism of tens of picoseconds on every
+# path, which is exactly the sort of difference that makes a board behave
+# unlike its own timing report.
+derive_clock_uncertainty
+
+# -------------------------------------------------------------- clock groups
+# The two PLLs are unrelated to each other and to the board oscillator.  They
+# are separate groups even though both derive from clk50, for the same reason
+# wukong_common.xdc separates its two MMCMs: the only paths that cross are the
+# SCC's own internal synchronisers and the two-flop chains in ttl_am9513.v and
+# mm58167.v, and timing them would be meaningless.
+#
+# clk50 must be a group in its own right.  Leaving it out is what made the
+# Wukong's first build fail a recovery check into the SCC.
+set_clock_groups -asynchronous \
+    -group [get_clocks clk50] \
+    -group [get_clocks net_tx_clk] \
+    -group [get_clocks net_rx_clk] \
+    -group [get_clocks {*clkgen*pll_a*}] \
+    -group [get_clocks {*clkgen*pll_b*}]
+
+# ------------------------------------------------------------- false paths
+# CRS and COL are asynchronous to both MII clocks by clause 22 -- the same
+# argument wukong_common.xdc makes for the Wukong's PHY.
+set_false_path -from [get_ports {NET_CRS NET_COL}]
+
+# Buttons and switches are human-operated and synchronised in logic.
+set_false_path -from [get_ports {KEY[*] SW[*]}]
+
+# Outputs nothing samples on a clock: LEDs, the debug headers, the PHY's reset
+# and its management pins.  Real input/output delays on the MII belong here in
+# stage 3, when the PHY is actually brought up; false-pathing them now is
+# honest only because nothing drives them yet, and this comment is the record
+# of that debt.
+set_false_path -to   [get_ports {LED[*] GPIO0_D[*] GPIO1_D[*]}]
+set_false_path -to   [get_ports {NET_RESET_n NET_PCF_EN NET_MDC}]
+set_false_path -from [get_ports NET_MDIO]
+set_false_path -to   [get_ports NET_MDIO]

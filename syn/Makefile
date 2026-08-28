@@ -213,6 +213,12 @@ QTOPENT   ?= top
 QDIR = $(abspath $(TOP))/build/quartus/$(BOARD)-$(MACHINE)-$(CPU)-p$(MEM_PAGES)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)
 
 quartus-run: rom inputs
+	@# A port left off an instantiation is an undriven wire, not an error --
+	@# that is how fb_video_en spent the frame buffer's whole life at zero.
+	@# One mechanical diff, one second, every build.
+	@if [ "$(QTOPENT)" != "top" ]; then \
+		$(TOP)/tools/portcheck.sh $(TOP)/rtl/sun2-common/top_fpga.v top \
+			$(TOP)/boards/DECA/deca_top.sv || exit 1; fi
 	@mkdir -p $(QDIR)
 	cd $(QDIR) && $(QUARTUS) quartus_sh -t $(HERE)/quartus.tcl \
 		-root $(abspath $(TOP)) -board $(BOARD) -machine $(MACHINE) \
