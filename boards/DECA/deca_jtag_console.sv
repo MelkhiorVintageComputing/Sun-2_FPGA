@@ -164,7 +164,9 @@ module deca_jtag_console #(
                     S_WCTL    = 3'd1,   // read CONTROL, for WSPACE
                     S_WDAT    = 3'd2,   // write the byte
                     S_RDAT    = 3'd3,   // read DATA, for RVALID + byte
-                    S_GAP     = 3'd4;   // chipselect low between transfers
+                    S_GAP     = 3'd4,   // chipselect low between transfers
+                    S_TXW1    = 3'd5,   // wait for the serialiser to take it
+                    S_TXW2    = 3'd6;   // ... and to finish
 
    reg [2:0] state;
    reg [7:0] pending;      // the byte waiting to go to the host
@@ -263,9 +265,29 @@ module deca_jtag_console #(
                 if (av_readdata[15]) begin   // RVALID
                    tx_data  <= av_readdata[7:0];
                    tx_start <= 1'b1;
-                end
-                state <= S_IDLE;
+                   state    <= S_TXW1;
+                end else
+                  state <= S_IDLE;
              end
+
+           // Wait for the serialiser to take the byte and finish with it.
+           //
+           // Without this the FSM returns to S_IDLE, sees tx_busy still low --
+           // it does not rise until the clock *after* start is sampled -- and
+           // issues another DATA read, which POPS the JTAG UART's receive FIFO.
+           // That byte is then thrown away, because by the time the read
+           // completes the serialiser is busy and ignores start.  Every other
+           // character typed at the machine disappeared.
+           //
+           // This is the identical mistake that was already found and fixed in
+           // the standalone test's pattern generator an hour earlier, and not
+           // looked for here.  A stale `busy' is worth grepping for across a
+           // whole design once it has been found once.
+           S_TXW1:
+             if (tx_busy) state <= S_TXW2;
+
+           S_TXW2:
+             if (!tx_busy) state <= S_IDLE;
 
            default: state <= S_IDLE;
          endcase

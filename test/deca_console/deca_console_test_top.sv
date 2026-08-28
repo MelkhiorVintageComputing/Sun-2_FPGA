@@ -42,7 +42,22 @@
 `timescale 1ns / 1ps
 
 module deca_console_test_top #(
-    parameter int CPU_DIV = 80          // 12.5 MHz, as the real build
+    parameter int CPU_DIV  = 80,        // 12.5 MHz, as the real build
+    // Loopback: tie the console's own serialiser output back into its own
+    // receiver, so one clock both generates and decodes the line.  A byte typed
+    // on the host then makes a complete round trip -- host, JTAG UART, Avalon
+    // read, uart_tx, the wire, uart_rx, Avalon write, JTAG UART, host -- with
+    // no assumption anywhere about what rate anything else runs at.
+    //
+    // That is the whole point.  The console's bit period is hard-coded at 512
+    // clk_serial cycles, and whether the *SCC* really transmits at that period
+    // on this board has never been measured.  If loopback is clean and the
+    // machine's output doubles, the bridge is right and the rate assumption is
+    // wrong; if loopback doubles too, the bridge is wrong.  One bit separates
+    // two hypotheses that three readings of the source could not.
+    //
+    // A parameter and not a switch, because a switch needs a hand on the board.
+    parameter bit LOOPBACK = 1'b0
 ) (
     input  wire        MAX10_CLK1_50,
     input  wire [1:0]  KEY,
@@ -75,10 +90,14 @@ module deca_console_test_top #(
    wire con_rx;          // what the host typed, serialised towards "the machine"
    wire con_dropped, con_frame_err;
 
+   // In loopback the console hears its own transmitter instead of the pattern
+   // generator.  Nothing else changes.
+   wire con_in = LOOPBACK ? con_rx : pat_tx;
+
    deca_jtag_console console (
        .clk       (clk_serial),
        .rst       (ser_reset),
-       .sun_tx    (pat_tx),
+       .sun_tx    (con_in),
        .sun_rx    (con_rx),
        .dropped   (con_dropped),
        .frame_err (con_frame_err)

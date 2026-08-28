@@ -49,7 +49,7 @@ phy)
 	W="$top/build/inputs/Wish82586/src"
 	if xvlog --sv "$W/wb_mdio.sv" "$top/boards/Wukong/phy_rtl8211_init.sv" \
 		"$top/tb/mdio_phy_model.sv" "$top/tb/tb_phy_init.sv" \
-		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	if xelab -debug off --timescale 1ns/1ps work.tb_phy_init -s phy_sim | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	xsim phy_sim -R | grep -E '===|PASS|FAIL|checks|PHY id|link '
 	;;
@@ -66,9 +66,9 @@ mbether)
 		"$W/ie_core.sv" "$W/wish82586.sv" \
 		"$top/rtl/sun2-multibus/sun2_mb_ether.sv" \
 		"$top/tb/mii_peer.sv" "$top/tb/tb_mb_ether.sv" \
-		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	if xelab -debug off --timescale 1ns/1ps work.tb_mb_ether -s mbether_sim \
-		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	xsim mbether_sim -R | grep -E '===|PASS|FAIL|checks|ISCP'
 	;;
 
@@ -81,9 +81,9 @@ xy450)
 		"$top/rtl/sun2-multibus/sun2_xy450.sv" \
 		"$top/tb/blk_file.sv" \
 		"$top/tb/tb_xy450.sv" \
-		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	if xelab -debug off --timescale 1ns/1ps work.tb_xy450 -s xy450_sim \
-		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	xsim xy450_sim -R -testplusarg blk_image=xy0.img \
 		| grep -E '===|PASS|FAIL|checks|blk\]|DVMA:'
 	;;
@@ -102,9 +102,9 @@ decaconsole)
 		"$top/tb/jtag_uart_model.sv" \
 		"$top/tb/tb_deca_console.sv" \
 		-d SUN2_SIM -i "$top/rtl/sun2-common" \
-		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	if xelab -debug off --timescale 1ns/1ps work.tb_deca_console -s decacon_sim \
-		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	xsim decacon_sim -R | grep -E '===|PASS|FAIL|ok:|sent:|got:'
 	;;
 
@@ -123,9 +123,9 @@ decauart)
 		"$top/boards/DECA/deca_uart_tx.sv" \
 		"$top/tb/tb_deca_uart.sv" \
 		-i "$top/rtl/sun2-common" \
-		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	if xelab -debug off --timescale 1ns/1ps work.tb_deca_uart -s decauart_sim \
-		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	xsim decauart_sim -R | grep -E '===|PASS|FAIL|ok:'
 	;;
 
@@ -139,11 +139,11 @@ mm58167)
 	# sets hangs NetBSD at boot and one stuck at 1 makes SunOS print "TOD
 	# chip has gone berserk".  Both sequences are replayed here.
 	if xvlog "$top/rtl/sun2-common/mm58167.v" \
-		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	if xvlog --sv "$top/tb/tb_mm58167.sv" \
-		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	if xelab -debug off --timescale 1ns/1ps work.tb_mm58167 -s mm58167_sim \
-		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	xsim mm58167_sim -R | grep -E '===|PASS|FAIL|--|took'
 	;;
 
@@ -158,17 +158,17 @@ scc)
 	if xvlog --sv \
 		"$top/build/inputs/z8530_scc/z8530_scc.sv" \
 		"$top/tb/tb_scc.sv" \
-		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	if xelab -debug off --timescale 1ns/1ps work.tb_scc -s scc_sim \
-		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	xsim scc_sim -R | grep -E '===|PASS|FAIL|ok:|RR2'
 	;;
 
 scanout)
 	if xvlog --sv "$top/boards/Wukong/fb_scanout.sv" "$top/tb/tb_fb_scanout.sv" \
-		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	if xelab -debug off --timescale 1ns/1ps work.tb_fb_scanout -s scanout_sim \
-		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	xsim scanout_sim -R ${XSIMARGS:-} \
 		| grep -E '===|PASS|FAIL|checked|beats read|line starts|white|wrote'
 	;;

@@ -17,8 +17,9 @@ package require ::quartus::flow
 set root   [lindex $argv 0]
 set outdir [lindex $argv 1]
 set cpudiv [expr {[llength $argv] > 2 ? [lindex $argv 2] : 80}]
+set loop   [expr {[llength $argv] > 3 ? [lindex $argv 3] : 0}]
 
-puts "== DECA console test: MAX 10 10M50DAF484C6GES, CPU_DIV $cpudiv =="
+puts "== DECA console test: MAX 10 10M50DAF484C6GES, CPU_DIV $cpudiv, LOOPBACK $loop =="
 
 project_new console_test -overwrite
 
@@ -42,7 +43,9 @@ set_global_assignment -name SYNCHRONIZER_IDENTIFICATION "FORCED IF ASYNCHRONOUS"
 
 set_global_assignment -name SEARCH_PATH $root/rtl/sun2-common
 
-set_parameter -name CPU_DIV $cpudiv
+set_parameter -name CPU_DIV  $cpudiv
+set_parameter -name LOOPBACK $loop
+if {$loop} { puts "== LOOPBACK: the console hears its own transmitter ==" }
 
 foreach f [list $root/boards/DECA/deca_clkgen.sv \
                 $root/boards/DECA/deca_uart_rx.sv \

@@ -29,24 +29,35 @@ module tb_deca_console;
    endtask
 
    // ------------------------------------------------ the machine's serial out
-   reg mach_tx = 1'b1;
+   //
+   // `loopback' ties the console's own serialiser output back into its own
+   // receiver, which is what the board's loopback bitstream does.  It is a
+   // separate mode because the two directions running at once is a different
+   // design than either alone -- and the first version of this testbench only
+   // ever drove one direction, which is why it passed while the board doubled.
+   wire mach_rx;                 // declared here: xvlog rejects use-before-
+                                 // declaration where Vivado invents an implicit
+                                 // net, and the harness ran a stale snapshot
+                                 // rather than reporting the error.
+   reg  mach_tx_drv = 1'b1;
+   reg  loopback    = 1'b0;
+   wire mach_tx = loopback ? mach_rx : mach_tx_drv;
 
    task send_byte(input [7:0] b);
       integer i;
       begin
-         mach_tx = 1'b0;
+         mach_tx_drv = 1'b0;
          repeat (CPB) @(posedge clk);
          for (i = 0; i < 8; i++) begin
-            mach_tx = b[i];
+            mach_tx_drv = b[i];
             repeat (CPB) @(posedge clk);
          end
-         mach_tx = 1'b1;
+         mach_tx_drv = 1'b1;
          repeat (CPB) @(posedge clk);
       end
    endtask
 
    // ------------------------------------------------------------ the console
-   wire mach_rx;
    wire con_dropped, con_frame_err;
    wire        av_address, av_chipselect, av_read_n, av_write_n;
    wire [31:0] av_writedata;
@@ -150,7 +161,39 @@ module tb_deca_console;
       check("... and the bridge recovers once someone listens",
             got.size() == 1 && got[0] === 8'h5A);
 
-      // 3. The other direction: a byte from the host reaches the machine's rx.
+      // 3. LOOPBACK -- the configuration the board actually ran, and the one
+      //    this testbench did not cover.  Both directions are live at once:
+      //    the FSM reads a byte from the host, serialises it, its own receiver
+      //    decodes it, and it writes it back.  A byte typed once must come back
+      //    exactly once.
+      loopback = 1'b1;
+      repeat (CPB * 4) @(posedge clk);
+      got.delete();
+      for (n = 0; n < 8; n++) begin
+         host_tx_data = 8'h41 + n[7:0];      // 'A'..'H'
+         host_tx_push = 1'b1;
+         @(posedge clk);
+         host_tx_push = 1'b0;
+         @(posedge clk);
+      end
+      repeat (CPB * 140) @(posedge clk);     // 8 bytes, both ways
+
+      check($sformatf("loopback: 8 typed, %0d came back", got.size()),
+            got.size() == 8);
+      begin
+         int bad = 0;
+         for (n = 0; n < got.size(); n++)
+           if (n < 8 && got[n] !== (8'h41 + n[7:0])) bad++;
+         check("loopback: ... each exactly once, in order", bad == 0 && got.size() == 8);
+         if (got.size() != 8 || bad != 0) begin
+            $write("      got: ");
+            for (n = 0; n < got.size(); n++) $write(" %02x", got[n]);
+            $write("\n");
+         end
+      end
+      loopback = 1'b0;
+
+      // 4. The other direction: a byte from the host reaches the machine's rx.
       got.delete();
       host_tx_data = 8'h37;
       host_tx_push = 1'b1;
@@ -173,6 +216,11 @@ module tb_deca_console;
             check("host -> machine: the byte arrives on rx", 1'b0);
          end
       join_any
+      // NOTE: `disable fork' here terminates this initial block under xsim, so
+      // nothing after it runs -- which is why the loopback test above is
+      // *above* it and not below.  A check that silently does not execute is
+      // worse than one that fails: the summary said "7 checks, 7 passed" while
+      // the case that mattered had never run.
       disable fork;
 
       $display("=== deca_console: %0d checks, %0d passed, %0d failed ===",
