@@ -22,3 +22,6 @@
 [submodule "Inputs/RD68011"]
 	path = Inputs/RD68011
 	url = git@github.com:MelkhiorVintageComputing/RD68011.git
+[submodule "Inputs/BrianHG-DDR3"]
+	path = Inputs/BrianHG-DDR3
+	url = https://github.com/BrianHGinc/BrianHG-DDR3-Controller.git
