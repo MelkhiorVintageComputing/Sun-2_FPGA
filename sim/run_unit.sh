@@ -88,6 +88,27 @@ xy450)
 		| grep -E '===|PASS|FAIL|checks|blk\]|DVMA:'
 	;;
 
+decauart)
+	# The two halves of the DECA's console bridge.  The console is the
+	# instrument on that board -- no serial port, no display yet -- so a
+	# garbled console and a dead machine look identical, and the bridge is
+	# tested before it is trusted to report anything else.
+	#
+	# The transmitter is decoded by an independent counter rather than by
+	# the receiver under test, so a shared misunderstanding of 8N1 cannot
+	# pass; and the receiver is driven at deliberate rate offsets, because
+	# the interesting question is margin, not whether 0x55 survives.
+	if xvlog --sv \
+		"$top/boards/DECA/deca_uart_rx.sv" \
+		"$top/boards/DECA/deca_uart_tx.sv" \
+		"$top/tb/tb_deca_uart.sv" \
+		-i "$top/rtl/sun2-common" \
+		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug off --timescale 1ns/1ps work.tb_deca_uart -s decauart_sim \
+		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	xsim decauart_sim -R | grep -E '===|PASS|FAIL|ok:'
+	;;
+
 mm58167)
 	# The MM58167 time-of-day clock at MultiBus device page 7, driven over
 	# the Sun-2's bus protocol -- cs_n tied low, rd_n/wr_n selecting, and

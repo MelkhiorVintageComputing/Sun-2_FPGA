@@ -251,7 +251,30 @@ if {$opt(-cpu) eq "rd68011"} {
 
 # The board layer, when building a whole board rather than the bare seam.
 if {$opt(-topent) ne "top"} {
-    foreach f [glob -nocomplain $top/boards/DECA/*.sv] { lappend sv $f }
+    foreach f [lsort [glob -nocomplain $top/boards/DECA/*.sv]] { lappend sv $f }
+
+    # The JTAG UART, straight out of the Quartus installation.  No Platform
+    # Designer, no .qsys, no qsys-generate: it is a plain Avalon-MM slave in
+    # SystemVerilog, and the alt_jtag_atlantic primitive and its two scfifos
+    # sit behind Quartus's own "read_comments_as_HDL" directive, which the
+    # compiler resolves from its megafunction library at analysis time.
+    #
+    # This file must therefore NEVER enter the Vivado or xsim file lists --
+    # read_comments_as_HDL is Quartus-only, and elsewhere it elaborates to a
+    # UART whose Atlantic port is tied off, i.e. a console that compiles and
+    # cannot work.  deca_jtag_console.sv guards the instance with SUN2_SIM for
+    # the same reason.
+    set juart $::env(QUARTUS_ROOTDIR)/../ip/altera/sopc_builder_ip/altera_avalon_jtag_uart
+    foreach f [list altera_avalon_jtag_uart.sv \
+                    altera_avalon_jtag_uart_scfifo_r.sv \
+                    altera_avalon_jtag_uart_scfifo_w.sv] {
+        if {![file exists $juart/$f]} {
+            puts "ERROR: the JTAG UART IP is missing: $juart/$f"
+            puts "       That is the console; a build without it has none."
+            exit 1
+        }
+        lappend sv $juart/$f
+    }
 }
 
 foreach f $v2001 {
@@ -281,6 +304,26 @@ if {[catch {execute_module -tool map} err]} {
     exit 1
 }
 puts "== analysis & synthesis ok =="
+
+# The console is the only instrument this board has: no serial port, no display
+# yet.  A build where SUN2_SIM leaked, or where the IP silently failed to come
+# in, is a clean build with no way to talk to the machine -- the same shape as
+# the vanished frame buffer that build.tcl now guards against.  So assert the
+# primitive is really there.
+if {$opt(-topent) ne "top"} {
+    set n [llength [get_names -filter *alt_jtag_atlantic* -node_type comb]]
+    if {$n == 0} {
+        # get_names needs a compiled netlist; fall back to the report, which is
+        # written by this point either way.
+        set rpt [glob -nocomplain sun2.map.rpt]
+        if {[llength $rpt] && ![regexp {alt_jtag_atlantic} [read [open [lindex $rpt 0]]]]} {
+            puts "ERROR: no alt_jtag_atlantic in the netlist -- the console is"
+            puts "       missing.  Check SUN2_SIM did not leak into this build."
+            exit 1
+        }
+    }
+    puts "== console: alt_jtag_atlantic present =="
+}
 
 if {$opt(-stage) eq "map"} { project_close; exit 0 }
 

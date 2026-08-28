@@ -1,0 +1,40 @@
+# Pins for the standalone console test.
+#
+# A strict subset of syn/deca_pins.qsf, and it must stay one: this design exists
+# to vouch for the real build's console, so if the two disagreed about a pin the
+# test would be testing a different board.
+
+set_location_assignment PIN_M8 -to MAX10_CLK1_50
+set_instance_assignment -name IO_STANDARD "2.5 V" -to MAX10_CLK1_50
+
+set_location_assignment PIN_H21 -to KEY[0]
+set_location_assignment PIN_H22 -to KEY[1]
+set_location_assignment PIN_J21 -to SW[0]
+set_location_assignment PIN_J22 -to SW[1]
+foreach p {KEY[0] KEY[1] SW[0] SW[1]} {
+    set_instance_assignment -name IO_STANDARD "1.5 V SCHMITT TRIGGER" -to $p
+}
+
+set_location_assignment PIN_C7 -to LED[0]
+set_location_assignment PIN_C8 -to LED[1]
+set_location_assignment PIN_A6 -to LED[2]
+set_location_assignment PIN_B7 -to LED[3]
+set_location_assignment PIN_C4 -to LED[4]
+set_location_assignment PIN_A5 -to LED[5]
+set_location_assignment PIN_B4 -to LED[6]
+set_location_assignment PIN_C5 -to LED[7]
+foreach i {0 1 2 3 4 5 6 7} {
+    set_instance_assignment -name IO_STANDARD "1.2 V" -to LED[$i]
+}
+
+set_location_assignment PIN_W18  -to GPIO0_D[0]
+set_location_assignment PIN_Y19  -to GPIO0_D[1]
+set_location_assignment PIN_AA17 -to GPIO0_D[2]
+set_location_assignment PIN_AA20 -to GPIO0_D[3]
+set_location_assignment PIN_AA19 -to GPIO0_D[4]
+set_location_assignment PIN_AB21 -to GPIO0_D[5]
+set_location_assignment PIN_AB20 -to GPIO0_D[6]
+set_location_assignment PIN_AB19 -to GPIO0_D[7]
+foreach i {0 1 2 3 4 5 6 7} {
+    set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to GPIO0_D[$i]
+}

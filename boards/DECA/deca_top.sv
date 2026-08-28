@@ -14,9 +14,13 @@
 //    its prompt in 32 KiB.  It cannot netboot on chip; see that file.
 //
 //  * **No UART.**  Nothing on the DECA brings a serial port to the FPGA.  The
-//    console goes over the on-board USB-Blaster II through a JTAG UART, which
-//    arrives in M4; until then `tx' is brought out on a GPIO header pin so a
-//    scope or a USB-TTL cable can see it, and `rx' is tied idle.
+//    console goes over the on-board USB-Blaster II through a JTAG UART --
+//    deca_jtag_console.sv -- read on the host with `juart-terminal'.  The
+//    machine's bit-serial tx/rx are kept as they are and bridged, rather than
+//    tapping bytes out of the SCC, because the SCC's baud generator running
+//    correctly off a MAX 10 PLL is precisely what this board has to prove.
+//    `tx' also goes out on GPIO0_D[0] = PIN_W18, which is the DECA's own
+//    UART_TXD, so a USB-TTL cable is the fallback and costs no gateware.
 //
 //  * **Eight LEDs where the Wukong build uses sixteen.**  SW[0] picks which
 //    panel they show.  Both are levels and latched "this happened at least
@@ -106,7 +110,8 @@ module deca_top #(
    // ------------------------------------------------------------------
    wire [7:0]  diag_leds, todebug;
    wire        en_boot, eth_crs_stuck, fb_video_en;
-   wire        sun_tx;
+   wire        sun_tx, sun_rx;
+   wire        con_dropped, con_frame_err;
    wire        wb_cyc, wb_stb, wb_we, wb_ack;
    wire [29:0] wb_adr;
    wire [31:0] wb_dat_w, wb_dat_r;
@@ -130,7 +135,7 @@ module deca_top #(
        .sys_reset      (sys_reset),
 
        .tx             (sun_tx),
-       .rx             (1'b1),          // idle until the JTAG console lands
+       .rx             (sun_rx),
 
        .diag_leds      (diag_leds),
        .en_boot        (en_boot),
@@ -200,6 +205,29 @@ module deca_top #(
    );
 
    // ------------------------------------------------------------------
+   // Console
+   //
+   // clk_serial, so the bit period is exactly 512 clocks whatever CPU_HZ is --
+   // see deca_jtag_console.sv.  The reset is sys_reset resynchronised into the
+   // serial domain: it is released in the cpu_clk domain and this is a
+   // different clock, so feeding it straight in would leave the release
+   // unsynchronised, which is the whole reason reset_sync exists.
+   // ------------------------------------------------------------------
+   wire ser_reset;
+   reset_sync rst_ser (.clk(clk_serial),
+                       .rst_async_in (board_reset),
+                       .rst_sync_out (ser_reset));
+
+   deca_jtag_console console (
+       .clk       (clk_serial),
+       .rst       (ser_reset),
+       .sun_tx    (sun_tx),
+       .sun_rx    (sun_rx),
+       .dropped   (con_dropped),
+       .frame_err (con_frame_err)
+   );
+
+   // ------------------------------------------------------------------
    // Board outputs
    // ------------------------------------------------------------------
    // Active low, and one panel at a time.  ~SW[0] rather than SW[0] so the
@@ -210,7 +238,13 @@ module deca_top #(
    // Everything, always, on the headers.  GPIO0_D[0] doubles as the console
    // transmit line: PIN_W18 is what the DECA's own template calls UART_TXD, so
    // a USB-TTL cable on P8 pin 3 sees the monitor without any gateware change.
-   assign GPIO0_D = {diag_leds[7:1], sun_tx};
+   // GPIO0_D[0] is the console transmit line -- PIN_W18 is the DECA's own
+   // UART_TXD, so a USB-TTL cable on P8 pin 3 reads the monitor with no
+   // gateware change, which is the fallback if the JTAG path misbehaves.
+   // [1] and [2] are the console's two health flags: a byte lost because
+   // nothing was listening, and a framing error, which would mean the PLL
+   // ratio is wrong.  Both are sticky.
+   assign GPIO0_D = {diag_leds[7:3], con_frame_err, con_dropped, sun_tx};
    assign GPIO1_D = todebug;
 
    // The PHY is held out of reset and left alone.  PCF_EN low disables the
