@@ -11,7 +11,8 @@ QUARTUS_ROOTDIR ?= /opt/Altera/quartus
 QUARTUS  = QUARTUS_ROOTDIR=$(QUARTUS_ROOTDIR) $(TOP)/syn/altera.sh
 CPU_DIV ?= 80
 LOOPBACK ?= 0
-OUT     := $(abspath $(TOP))/build/test-deca-console-div$(CPU_DIV)$(if $(filter 1,$(LOOPBACK)),-loop,)
+CON_ON_CPU ?= 0
+OUT     := $(abspath $(TOP))/build/test-deca-console-div$(CPU_DIV)$(if $(filter 1,$(LOOPBACK)),-loop,)$(if $(filter 1,$(CON_ON_CPU)),-cpuclk,)
 SOF     := $(OUT)/console_test.sof
 
 all: $(SOF)
@@ -19,7 +20,7 @@ all: $(SOF)
 $(SOF):
 	mkdir -p $(OUT)
 	cd $(OUT) && $(QUARTUS) quartus_sh -t $(abspath build.tcl) \
-		$(abspath $(TOP)) $(OUT) $(CPU_DIV) $(LOOPBACK)
+		$(abspath $(TOP)) $(OUT) $(CPU_DIV) $(LOOPBACK) $(CON_ON_CPU)
 
 program: $(SOF)
 	$(QUARTUS) quartus_pgm -c 1 -m jtag -o "p;$(SOF)"

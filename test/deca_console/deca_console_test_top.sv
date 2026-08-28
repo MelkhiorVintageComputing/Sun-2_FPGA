@@ -57,7 +57,20 @@ module deca_console_test_top #(
     // two hypotheses that three readings of the source could not.
     //
     // A parameter and not a switch, because a switch needs a hand on the board.
-    parameter bit LOOPBACK = 1'b0
+    parameter bit LOOPBACK = 1'b0,
+    // Which clock the console runs on.  0 = clk_serial (4.915 MHz, a bit is
+    // exactly 512 clocks); 1 = cpu_clk (12.5 MHz, 1302.08 -> 1302, a 0.006%
+    // rate error, which is nothing).
+    //
+    // This exists because of a measurement: the design's own counters say it
+    // performs exactly one receive, one write, one read and one transmit per
+    // byte, while BOTH host tools show the byte twice and out of order.  A
+    // design writing sequentially into a FIFO cannot produce out-of-order
+    // output, so the duplication is downstream -- and the one thing downstream
+    // is the JTAG Atlantic's crossing into the TCK domain, which the STA report
+    // puts at 10 MHz against the console's 4.9.  A user clock slower than TCK
+    // is the obvious suspect once the design itself is ruled out.
+    parameter bit CON_ON_CPU = 1'b0
 ) (
     input  wire        MAX10_CLK1_50,
     input  wire [1:0]  KEY,
@@ -94,13 +107,62 @@ module deca_console_test_top #(
    // generator.  Nothing else changes.
    wire con_in = LOOPBACK ? con_rx : pat_tx;
 
-   deca_jtag_console console (
-       .clk       (clk_serial),
-       .rst       (ser_reset),
+   wire ev_rx_valid, ev_wr_data, ev_rd_valid, ev_tx_start;
+
+   wire con_clk = CON_ON_CPU ? cpu_clk : clk_serial;
+   wire con_rst;
+   reset_sync rst_con (.clk(con_clk),
+                       .rst_async_in (reset),
+                       .rst_sync_out (con_rst));
+
+   deca_jtag_console #(.CLKS_PER_BIT(CON_ON_CPU ? 1302 : 512)) console (
+       .clk       (con_clk),
+       .rst       (con_rst),
        .sun_tx    (con_in),
        .sun_rx    (con_rx),
        .dropped   (con_dropped),
-       .frame_err (con_frame_err)
+       .frame_err (con_frame_err),
+       .ev_rx_valid (ev_rx_valid),
+       .ev_wr_data  (ev_wr_data),
+       .ev_rd_valid (ev_rd_valid),
+       .ev_tx_start (ev_tx_start)
+   );
+
+   // ------------------------------------------------------------------
+   // Instrumentation: count the four events and expose them over JTAG.
+   //
+   // Five hypotheses about the doubling have now failed, and simulation does
+   // not reproduce it -- so this stops asking "what could explain it" and
+   // measures what actually happens.  For N bytes typed in loopback, all four
+   // counters should read N.  Whichever one is 2N names the stage that
+   // duplicates, and whichever is below N names the stage that loses.
+   //
+   // In-System Sources and Probes rather than SignalTap: the question is how
+   // many times each event occurred, not the shape of a waveform, and ISSP is
+   // scriptable from quartus_stp with no .stp file to author.  The counters are
+   // free-running and never cleared -- a difference between two reads is the
+   // count for whatever happened between them, which needs no trigger.
+   // ------------------------------------------------------------------
+   reg [15:0] n_rx, n_wr, n_rd, n_tx;
+   always @(posedge con_clk)
+     if (con_rst) begin
+        n_rx <= 16'd0; n_wr <= 16'd0; n_rd <= 16'd0; n_tx <= 16'd0;
+     end else begin
+        if (ev_rx_valid) n_rx <= n_rx + 16'd1;
+        if (ev_wr_data)  n_wr <= n_wr + 16'd1;
+        if (ev_rd_valid) n_rd <= n_rd + 16'd1;
+        if (ev_tx_start) n_tx <= n_tx + 16'd1;
+     end
+
+   altsource_probe #(
+       .sld_auto_instance_index ("YES"),
+       .instance_id             ("CNT"),
+       .probe_width             (64),
+       .source_width            (1),
+       .enable_metastability    ("NO")
+   ) u_issp (
+       .probe  ({n_tx, n_rd, n_wr, n_rx}),
+       .source ()
    );
 
    // ------------------------------------------------------------------

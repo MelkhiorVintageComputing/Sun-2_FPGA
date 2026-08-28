@@ -76,7 +76,16 @@ module deca_jtag_console #(
     input  wire sun_tx,         // from the machine's `tx'
     output wire sun_rx,         // to the machine's `rx'
     output reg  dropped,        // sticky: at least one byte lost to a full FIFO
-    output wire frame_err       // sticky-ish: the receiver saw a bad stop bit
+    output wire frame_err,      // sticky-ish: the receiver saw a bad stop bit
+
+    // Event taps, for instrumentation.  One clock per occurrence.  They cost
+    // nothing when nothing reads them, and a probe cannot be attached after the
+    // fact without a rebuild -- so they are unconditional rather than behind a
+    // define that would have to be remembered.
+    output wire ev_rx_valid,    // the receiver decoded a byte from the machine
+    output wire ev_wr_data,     // a byte was written to the host's FIFO
+    output wire ev_rd_valid,    // a byte was read from the host with RVALID set
+    output wire ev_tx_start     // a byte was handed to the serialiser
 `ifdef SUN2_SIM
     ,
     // In simulation the JTAG UART is not instantiated -- the real IP ties its
@@ -158,6 +167,13 @@ module deca_jtag_console #(
        .av_irq         ()
    );
 `endif
+
+   assign ev_rx_valid = rx_valid;
+   assign ev_tx_start = tx_start;
+   // The Avalon transfer completes on the cycle where waitrequest is low; these
+   // count the ones that carried a DATA byte in each direction.
+   assign ev_wr_data  = (state == S_WDAT) & ~av_waitrequest;
+   assign ev_rd_valid = (state == S_RDAT) & ~av_waitrequest & av_readdata[15];
 
    // ---------------------------------------------------------------- FSM
    localparam [2:0] S_IDLE    = 3'd0,

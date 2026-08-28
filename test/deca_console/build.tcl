@@ -45,6 +45,7 @@ set_global_assignment -name SEARCH_PATH $root/rtl/sun2-common
 
 set_parameter -name CPU_DIV  $cpudiv
 set_parameter -name LOOPBACK $loop
+set_parameter -name CON_ON_CPU [expr {[llength $argv] > 4 ? [lindex $argv 4] : 0}]
 if {$loop} { puts "== LOOPBACK: the console hears its own transmitter ==" }
 
 foreach f [list $root/boards/DECA/deca_clkgen.sv \

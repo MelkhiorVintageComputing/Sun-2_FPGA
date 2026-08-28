@@ -213,18 +213,42 @@ module deca_top #(
    // different clock, so feeding it straight in would leave the release
    // unsynchronised, which is the whole reason reset_sync exists.
    // ------------------------------------------------------------------
-   wire ser_reset;
-   reset_sync rst_ser (.clk(clk_serial),
+   // The console runs on cpu_clk, not clk_serial, and that is a measurement
+   // rather than a preference.
+   //
+   // clk_serial is the tidier choice on paper -- the SCC's own domain, and
+   // 4915254/9600 = 512.005 makes a bit exactly 512 clocks.  It does not work.
+   // The JTAG Atlantic inside altera_avalon_jtag_uart crosses into the TCK
+   // domain, which the timing report puts at 10 MHz, and with a 4.915 MHz user
+   // clock -- slower than TCK -- the host reads each byte twice and out of
+   // order.  Measured with in-system probes: for 8 bytes the design's own
+   // counters read 8 receives, 8 writes, 8 reads and 8 transmits, one of each
+   // per byte, while both juart-terminal and nios2-terminal showed ten
+   // characters.  A design writing sequentially into a FIFO cannot produce
+   // out-of-order output; only something downstream can.  Moving to 12.5 MHz
+   // fixed it with the counters unchanged at 8/8/8/8.
+   //
+   // The cost is that a bit is 12500000/9600 = 1302.08 clocks and 1302 is used
+   // -- a 0.006% rate error, four hundred times smaller than the +/-2% the
+   // receiver is tested to tolerate.  Note this makes the console's framing
+   // depend on CPU_HZ, which is exactly what putting it on clk_serial avoided;
+   // if CPU_DIV changes, CLKS_PER_BIT must change with it.
+   wire con_rst;
+   reset_sync rst_con (.clk(cpu_clk),
                        .rst_async_in (board_reset),
-                       .rst_sync_out (ser_reset));
+                       .rst_sync_out (con_rst));
 
-   deca_jtag_console console (
-       .clk       (clk_serial),
-       .rst       (ser_reset),
+   deca_jtag_console #(.CLKS_PER_BIT(CPU_CLK_HZ / 9600)) console (
+       .clk       (cpu_clk),
+       .rst       (con_rst),
        .sun_tx    (sun_tx),
        .sun_rx    (sun_rx),
        .dropped   (con_dropped),
-       .frame_err (con_frame_err)
+       .frame_err (con_frame_err),
+       .ev_rx_valid (),
+       .ev_wr_data  (),
+       .ev_rd_valid (),
+       .ev_tx_start ()
    );
 
    // ------------------------------------------------------------------
