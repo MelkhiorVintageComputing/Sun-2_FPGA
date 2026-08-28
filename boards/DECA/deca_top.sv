@@ -407,6 +407,22 @@ module deca_top #(
         if (ev_tx_start) n_tx <= n_tx + 16'd1;
      end
 
+   // The two panels go on the probe as well as on the headers.
+   //
+   // `todebug' is this project's primary board instrument -- BRINGUP.md says to
+   // read it before building anything -- and it was only reachable by looking
+   // at a GPIO header, which is no use to anyone working remotely.  Bit 0
+   // seen_stall alone splits a memory fault in half: set means a bus cycle went
+   // unanswered, clear exonerates the memory path outright.  That is the
+   // reading that stopped a day of wrong theories on the Wukong.
+   //
+   //   todebug 7 heartbeat  6 in reset  5 seen_err  4:2 fc of the first error
+   //           1 diag written  0 seen_stall
+   //   diag_leds  the Sun-2 front panel: how far the PROM got
+   //
+   // ddr3_cal_pass and ddr3_ready are here too, because "the memory never came
+   // up" and "the memory came up and then misbehaved" are different faults that
+   // look identical from a machine that will not boot.
    altsource_probe #(
        .sld_auto_instance_index ("YES"),
        .instance_id             ("SUN2"),
@@ -415,7 +431,12 @@ module deca_top #(
        .source_initial_value    ("0"),
        .enable_metastability    ("YES")
    ) u_issp (
-       .probe  ({n_tx, n_rd, n_wr, n_rx}),
+       .probe  ({ddr3_rdcal,                          // 63:56
+                 ddr3_cal_pass, ddr3_ready, phy_link, // 55:53
+                 phy_present, phy_cfg_done, phy_speed, phy_fd, // 52:48
+                 todebug,                             // 47:40
+                 diag_leds,                           // 39:32
+                 n_wr[7:0], n_rd[7:0], n_rx[7:0], n_tx[7:0]}),
        .source (jtag_reset)
    );
 

@@ -5,8 +5,20 @@
 # The DECA's only reset is a physical button, and configuring the FPGA tears
 # down any open JTAG UART session -- so a terminal cannot be attached before the
 # machine starts printing, and the boot banner is about the size of the JTAG
-# UART's 64-byte write FIFO.  Attach the terminal first, then pulse this, and
-# the boot is watched from its first byte.
+# UART's 64-byte write FIFO.
+#
+# **Pulse this FIRST, then attach the terminal.**  That ordering matters and is
+# the whole trick:
+#
+#     quartus_stp -t tools/deca_reset.tcl reset
+#     juart-terminal
+#
+# ISSP and juart-terminal cannot both hold the JTAG chain, so attaching first
+# and pulsing second kills the terminal and captures nothing -- which was once
+# mistaken here for the two being unusable together at all, and a redundant
+# "hold the machine until a console attaches" mechanism was built and then
+# thrown away on the strength of it.  Reset first works because the PROM spends
+# seconds testing 7 MiB before it prints anything worth reading.
 #
 # With no argument it only reads the counters, which is non-disturbing.
 package require ::quartus::jtag
@@ -37,6 +49,37 @@ if {[lindex $argv 0] eq "reset"} {
 set raw [read_probe_data -instance_index $idx]
 end_insystem_source_probe
 
-puts [format "console: rx_valid=%d wr_data=%d rd_valid=%d tx_start=%d" \
-        [b2i [string range $raw 48 63]] [b2i [string range $raw 32 47]] \
-        [b2i [string range $raw 16 31]] [b2i [string range $raw 0 15]]]
+# Bit order, MSB first, matching deca_top's altsource_probe:
+#   63:56 RDCAL  55 cal_pass  54 ddr3_ready  53 link  52 phy_present
+#   51 cfg_done  50:49 speed  48 full_duplex
+#   47:40 todebug  39:32 diag_leds  31:24 wr  23:16 rd  15:8 rx  7:0 tx
+set rdcal   [b2i [string range $raw  0  7]]
+set calpass [string index $raw  8]
+set ready   [string index $raw  9]
+set link    [string index $raw 10]
+set present [string index $raw 11]
+set cfgdone [string index $raw 12]
+set speed   [b2i [string range $raw 13 14]]
+set fd      [string index $raw 15]
+set todbg   [b2i [string range $raw 16 23]]
+set diag    [b2i [string range $raw 24 31]]
+
+puts [format "DDR3   : ready=%s cal_pass=%s rdcal=0x%02x" $ready $calpass $rdcal]
+puts [format "PHY    : present=%s cfg_done=%s link=%s speed=%s duplex=%s" \
+        $present $cfgdone $link [expr {$speed == 0 ? "10" : ($speed == 1 ? "100" : "1000")}] \
+        [expr {$fd eq "1" ? "full" : "half"}]]
+puts [format "front  : diag_leds = 0x%02x" $diag]
+
+# todebug, decoded.  This is the panel BRINGUP.md says to read first.
+puts [format "todebug: 0x%02x  heartbeat=%d reset=%d seen_err=%d fc_err=%d diag_wr=%d seen_stall=%d" \
+        $todbg [expr {($todbg >> 7) & 1}] [expr {($todbg >> 6) & 1}] \
+        [expr {($todbg >> 5) & 1}] [expr {($todbg >> 2) & 7}] \
+        [expr {($todbg >> 1) & 1}] [expr {$todbg & 1}]]
+if {[expr {$todbg & 1}]} {
+    puts "         ^ seen_stall: a bus cycle was never answered -- no DTACK and"
+    puts "           no timeout.  That is the memory path, and nothing else."
+} elseif {[expr {($todbg >> 5) & 1}]} {
+    puts [format "         ^ seen_err: a cycle ended in a bus error, first one at FC=%d" \
+            [expr {($todbg >> 2) & 7}]]
+    puts "           FC 5 or 6 on a healthy boot is just the PROM probing devices."
+}
