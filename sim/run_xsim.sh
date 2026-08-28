@@ -54,6 +54,20 @@ case " $SUN2_DEFINES " in *" SUN2_XY450 "*)    rundir_tag="$rundir_tag-xy450" ;;
 # ... and the experiment that powers the maps up as zeros rather than X, which
 # is a different machine at time zero and must not write over a reference run.
 case " $SUN2_DEFINES " in *" SRAM_POWERUP_ZERO "*) rundir_tag="$rundir_tag-mapszero" ;; esac
+# ... and the memory size, but only when it is not a whole number of mebibytes.
+# Every size measured so far is MEM_MIB*512, so those keep their names; a sweep
+# looking for the least memory the PROM will boot in uses page counts that are
+# not, and without a tag the runs share one directory and recompile the
+# snapshot under each other.  That is the MEM_LATENCY bug CLAUDE.md records,
+# and it is worth not having twice.
+for d in $SUN2_DEFINES; do
+	case "$d" in
+	MEM_PAGES=*)
+		p=${d#MEM_PAGES=}
+		[ $((p % 512)) -ne 0 ] && rundir_tag="$rundir_tag-p$p"
+		;;
+	esac
+done
 # ... and the CPU clock, because it is a different snapshot: two runs sharing a
 # directory recompile it underneath each other.  Only when it is not the
 # default, so every path measured so far keeps its name.

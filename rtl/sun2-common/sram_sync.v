@@ -1,3 +1,5 @@
+`include "sun2_attr.vh"
+
 module sram_sync #(parameter DATA_WIDTH=4, IDX_WIDTH=12) (input CLK,
 							  input [IDX_WIDTH-1:0]       idx,
 							  input 		      WR,
@@ -5,7 +7,7 @@ module sram_sync #(parameter DATA_WIDTH=4, IDX_WIDTH=12) (input CLK,
 							  output reg [DATA_WIDTH-1:0] dout
 							  );
    
-   (* ram_style = "block" *) reg [DATA_WIDTH-1:0] sram[0:(2**IDX_WIDTH)-1];
+   `SUN2_RAM_BLOCK reg [DATA_WIDTH-1:0] sram[0:(2**IDX_WIDTH)-1];
 
 `ifdef SRAM_POWERUP_ZERO
    // What the board does.  A 7-series block RAM comes out of configuration

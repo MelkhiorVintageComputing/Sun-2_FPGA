@@ -3,7 +3,7 @@
 `include "sun2_config.vh"
 
 module bootrom(input CLK,
-	       input [14:0] idx,
+	       input [13:0] idx,
 	       output reg [15:0] dout
 	       );
 

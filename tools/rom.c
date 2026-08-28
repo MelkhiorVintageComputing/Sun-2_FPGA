@@ -29,7 +29,16 @@ int main(int argc, char *argv[])
       } else if (word) {
         for (int o = 0; o < ret/2; o++) {
 	  unsigned short w = ((unsigned short*)data)[o];
-	  printf("    15'h%04x: dout <= 16'h%04x;\n", o, ((w>>8)&0xFF)|((w<<8)&0xFF00));
+	  /* 14 bits, not 15.  The Sun-2 boot PROM is 32 KiB = 16384 words, so
+	     bit 14 of a word index is always zero -- but a case whose selector
+	     is wider than its labels populate is *incomplete*, and Quartus
+	     declines to infer a ROM from an incomplete case.  It says nothing
+	     when it declines: the boot PROM simply becomes 23,000 logic
+	     elements, which is most of a 10M50.  Measured, on the first Altera
+	     build of this design: 397,056 memory bits where 659,200 were
+	     expected, the whole difference being this ROM.  Vivado infers it
+	     either way, which is why the width went unnoticed for years. */
+	  printf("    14'h%04x: dout <= 16'h%04x;\n", o, ((w>>8)&0xFF)|((w<<8)&0xFF00));
 	}
       }else if (doubleword) {
         for (int o = 0; o < ret/4; o++) {

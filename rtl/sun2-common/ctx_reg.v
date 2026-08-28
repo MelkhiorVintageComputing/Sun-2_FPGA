@@ -42,10 +42,22 @@ module ctx_reg(input CLK,
 	       );
    reg [7:0] 			 ctx;
    
+   // The context register has no reset -- Architecture Manual 4.6.1, and the
+   // reset discussion in CLAUDE.md: a 68010 RESET instruction reaches the I/O
+   // devices and nothing else, and the contexts are among the things it does
+   // not touch.  So simulation powers it up unknown deliberately, to catch
+   // software that reads it before writing it.
+   //
+   // Simulation only.  Quartus rejects $random outright ("system function is
+   // not supported for synthesis", Error 10174) where Vivado merely ignores
+   // it, so an unguarded one builds on one vendor and fails on the other.
+   // SUN2_SIM is what both simulation flows define and no synthesis does.
+`ifdef SUN2_SIM
    initial
      begin
         ctx = $random;
      end
+`endif
    
    always @(posedge CLK)
      begin

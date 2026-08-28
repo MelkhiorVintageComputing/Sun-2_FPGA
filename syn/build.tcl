@@ -86,6 +86,11 @@ if {$cpu ne "suska" && $cpu ne "rd68011"} {
     exit 1
 }
 board_check $board
+if {[board_vendor $board] ne "xilinx"} {
+    puts "ERROR: BOARD=$board is an [board_vendor $board] board; this is the"
+    puts "       Vivado flow.  Use: make -C syn quartus BOARD=$board"
+    exit 1
+}
 
 switch -- $machine {
     multibus { set defines [list SUN2_MULTIBUS] }

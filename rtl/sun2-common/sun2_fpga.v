@@ -822,7 +822,7 @@ module sun2_fpga(input         cpu_clk,
    // handled by the two match signals in the bus section, the PROM itself always output whatever is addressed
    wire [15:0] 			 prom_out;
    bootrom bootrom(.CLK(CLK),
-		   .idx({1'b0, P_A[14:1]}),
+		   .idx(P_A[14:1]),
 		   .dout(prom_out)
 		   );
 

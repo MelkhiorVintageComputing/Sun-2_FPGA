@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+`include "sun2_attr.vh"
+
 //
 // What the Ethernet PHY did, in a place the monitor prompt can read it.
 //
@@ -73,9 +75,9 @@ module sun2_phy_status(input             CLK,
 		       input 		 crs_stuck
 		       );
 
-   (* ASYNC_REG = "TRUE" *) reg [15:0] id_s1, id_s2;
-   (* ASYNC_REG = "TRUE" *) reg [5:0]  st_s1, st_s2;
-   (* ASYNC_REG = "TRUE" *) reg 	  crs_s1, crs_s2;
+   `SUN2_ASYNC_REG reg [15:0] id_s1, id_s2;
+   `SUN2_ASYNC_REG reg [5:0]  st_s1, st_s2;
+   `SUN2_ASYNC_REG reg 	  crs_s1, crs_s2;
 
    reg 					  crs_ever;
 

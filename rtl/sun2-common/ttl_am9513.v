@@ -1,3 +1,5 @@
+`include "sun2_attr.vh"
+
 //
 // // Partial implementation of AMD 9513 timer module
 //
@@ -168,7 +170,7 @@ module ttl_am9513 #(parameter TRACE = 0) (
    // sampling rate argument still holds and still matters -- it is what makes
    // two flops sufficient rather than a handshake.
    //
-   (* ASYNC_REG = "TRUE" *) reg x2_s1, x2_s2;
+   `SUN2_ASYNC_REG reg x2_s1, x2_s2;
    reg 	      x2_d;
    wire       f1_tick;
    assign f1_tick = x2_s2 & ~x2_d;

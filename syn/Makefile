@@ -188,6 +188,68 @@ hw: | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode gui \
 		-source $(HERE)/program.tcl -tclargs $(BIT) "$(LTX)" $(HW_URL)
 
+# --- the Altera path ------------------------------------------------------
+#
+# One makefile rather than two, because CPU_HZ, MACHINE, CPU, ETH5 and RTC_DATE
+# mean the same thing on both boards and a second copy of them is exactly the
+# knob-drift this project has been bitten by three times.  The *targets* are
+# disjoint, which is the same shape Inputs/RD68011/Makefile uses for its two
+# vendors: Vivado keeps ip/bitstream/program/hw, Quartus gets its own names.
+#
+#   make lint-quartus       read the RTL with Quartus, no board, no fit
+#   make quartus            full fit, timing and assembly for the DECA
+#   make quartus-eram-delta the measurement that proves the ERAM assignment
+#
+QUARTUS_ROOTDIR ?= /opt/Altera/quartus
+QUARTUS  = QUARTUS_ROOTDIR=$(QUARTUS_ROOTDIR) $(HERE)/altera.sh
+AJOBS   ?= 8
+# 2 KiB pages of on-chip main memory.  32 = 64 KiB, which the M0 sweep showed
+# is comfortably above the boot PROM's real floor (it reaches the monitor
+# prompt in 32 KiB) and leaves M9K slack for the fit.
+MEM_PAGES ?= 32
+ERAM      ?= 1
+QSTAGE    ?= map
+QTOPENT   ?= top
+QDIR = $(abspath $(TOP))/build/quartus/$(BOARD)-$(MACHINE)-$(CPU)-p$(MEM_PAGES)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)
+
+quartus-run: rom inputs
+	@mkdir -p $(QDIR)
+	cd $(QDIR) && $(QUARTUS) quartus_sh -t $(HERE)/quartus.tcl \
+		-root $(abspath $(TOP)) -board $(BOARD) -machine $(MACHINE) \
+		-cpu $(CPU) -topent $(QTOPENT) -stage $(QSTAGE) \
+		-mem_pages $(MEM_PAGES) -cpu_hz $(CPU_HZ) -eth5 $(ETH5_D) \
+		-eram $(ERAM) -jobs $(AJOBS) > $(QDIR)/quartus.log 2>&1 || \
+		{ echo "== FAILED, tail of $(QDIR)/quartus.log =="; tail -40 $(QDIR)/quartus.log; exit 1; }
+	@grep -E '^== ' $(QDIR)/quartus.log
+	@# An implicit net is a mis-parse, not a style point.  Vivado's equivalent
+	@# (Synth 8-6901) is promoted to an error in build.tcl for the same reason:
+	@# a new term that silently becomes an undriven one-bit wire is how the
+	@# frame buffer's timeout exemption once reached a board dead.
+	@if grep -q 'Verilog HDL warning.*implicit net' $(QDIR)/quartus.log; then \
+		echo "ERROR: implicit nets -- that is a mis-parse, not a style point:"; \
+		grep 'implicit net' $(QDIR)/quartus.log | head; exit 1; fi
+	@# sram_sync is read-first and sun2_mmu.v:77 depends on it.  M9K has no
+	@# native read-first in single-port mode, so if Quartus says it changed
+	@# the behaviour rather than adding bypass logic, the MMU is wrong.
+	@if grep -qi 'read-during-write' $(QDIR)/quartus.log; then \
+		echo "NOTE: read-during-write comments (check smap/datamap/protmap):"; \
+		grep -i 'read-during-write' $(QDIR)/quartus.log | head; fi
+
+lint-quartus:
+	$(MAKE) quartus-run QSTAGE=map QTOPENT=top BOARD=deca MACHINE=$(MACHINE) CPU=rd68011
+
+quartus:
+	$(MAKE) quartus-run QSTAGE=asm QTOPENT=deca_top BOARD=deca MACHINE=$(MACHINE) CPU=rd68011
+
+# The measurement, not the assumption.  INTERNAL_FLASH_UPDATE_MODE has no
+# warning when it is missing -- the ROM just becomes logic -- so the only way
+# to know it is doing anything is to build both ways and compare memory bits.
+quartus-eram-delta:
+	$(MAKE) quartus-run QSTAGE=map ERAM=0
+	$(MAKE) quartus-run QSTAGE=map ERAM=1
+	@echo "=== without ERAM ==="; $(TOP)/tools/quartus_report.py $(QDIR)-noeram || true
+	@echo "=== with ERAM ===";    $(TOP)/tools/quartus_report.py $(QDIR) || true
+
 both:
 	$(MAKE) bitstream CPU_HZ=12500000
 	$(MAKE) bitstream CPU_HZ=40000000
@@ -198,4 +260,5 @@ clean:
 clean-ip:
 	rm -rf $(TOP)/build/ip
 
-.PHONY: all ip ip-ila rom inputs bitstream both program hw clean clean-ip
+.PHONY: all ip ip-ila rom inputs bitstream both program hw clean clean-ip \
+	quartus-run lint-quartus quartus quartus-eram-delta

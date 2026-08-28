@@ -7,10 +7,14 @@ module gen8bit_reg(input CLK,
 		   input 	    CLR_n
 		   );
    reg [7:0] 			 data;
+   // Simulation only: powering up unknown is deliberate, and Quartus rejects
+   // $random for synthesis where Vivado ignores it.  See ctx_reg.v.
+`ifdef SUN2_SIM
    initial
      begin
         data = $random;
      end
+`endif
    
    always @(posedge CLK)
      begin

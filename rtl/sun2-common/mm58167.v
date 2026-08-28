@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+`include "sun2_attr.vh"
+
 //
 // National Semiconductor MM58167 microprocessor real time clock.
 //
@@ -121,7 +123,7 @@ module mm58167
    // signal into the counter enables.  That cost the Am9513 a level 5 clock
    // running at 5.6 Hz instead of 100 on a board where simulation was clean.
    // The sampling-rate argument below is still what makes two flops enough.
-   (* ASYNC_REG = "TRUE" *) reg x2_s1, x2_s2;
+   `SUN2_ASYNC_REG reg x2_s1, x2_s2;
    reg 		     x2_d;
    wire 	     f_tick = x2_s2 & ~x2_d;
 

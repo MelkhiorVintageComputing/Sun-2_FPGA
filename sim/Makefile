@@ -44,6 +44,14 @@ BUILD   = $(TOP)/build/sim
 # under test.  7 is the architectural maximum; real Sun-2s usually had 2 or 4.
 MEM_MIB ?= 7
 
+# ... or name the page count outright, when the interesting sizes are not whole
+# mebibytes.  A page is 2 KiB, so MEM_PAGES=48 is 96 KiB.  This exists because
+# an FPGA with no external memory has whatever its block RAM holds and nothing
+# else, and the question "what is the least this PROM will boot in" is then a
+# real one -- sun2_config.vh:285 claims 256 KiB and nothing here has ever
+# measured it.  MEM_MIB stays the knob for ordinary use; give one or the other.
+MEM_PAGES ?= $(shell expr $(MEM_MIB) \* 512)
+
 # Which machine to be: multibus (a 2/120, the default) or vme (a 2/50).  This
 # is the only knob needed -- rtl/sun2-common/sun2_config.vh derives the device space base,
 # the size of memory space, the ID PROM's machine type and which boot PROM is
@@ -51,7 +59,7 @@ MEM_MIB ?= 7
 MACHINE ?= multibus
 
 # --- configuration knobs -> `define's -------------------------------------
-DEFINES = MEM_PAGES=$(shell expr $(MEM_MIB) \* 512)
+DEFINES = MEM_PAGES=$(MEM_PAGES)
 ifeq ($(MACHINE),vme)
 DEFINES += SUN2_VME
 else

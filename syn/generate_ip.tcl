@@ -35,6 +35,11 @@ set which all
 if {[llength $argv] > 0} { set board [lindex $argv 0] }
 if {[llength $argv] > 1} { set which [lindex $argv 1] }
 board_check $board
+if {[board_vendor $board] ne "xilinx"} {
+    puts "ERROR: BOARD=$board is an [board_vendor $board] board; this is the"
+    puts "       Vivado flow.  Use: make -C syn quartus BOARD=$board"
+    exit 1
+}
 if {$which ne "all" && $which ne "mig" && $which ne "ila"} {
     puts "ERROR: WHICH must be all, mig or ila, not '$which'"
     exit 1

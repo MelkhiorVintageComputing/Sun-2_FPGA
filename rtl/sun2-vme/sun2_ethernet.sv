@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+`include "sun2_attr.vh"
+
 //
 // The Sun-2's on-board Ethernet: an Intel 82586 that reaches memory by DVMA.
 //
@@ -106,7 +108,7 @@ module sun2_ethernet #(
    // Tying mii_tx_clk to a constant, as a board with no PHY does, leaves these
    // registers unclocked and reading zero -- which is the safe direction: no
    // carrier, so nothing defers.
-   (* ASYNC_REG = "TRUE" *) reg crs_s1, crs_s2, col_s1, col_s2;
+   `SUN2_ASYNC_REG reg crs_s1, crs_s2, col_s1, col_s2;
    always @(posedge mii_tx_clk or posedge RESET)
      if (RESET) begin
         crs_s1 <= 1'b0; crs_s2 <= 1'b0;

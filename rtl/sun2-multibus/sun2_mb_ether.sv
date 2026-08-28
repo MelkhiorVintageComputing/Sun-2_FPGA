@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+`include "sun2_attr.vh"
+
 //
 // The Sun-2 Ethernet board, as it was on a MultiBus 2/120.
 //
@@ -262,7 +264,7 @@ module sun2_mb_ether #(
    // the raw bus address: ieinit() sets mie_pgmap[0].mp_pfnum and then writes
    // to the first kilobyte of the window, which only works if the two are the
    // same page.
-   (* ram_style = "block" *)
+   `SUN2_RAM_BLOCK
    reg [15:0] pgmap [0:1023];
 
    wire [9:0] pg_idx_cpu = sel_pgmap ? mb_addr[10:1]              // as a register
@@ -377,7 +379,7 @@ module sun2_mb_ether #(
    genvar k;
    generate
       for (k = 0; k < 4; k = k + 1) begin : bank
-         (* ram_style = "block" *) reg [7:0] mem [0:MEM_WORDS-1];
+         `SUN2_RAM_BLOCK reg [7:0] mem [0:MEM_WORDS-1];
          reg [7:0] a_q, b_q;
 
          // Port A -- the 82586.  Lane k is board byte address 4N+k, always.
