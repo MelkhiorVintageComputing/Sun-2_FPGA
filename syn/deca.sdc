@@ -38,9 +38,17 @@ set_clock_groups -asynchronous \
     -group [get_clocks net_tx_clk] \
     -group [get_clocks net_rx_clk] \
     -group [get_clocks {*clkgen*pll_a*}] \
-    -group [get_clocks {*clkgen*pll_b*}]
+    -group [get_clocks {*clkgen*pll_b*}] \
+    -group [get_clocks {*ddr3*DDR3_PLL*}]
 
 # ------------------------------------------------------------- false paths
+# The DDR3 controller's own clocks are unrelated to the machine's: the adapter
+# crosses between them with a two-phase toggle handshake and three-stage
+# synchronisers, which is the whole point of doing it that way.  Timing those
+# paths would be meaningless, and leaving the group out is what makes a
+# recovery check fail on a crossing that should have been ignored -- the lesson
+# wukong_common.xdc records.
+
 # CRS and COL are asynchronous to both MII clocks by clause 22 -- the same
 # argument wukong_common.xdc makes for the Wukong's PHY.
 set_false_path -from [get_ports {NET_CRS NET_COL}]

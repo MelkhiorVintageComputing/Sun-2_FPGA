@@ -203,10 +203,15 @@ hw: | $(WORKDIR)
 QUARTUS_ROOTDIR ?= /opt/Altera/quartus
 QUARTUS  = QUARTUS_ROOTDIR=$(QUARTUS_ROOTDIR) $(HERE)/altera.sh
 AJOBS   ?= 8
-# 2 KiB pages of on-chip main memory.  32 = 64 KiB, which the M0 sweep showed
-# is comfortably above the boot PROM's real floor (it reaches the monitor
-# prompt in 32 KiB) and leaves M9K slack for the fit.
-MEM_PAGES ?= 32
+# 2 KiB pages of main memory.  3584 = 7 MiB, the Sun-2's architectural maximum
+# and what the VME reference machine reports.
+#
+# It was 32 (64 KiB) while main memory was on-chip M9K, which was enough to
+# reach the monitor prompt -- measured, the PROM gets there in 32 KiB -- and not
+# enough to netboot, because the boot loader's buffer is at 0x0a0462, 640 KiB
+# up.  With the board's DDR3 behind the Wishbone port that limit is gone, and
+# the machine can be the size a real one was.
+MEM_PAGES ?= 3584
 ERAM      ?= 1
 QSTAGE    ?= map
 QTOPENT   ?= top

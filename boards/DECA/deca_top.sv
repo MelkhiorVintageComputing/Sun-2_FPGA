@@ -67,7 +67,25 @@ module deca_top #(
     output wire        NET_RESET_n,
     output wire        NET_MDC,
     output wire        NET_PCF_EN,
-    inout  wire        NET_MDIO
+    inout  wire        NET_MDIO,
+
+    // DDR3.  MT41K256M16, 512 MB, 16-bit.  Pin assignments and I/O standards
+    // come from BrianHG's own DECA project via syn/deca_ddr3_pins.qsf.
+    output wire        DDR3_RESET_n,
+    output wire        DDR3_CK_p,
+    output wire        DDR3_CK_n,
+    output wire        DDR3_CKE,
+    output wire        DDR3_CS_n,
+    output wire        DDR3_RAS_n,
+    output wire        DDR3_CAS_n,
+    output wire        DDR3_WE_n,
+    output wire        DDR3_ODT,
+    output wire [14:0] DDR3_A,
+    output wire [2:0]  DDR3_BA,
+    inout  wire [1:0]  DDR3_DM,
+    inout  wire [15:0] DDR3_DQ,
+    inout  wire [1:0]  DDR3_DQS_p,
+    inout  wire [1:0]  DDR3_DQS_n
 );
 
    // ------------------------------------------------------------------
@@ -86,12 +104,15 @@ module deca_top #(
    // ------------------------------------------------------------------
    // Reset
    //
-   // The Wukong's chain (wukong_top.sv:230-250) minus its init_calib_complete
-   // term: on-chip RAM needs no calibration, so there is nothing to wait for
-   // beyond the PLLs.  The hold counter exists for the same reason it does
-   // there -- the machine must not start before the clocks are steady, and a
-   // reset released one clock early is a class of fault that only shows on
-   // hardware.
+   // The Wukong's chain (wukong_top.sv:230-250), including its
+   // init_calib_complete term -- which this file previously omitted, with a
+   // comment saying on-chip RAM needs no calibration.  That was true of the
+   // M9K build and is not true now: DDR3 calibrates, and a machine that starts
+   // fetching before DDR3_READY reads whatever the controller happens to
+   // return.  ddr3_ready is that term, under its own name.
+   //
+   // The hold counter stays for the reason it exists there: a reset released
+   // one clock early is a class of fault that only shows on hardware.
    // ------------------------------------------------------------------
    reg [15:0] hold_ctr = 16'hFFFF;
    always @(posedge cpu_clk or negedge pll_locked)
@@ -109,7 +130,13 @@ module deca_top #(
    // wherever the FIFO happened to overflow.
    wire jtag_reset;
 
-   wire board_reset = ~KEY[0] | ~pll_locked | (hold_ctr != 16'd0) | jtag_reset;
+   // Two resets, and the split is load-bearing.  board_reset_raw is what the
+   // DDR3 controller is held in; board_reset additionally waits for it to come
+   // out of calibration and is what the machine sees.  Feeding ~ddr3_ready back
+   // into the controller's own reset would be circular -- it would never
+   // calibrate, because calibrating requires not being in reset.
+   wire board_reset_raw = ~KEY[0] | ~pll_locked | (hold_ctr != 16'd0) | jtag_reset;
+   wire board_reset     = board_reset_raw | ~ddr3_ready;
 
    wire sys_reset;
    reset_sync rst_cpu (.clk(cpu_clk),
@@ -201,11 +228,46 @@ module deca_top #(
    );
 
    // ------------------------------------------------------------------
-   // Main memory
+   // Main memory: the board's 512 MB of DDR3.
+   //
+   // This replaces the 64 KiB of on-chip M9K that got the machine to its
+   // monitor prompt and no further -- the boot loader's buffer is at 0x0a0462,
+   // 640 KiB up, so netbooting needs real memory and Ethernet needs netbooting.
+   // deca_wb_ocram.sv is kept in the tree because it is still the right answer
+   // for a build that wants no external dependency, and because it is the
+   // reference the DDR3 path is checked against.
    // ------------------------------------------------------------------
-   deca_wb_ocram ram (
-       .clk      (cpu_clk),
-       .rst      (sys_reset),
+   localparam int PORT_ADDR_SIZE  = 29;
+   localparam int PORT_CACHE_BITS = 128;
+
+   wire                         cmd_clk, ddr3_ready, ddr3_cal_pass, ddr3_rst_out;
+   wire [7:0]                   ddr3_rdcal;
+
+   wire                         cmd_busy_a       [0:0];
+   wire                         cmd_ena_a        [0:0];
+   wire                         cmd_write_ena_a  [0:0];
+   wire [PORT_ADDR_SIZE-1:0]    cmd_addr_a       [0:0];
+   wire [PORT_CACHE_BITS-1:0]   cmd_wdata_a      [0:0];
+   wire [PORT_CACHE_BITS/8-1:0] cmd_wmask_a      [0:0];
+   wire                         cmd_rready_a     [0:0];
+   wire [PORT_CACHE_BITS-1:0]   cmd_rdata_a      [0:0];
+   wire [7:0]                   cmd_rvec_out_a   [0:0];
+
+   wire                         w_cmd_ena, w_cmd_we;
+   wire [PORT_ADDR_SIZE-1:0]    w_cmd_addr;
+   wire [PORT_CACHE_BITS-1:0]   w_cmd_wdata;
+   wire [PORT_CACHE_BITS/8-1:0] w_cmd_wmask;
+
+   assign cmd_ena_a[0]       = w_cmd_ena;
+   assign cmd_write_ena_a[0] = w_cmd_we;
+   assign cmd_addr_a[0]      = w_cmd_addr;
+   assign cmd_wdata_a[0]     = w_cmd_wdata;
+   assign cmd_wmask_a[0]     = w_cmd_wmask;
+
+   deca_wb_to_ddr3 #(.PORT_ADDR_SIZE(PORT_ADDR_SIZE),
+                     .PORT_CACHE_BITS(PORT_CACHE_BITS)) memif (
+       .clk_wb   (cpu_clk),
+       .rst_wb   (sys_reset),
        .wb_cyc_i (wb_cyc),
        .wb_stb_i (wb_stb),
        .wb_adr_i (wb_adr),
@@ -213,7 +275,64 @@ module deca_top #(
        .wb_sel_i (wb_sel),
        .wb_we_i  (wb_we),
        .wb_dat_o (wb_dat_r),
-       .wb_ack_o (wb_ack)
+       .wb_ack_o (wb_ack),
+
+       .cmd_clk        (cmd_clk),
+       .cmd_rst        (ddr3_rst_out),
+       .ddr3_ready     (ddr3_ready),
+       .CMD_busy       (cmd_busy_a[0]),
+       .CMD_ena        (w_cmd_ena),
+       .CMD_write_ena  (w_cmd_we),
+       .CMD_addr       (w_cmd_addr),
+       .CMD_wdata      (w_cmd_wdata),
+       .CMD_wmask      (w_cmd_wmask),
+       .CMD_read_ready (cmd_rready_a[0]),
+       .CMD_read_data  (cmd_rdata_a[0])
+   );
+
+   BrianHG_DDR3_CONTROLLER_v16_top #(
+       .FPGA_VENDOR     ("Altera"),
+       .FPGA_FAMILY     ("MAX 10"),
+       .CLK_KHZ_IN      (50000),
+       // 250 MHz, not the 400 their own DECA project uses: on Quartus 25.1 the
+       // fitter refuses DDR3_CK_p at 800 Mbps against a 600 Mbps rating for
+       // Differential 1.5-V SSTL Class I.  See test/deca_ddr3.
+       .CLK_IN_MULT     (20),
+       .CLK_IN_DIV      (4),
+       .INTERFACE_SPEED ("Half"),
+       .DDR3_SIZE_GB    (4),          // MT41K256M16, the DECA's part
+       .DDR3_WIDTH_DQ   (16),
+       .DDR3_NUM_CHIPS  (1),
+       .PORT_TOTAL      (1)
+   ) ddr3 (
+       .RST_IN   (board_reset_raw),
+       .CLK_IN   (MAX10_CLK1_50),
+       .DDR3_CLK (), .DDR3_CLK_50 (), .DDR3_CLK_25 (),
+       .CMD_CLK      (cmd_clk),
+       .RST_OUT      (ddr3_rst_out),
+       .DDR3_READY   (ddr3_ready),
+       .SEQ_CAL_PASS (ddr3_cal_pass),
+       .PLL_LOCKED   (),
+       .RDCAL_data   (ddr3_rdcal),
+
+       .CMD_busy            (cmd_busy_a),
+       .CMD_ena             (cmd_ena_a),
+       .CMD_write_ena       (cmd_write_ena_a),
+       .CMD_addr            (cmd_addr_a),
+       .CMD_wdata           (cmd_wdata_a),
+       .CMD_wmask           (cmd_wmask_a),
+       .CMD_read_vector_in  ('{8'h00}),
+       .CMD_read_ready      (cmd_rready_a),
+       .CMD_read_data       (cmd_rdata_a),
+       .CMD_read_vector_out (cmd_rvec_out_a),
+       .CMD_priority_boost  ('{1'b0}),
+       .SEQ_refresh_hold    (1'b0),
+
+       .DDR3_RESET_n (DDR3_RESET_n), .DDR3_CK_p (DDR3_CK_p), .DDR3_CK_n (DDR3_CK_n),
+       .DDR3_CKE (DDR3_CKE), .DDR3_CS_n (DDR3_CS_n), .DDR3_RAS_n (DDR3_RAS_n),
+       .DDR3_CAS_n (DDR3_CAS_n), .DDR3_WE_n (DDR3_WE_n), .DDR3_ODT (DDR3_ODT),
+       .DDR3_A (DDR3_A), .DDR3_BA (DDR3_BA), .DDR3_DM (DDR3_DM),
+       .DDR3_DQ (DDR3_DQ), .DDR3_DQS_p (DDR3_DQS_p), .DDR3_DQS_n (DDR3_DQS_n)
    );
 
    // ------------------------------------------------------------------

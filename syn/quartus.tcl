@@ -264,6 +264,24 @@ if {$opt(-topent) ne "top"} {
     # UART whose Atlantic port is tied off, i.e. a console that compiles and
     # cannot work.  deca_jtag_console.sv guards the instance with SUN2_SIM for
     # the same reason.
+    # The DDR3 controller.  Read from Inputs/ directly: it is immutable and
+    # unpatched.  If it ever needs a change that goes in patches/BrianHG-DDR3/
+    # and this reads build/inputs/ instead, the rule the whole tree follows.
+    set bhg $top/Inputs/BrianHG-DDR3/BrianHG_DDR3
+    foreach f [list BrianHG_DDR3_CONTROLLER_v16_top.sv BrianHG_DDR3_COMMANDER_v16.sv \
+                    BrianHG_DDR3_CMD_SEQUENCER_v16.sv BrianHG_DDR3_PHY_SEQ_v16.sv \
+                    BrianHG_DDR3_PLL.sv BrianHG_DDR3_GEN_tCK.sv \
+                    BrianHG_DDR3_FIFOs.sv BrianHG_DDR3_IO_PORT_ALTERA.sv \
+                    altera_gpio_lite.sv] {
+        if {![file exists $bhg/$f]} {
+            puts "ERROR: the DDR3 controller is missing: $bhg/$f"
+            puts "       run: git submodule update --init Inputs/BrianHG-DDR3"
+            exit 1
+        }
+        lappend sv $bhg/$f
+    }
+    set_global_assignment -name SEARCH_PATH $bhg
+
     set juart $::env(QUARTUS_ROOTDIR)/../ip/altera/sopc_builder_ip/altera_avalon_jtag_uart
     foreach f [list altera_avalon_jtag_uart.sv \
                     altera_avalon_jtag_uart_scfifo_r.sv \
@@ -292,6 +310,7 @@ foreach f $sv {
 if {$opt(-topent) ne "top"} {
     set_global_assignment -name SDC_FILE $here/deca.sdc
     source $here/deca_pins.qsf
+    source $here/deca_ddr3_pins.qsf
 }
 
 export_assignments
