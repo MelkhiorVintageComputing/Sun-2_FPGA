@@ -168,13 +168,6 @@ module deca_jtag_console #(
    );
 `endif
 
-   assign ev_rx_valid = rx_valid;
-   assign ev_tx_start = tx_start;
-   // The Avalon transfer completes on the cycle where waitrequest is low; these
-   // count the ones that carried a DATA byte in each direction.
-   assign ev_wr_data  = (state == S_WDAT) & ~av_waitrequest;
-   assign ev_rd_valid = (state == S_RDAT) & ~av_waitrequest & av_readdata[15];
-
    // ---------------------------------------------------------------- FSM
    localparam [2:0] S_IDLE    = 3'd0,
                     S_WCTL    = 3'd1,   // read CONTROL, for WSPACE
@@ -185,9 +178,22 @@ module deca_jtag_console #(
                     S_TXW2    = 3'd6;   // ... and to finish
 
    reg [2:0] state;
-   reg [7:0] pending;      // the byte waiting to go to the host
-   reg       have_pending;
-   reg       wspace_ok;
+   reg [7:0]  pending;      // the byte waiting to go to the host
+   reg        have_pending;
+   reg        wspace_ok;
+   // How long a byte may wait for room before it is abandoned.  ~84 ms at
+   // 12.5 MHz, which is eighty bytes at 9600 baud -- long enough that a host
+   // draining in bursts never costs a character, short enough that a machine
+   // with nobody listening is not held up.
+   reg [19:0] wait_ctr;
+
+   assign ev_rx_valid = rx_valid;
+   assign ev_tx_start = tx_start;
+   // The Avalon transfer completes on the cycle where waitrequest is low; these
+   // count the ones that carried a DATA byte in each direction.
+   assign ev_wr_data  = (state == S_WDAT) & ~av_waitrequest;
+   assign ev_rd_valid = (state == S_RDAT) & ~av_waitrequest & av_readdata[15];
+
 
    always @(posedge clk) begin
       tx_start <= 1'b0;
@@ -200,15 +206,22 @@ module deca_jtag_console #(
          av_address    <= 1'b0;
          have_pending  <= 1'b0;
          wspace_ok     <= 1'b0;
+         wait_ctr      <= 20'd0;
          dropped       <= 1'b0;
       end else begin
          // The machine's output is latched the moment it appears, whatever the
          // FSM is doing.  One byte of holding is enough: at 9600 baud the next
          // one is 1.04 ms away and the longest FSM path is a handful of clocks.
+         if (have_pending) begin
+            if (wait_ctr != 20'hFFFFF) wait_ctr <= wait_ctr + 20'd1;
+         end else
+           wait_ctr <= 20'd0;
+
          if (rx_valid) begin
             if (have_pending) dropped <= 1'b1;
             pending      <= rx_data;
             have_pending <= 1'b1;
+            wait_ctr     <= 20'd0;
          end
 
          case (state)
@@ -248,11 +261,24 @@ module deca_jtag_console #(
                 if (av_readdata[22:16] != 7'd0) begin
                    wspace_ok <= 1'b1;
                    state     <= S_GAP;
-                end else begin
-                   // No room and nobody listening.  Drop it and say so.
+                end else if (wait_ctr == 20'hFFFFF) begin
+                   // Waited long enough.  Nobody is listening; drop it and say
+                   // so, because holding for ever would wedge the bridge and
+                   // the first bytes after a host attached would be stale.
                    dropped      <= 1'b1;
                    have_pending <= 1'b0;
                    state        <= S_IDLE;
+                end else begin
+                   // No room *yet*.  Keep the byte and try again.
+                   //
+                   // The first version dropped here immediately, and that lost
+                   // 117 of a 320-character boot banner -- measured, and
+                   // byte-identical across two runs, which is what said it was
+                   // structural and not a race.  A 64-byte FIFO and a host that
+                   // drains in bursts is the normal case, not the exceptional
+                   // one: at 9600 baud the next byte is a millisecond away, so
+                   // waiting is nearly free and dropping is nearly total.
+                   state <= S_IDLE;
                 end
              end
 

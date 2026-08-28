@@ -50,7 +50,7 @@ phy)
 	if xvlog --sv "$W/wb_mdio.sv" "$top/boards/Wukong/phy_rtl8211_init.sv" \
 		"$top/tb/mdio_phy_model.sv" "$top/tb/tb_phy_init.sv" \
 		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
-	if xelab -debug off --timescale 1ns/1ps work.tb_phy_init -s phy_sim | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug off --timescale 1ns/1ps work.tb_phy_init -s phy_sim 2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	xsim phy_sim -R | grep -E '===|PASS|FAIL|checks|PHY id|link '
 	;;
 
@@ -178,9 +178,9 @@ bridge)
 	# memory cycle immediately after another with no fetch between them.  See
 	# the header of tb/tb_wb_bridge.sv for why that is the only case that can
 	# leave `done' set across a cycle boundary.
-	if xvlog "$top/rtl/sun2-common/sun2_wishbone_bridge.v" | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
-	if xvlog --sv "$top/tb/tb_wb_bridge.sv" | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
-	if xelab -debug off --timescale 1ns/1ps work.tb_wb_bridge -s bridge_sim | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xvlog "$top/rtl/sun2-common/sun2_wishbone_bridge.v" 2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xvlog --sv "$top/tb/tb_wb_bridge.sv" 2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug off --timescale 1ns/1ps work.tb_wb_bridge -s bridge_sim 2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	xsim bridge_sim -R | grep -E '===|PASS|FAIL|ok$|LOST|returned|timeout'
 	;;
 
@@ -189,9 +189,9 @@ dvma)
 	# make the whole target exit silently with nothing to show for it.
 	# An `if' condition is exempt from set -e, so a clean compile does not
 	# abort the script just because grep matched nothing.
-	if xvlog "$top/rtl/sun2-vme/sun2_dvma.v" | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
-	if xvlog --sv "$top/tb/tb_dvma.sv" | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
-	if xelab -debug off work.tb_dvma -s dvma_sim | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xvlog "$top/rtl/sun2-vme/sun2_dvma.v" 2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xvlog --sv "$top/tb/tb_dvma.sv" 2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug off work.tb_dvma -s dvma_sim 2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	xsim dvma_sim -R | grep -E '===|PASS|FAIL|checks'
 	;;
 

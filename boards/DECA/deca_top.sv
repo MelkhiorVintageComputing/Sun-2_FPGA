@@ -98,7 +98,18 @@ module deca_top #(
      if (!pll_locked)          hold_ctr <= 16'hFFFF;
      else if (hold_ctr != 0)   hold_ctr <= hold_ctr - 16'd1;
 
-   wire board_reset = ~KEY[0] | ~pll_locked | (hold_ctr != 16'd0);
+   // A reset that can be asserted over JTAG, because the DECA's only reset is a
+   // physical button and this machine is worked on remotely.
+   //
+   // It also solves a real observation problem: configuring the FPGA tears down
+   // any open JTAG UART session, so a terminal cannot be attached *before* the
+   // machine starts printing -- and the boot banner is about 60 characters,
+   // which is the size of the JTAG UART's write FIFO.  Attach the terminal,
+   // pulse this, and the boot is watched from its first byte instead of from
+   // wherever the FIFO happened to overflow.
+   wire jtag_reset;
+
+   wire board_reset = ~KEY[0] | ~pll_locked | (hold_ctr != 16'd0) | jtag_reset;
 
    wire sys_reset;
    reset_sync rst_cpu (.clk(cpu_clk),
@@ -126,6 +137,7 @@ module deca_top #(
    wire [7:0]  blk_buf_rdata;
 
    wire        mdio_i, mdio_o, mdio_oe;
+   wire        ev_rx_valid, ev_wr_data, ev_rd_valid, ev_tx_start;
 
    top machine (
        .cpu_clk        (cpu_clk),
@@ -245,10 +257,42 @@ module deca_top #(
        .sun_rx    (sun_rx),
        .dropped   (con_dropped),
        .frame_err (con_frame_err),
-       .ev_rx_valid (),
-       .ev_wr_data  (),
-       .ev_rd_valid (),
-       .ev_tx_start ()
+       .ev_rx_valid (ev_rx_valid),
+       .ev_wr_data  (ev_wr_data),
+       .ev_rd_valid (ev_rd_valid),
+       .ev_tx_start (ev_tx_start)
+   );
+
+   // ------------------------------------------------------------------
+   // In-System Sources and Probes: a reset in, four event counters out.
+   //
+   // The counters are what found the console's clock fault -- they said the
+   // design did exactly one receive, write, read and transmit per byte while
+   // the host showed each byte twice, which is what moved the search
+   // downstream.  They stay because that class of question recurs and a probe
+   // cannot be attached after the fact without a rebuild.
+   // ------------------------------------------------------------------
+   reg [15:0] n_rx, n_wr, n_rd, n_tx;
+   always @(posedge cpu_clk)
+     if (con_rst) begin
+        n_rx <= 16'd0; n_wr <= 16'd0; n_rd <= 16'd0; n_tx <= 16'd0;
+     end else begin
+        if (ev_rx_valid) n_rx <= n_rx + 16'd1;
+        if (ev_wr_data)  n_wr <= n_wr + 16'd1;
+        if (ev_rd_valid) n_rd <= n_rd + 16'd1;
+        if (ev_tx_start) n_tx <= n_tx + 16'd1;
+     end
+
+   altsource_probe #(
+       .sld_auto_instance_index ("YES"),
+       .instance_id             ("SUN2"),
+       .probe_width             (64),
+       .source_width            (1),
+       .source_initial_value    ("0"),
+       .enable_metastability    ("YES")
+   ) u_issp (
+       .probe  ({n_tx, n_rd, n_wr, n_rx}),
+       .source (jtag_reset)
    );
 
    // ------------------------------------------------------------------
