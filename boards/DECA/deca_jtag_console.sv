@@ -77,6 +77,24 @@ module deca_jtag_console #(
     output wire sun_rx,         // to the machine's `rx'
     output reg  dropped,        // sticky: at least one byte lost to a full FIFO
     output wire frame_err       // sticky-ish: the receiver saw a bad stop bit
+`ifdef SUN2_SIM
+    ,
+    // In simulation the JTAG UART is not instantiated -- the real IP ties its
+    // Atlantic port off under translate_off, so it can neither transmit nor
+    // receive there.  The Avalon master is brought out instead and a testbench
+    // supplies tb/jtag_uart_model.sv, which transcribes the IP's own handshake.
+    //
+    // That gap is not academic: this FSM went to a board with only a hand-trace
+    // of the protocol behind it, and produced doubled and skipped characters
+    // that three readings of the source did not explain.
+    output wire        av_address_o,
+    output wire        av_chipselect_o,
+    output wire        av_read_n_o,
+    output wire        av_write_n_o,
+    output wire [31:0] av_writedata_o,
+    input  wire [31:0] av_readdata_i,
+    input  wire        av_waitrequest_i
+`endif
 );
 
    // ---------------------------------------------------------- serial ends
@@ -116,12 +134,13 @@ module deca_jtag_console #(
    reg  [31:0] av_writedata;
 
 `ifdef SUN2_SIM
-   // The IP cannot be simulated -- its Atlantic port is tied off under
-   // translate_off -- so a testbench gets a stub that never has room and never
-   // has data.  tb_deca then exercises the UART halves and the FSM's timing
-   // without pretending a host is attached.
-   assign av_readdata    = 32'h00000000;
-   assign av_waitrequest = 1'b0;
+   assign av_address_o    = av_address;
+   assign av_chipselect_o = av_chipselect;
+   assign av_read_n_o     = av_read_n;
+   assign av_write_n_o    = av_write_n;
+   assign av_writedata_o  = av_writedata;
+   assign av_readdata     = av_readdata_i;
+   assign av_waitrequest  = av_waitrequest_i;
 `else
    altera_avalon_jtag_uart #(
        .writeBufferDepth (64),
@@ -145,11 +164,12 @@ module deca_jtag_console #(
                     S_WCTL    = 3'd1,   // read CONTROL, for WSPACE
                     S_WDAT    = 3'd2,   // write the byte
                     S_RDAT    = 3'd3,   // read DATA, for RVALID + byte
-                    S_DONE    = 3'd4;
+                    S_GAP     = 3'd4;   // chipselect low between transfers
 
    reg [2:0] state;
    reg [7:0] pending;      // the byte waiting to go to the host
    reg       have_pending;
+   reg       wspace_ok;
 
    always @(posedge clk) begin
       tx_start <= 1'b0;
@@ -161,6 +181,7 @@ module deca_jtag_console #(
          av_write_n    <= 1'b1;
          av_address    <= 1'b0;
          have_pending  <= 1'b0;
+         wspace_ok     <= 1'b0;
          dropped       <= 1'b0;
       end else begin
          // The machine's output is latched the moment it appears, whatever the
@@ -192,16 +213,23 @@ module deca_jtag_console #(
 
            // Sample on the edge where waitrequest is low: that is the cycle in
            // which the transfer completes and readdata is valid.
+           //
+           // Chipselect drops for at least one idle cycle between every
+           // transfer -- S_GAP below -- rather than being held across the
+           // CONTROL read and the DATA write.  Holding it is legal Avalon and
+           // it is what the first version did; on hardware it produced every
+           // byte twice with every other byte lost, and a model of the slave
+           // transcribed from the IP's own source did not reproduce it.  Rather
+           // than keep guessing at which cycle the real slave latches, each
+           // transfer now stands alone, which is unambiguous.  It costs two
+           // clocks per byte at 9600 baud, i.e. nothing.
            S_WCTL:
              if (!av_waitrequest) begin
                 av_chipselect <= 1'b0;
                 av_read_n     <= 1'b1;
                 if (av_readdata[22:16] != 7'd0) begin
-                   av_address    <= 1'b0;    // DATA
-                   av_writedata  <= {24'h0, pending};
-                   av_chipselect <= 1'b1;
-                   av_write_n    <= 1'b0;
-                   state         <= S_WDAT;
+                   wspace_ok <= 1'b1;
+                   state     <= S_GAP;
                 end else begin
                    // No room and nobody listening.  Drop it and say so.
                    dropped      <= 1'b1;
@@ -209,6 +237,16 @@ module deca_jtag_console #(
                    state        <= S_IDLE;
                 end
              end
+
+           // One dead cycle with chipselect low, then the write.
+           S_GAP: begin
+              av_chipselect <= 1'b1;
+              av_address    <= 1'b0;         // DATA
+              av_writedata  <= {24'h0, pending};
+              av_write_n    <= 1'b0;
+              wspace_ok     <= 1'b0;
+              state         <= S_WDAT;
+           end
 
            S_WDAT:
              if (!av_waitrequest) begin

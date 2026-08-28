@@ -119,11 +119,29 @@ module deca_console_test_top #(
    reg       echo_any;
 
    // One transmitter, two sources, chosen by the switch -- and ONE always
-   // block driving it.  The first version of this file had the pattern
-   // generator and the echo path in separate always blocks both assigning
-   // gen_byte and gen_start, which is a multiple-driver error: Quartus would
-   // have refused it, but only after a synthesis run, and in a design whose
-   // entire purpose is to be the thing you trust when nothing else works.
+   // block driving it.  An earlier version had the pattern generator and the
+   // echo path in separate always blocks both assigning gen_byte and
+   // gen_start, which is a multiple-driver error.
+   //
+   // The handshake is explicit, and that is the second bug this generator had.
+   // "if (!gen_busy) begin ...; gen_start <= 1; col <= col + 1; end" looks
+   // right and is not: gen_busy rises a clock *after* the transmitter samples
+   // start, so the condition is still true on the next edge and the block fires
+   // two or three times, advancing col each time while only one byte actually
+   // goes out.  On the board that came out as
+   //
+   //     !!%%)++//3377;;=??      instead of      !"#$%&'()*+,-./
+   //
+   // -- doubled characters, skipped characters, and CR CR where CR LF belongs.
+   // Waiting for busy to rise and then fall is what makes one byte one byte.
+   //
+   // Worth recording plainly: deca_jtag_console and the two UART halves were
+   // simulated (make -C sim decauart, 11 checks, two mutations), and this
+   // generator was not, because it exists only in the test design.  The one
+   // piece that went to hardware unsimulated is the one piece that was wrong.
+   localparam [1:0] G_IDLE = 2'd0, G_TAKEN = 2'd1, G_SENDING = 2'd2;
+   reg [1:0] gstate;
+
    always @(posedge clk_serial) begin
       gen_start <= 1'b0;
 
@@ -131,43 +149,57 @@ module deca_console_test_top #(
          col      <= 6'd0;
          gap      <= 23'd0;
          echo_any <= 1'b0;
-      end else if (SW[0] == 1'b0) begin
-         // Transmit: a line of 64 characters, then CR/LF and a pause, so a
-         // terminal shows something obviously periodic rather than a wall of
-         // text -- a stuck byte is then visible as a stuck *column*.
-         if (!gen_busy && gap == 23'd0) begin
-            case (col)
-              6'd62:   gen_byte <= 8'h0D;
-              6'd63:   gen_byte <= 8'h0A;
-              default: gen_byte <= 8'h21 + {2'b0, col};   // '!' onwards
-            endcase
-            gen_start <= 1'b1;
-            if (col == 6'd63) begin
-               col <= 6'd0;
-               gap <= 23'd1_228_813;                      // a quarter second
-            end else
-               col <= col + 6'd1;
-         end
-         if (gap != 23'd0) gap <= gap - 23'd1;
+         gstate   <= G_IDLE;
       end else begin
-         // Echo: send back what was typed, case-flipped.
-         //
-         // Deliberately not full duplex -- a byte arriving while one is going
-         // out is lost.  A person cannot outrun 9600 baud, and a buffer here
-         // would be a second thing to debug in a design whose whole purpose is
-         // having only one.
-         if (echo_any && !gen_busy) begin
-            gen_byte  <= echo_seen;
-            gen_start <= 1'b1;
-            echo_any  <= 1'b0;
-         end
-      end
+         if (gap != 23'd0) gap <= gap - 23'd1;
 
-      // Latched whichever mode is selected, so switching to echo shows what was
-      // typed before the switch moved rather than nothing at all.
-      if (!ser_reset && echo_valid) begin
-         echo_seen <= echo_data ^ 8'h20;   // flip case, so a host-side local
-         echo_any  <= 1'b1;                // echo cannot be mistaken for this
+         case (gstate)
+           G_IDLE:
+             if (gap == 23'd0 && !gen_busy) begin
+                if (SW[0] == 1'b0) begin
+                   // Transmit: 62 printable characters then CR LF, and a pause,
+                   // so a terminal shows something obviously periodic -- a stuck
+                   // byte is then visible as a stuck *column*.
+                   case (col)
+                     6'd62:   gen_byte <= 8'h0D;
+                     6'd63:   gen_byte <= 8'h0A;
+                     default: gen_byte <= 8'h21 + {2'b0, col};
+                   endcase
+                   gen_start <= 1'b1;
+                   gstate    <= G_TAKEN;
+                end else if (echo_any) begin
+                   // Echo: back it goes, case-flipped.  Not full duplex -- a
+                   // byte arriving mid-transmit is lost, and a person cannot
+                   // outrun 9600 baud.
+                   gen_byte  <= echo_seen;
+                   gen_start <= 1'b1;
+                   echo_any  <= 1'b0;
+                   gstate    <= G_TAKEN;
+                end
+             end
+
+           G_TAKEN:                       // start was sampled; busy is coming
+             if (gen_busy) gstate <= G_SENDING;
+
+           G_SENDING:
+             if (!gen_busy) begin
+                if (SW[0] == 1'b0) begin
+                   if (col == 6'd63) begin
+                      col <= 6'd0;
+                      gap <= 23'd1_228_813;      // a quarter second
+                   end else
+                     col <= col + 6'd1;
+                end
+                gstate <= G_IDLE;
+             end
+
+           default: gstate <= G_IDLE;
+         endcase
+
+         if (echo_valid) begin
+            echo_seen <= echo_data ^ 8'h20;   // flip case, so a host-side local
+            echo_any  <= 1'b1;                // echo cannot be mistaken for this
+         end
       end
    end
 

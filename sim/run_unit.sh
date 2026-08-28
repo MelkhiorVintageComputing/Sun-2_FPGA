@@ -88,6 +88,26 @@ xy450)
 		| grep -E '===|PASS|FAIL|checks|blk\]|DVMA:'
 	;;
 
+decaconsole)
+	# The console bridge against a model of the Avalon slave it talks to.
+	# The real IP ties its Atlantic port off under translate_off and cannot
+	# be simulated, so this FSM reached a board with only a hand-trace of
+	# the protocol behind it -- and produced doubled and skipped characters
+	# that three readings of the source did not explain.  This is what
+	# closed that gap.
+	if xvlog --sv \
+		"$top/boards/DECA/deca_uart_rx.sv" \
+		"$top/boards/DECA/deca_uart_tx.sv" \
+		"$top/boards/DECA/deca_jtag_console.sv" \
+		"$top/tb/jtag_uart_model.sv" \
+		"$top/tb/tb_deca_console.sv" \
+		-d SUN2_SIM -i "$top/rtl/sun2-common" \
+		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug off --timescale 1ns/1ps work.tb_deca_console -s decacon_sim \
+		| grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	xsim decacon_sim -R | grep -E '===|PASS|FAIL|ok:|sent:|got:'
+	;;
+
 decauart)
 	# The two halves of the DECA's console bridge.  The console is the
 	# instrument on that board -- no serial port, no display yet -- so a
