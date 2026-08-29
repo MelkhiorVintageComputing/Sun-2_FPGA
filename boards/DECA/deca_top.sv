@@ -363,7 +363,33 @@ module deca_top #(
        .DDR3_SIZE_GB    (4),          // MT41K256M16, the DECA's part
        .DDR3_WIDTH_DQ   (16),
        .DDR3_NUM_CHIPS  (1),
-       .PORT_TOTAL      (1)
+       .PORT_TOTAL      (1),
+
+       // **No caching.**  The controller's defaults hold a write in a write
+       // cache for up to 256 CMD_CLK and treat a read cache line as fresh for
+       // another 256, with PORT_CACHE_SMART supposed to push a write into any
+       // read cache line covering the same address.  On this machine that
+       // combination produces a **read-after-write hazard**, caught on the
+       // board with rtl/sun2-common/sun2_trace.v: the boot PROM's sdprobe
+       // wrote 2 to its loop counter at 0x000F28 and the `cmpi.l #2' that
+       // follows read the same address back as **1** forty-seven clocks later,
+       // so the loop's bound check failed, it indexed one past the end of
+       // sdstd[], probed address 0x0C in low RAM -- which answers -- and
+       // reported a SCSI controller that does not exist.  The same location
+       // read correctly 41 clocks after that, which is what says stale cache
+       // rather than lost write.
+       //
+       // The caches buy this client nothing.  A 12.5 MHz 68010 issues one
+       // 32-bit access at a time and stalls on DTACK until it is answered, so
+       // there is no burst to coalesce and no latency to hide -- the whole
+       // reason deca_wb_to_ddr3 is single-transaction-in-flight.  0 means
+       // immediate writes and always read from DDR3, which is the semantics a
+       // CPU bus actually needs.  BrianHG's own note on PORT_CACHE_SMART --
+       // "Disable when designing a memory read/write testing algorithm" -- is
+       // the same warning from the other direction.
+       .PORT_W_CACHE_TOUT ('{16{9'd0}}),
+       .PORT_R_CACHE_TOUT ('{16{9'd0}}),
+       .PORT_CACHE_SMART  ('{16{1'b0}})
    ) ddr3 (
        .RST_IN   (board_reset_raw),
        .CLK_IN   (MAX10_CLK1_50),
