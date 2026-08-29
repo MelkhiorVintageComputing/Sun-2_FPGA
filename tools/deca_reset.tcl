@@ -70,6 +70,20 @@ puts [format "PHY    : present=%s cfg_done=%s link=%s speed=%s duplex=%s" \
         [expr {$fd eq "1" ? "full" : "half"}]]
 puts [format "front  : diag_leds = 0x%02x" $diag]
 
+# The console bridge's event counters.  Each counts one stage of the byte path,
+# so differencing two readings across a known input says which stage loses or
+# duplicates a byte -- rx and wr are the machine->host direction, rd and tx the
+# host->machine one.  They were on the probe and in the comment above from the
+# start and never printed, which is the same shape as a knob that reaches the
+# build and not the logic: an instrument whose output is discarded is not an
+# instrument.
+set c_wr [b2i [string range $raw 32 39]]
+set c_rd [b2i [string range $raw 40 47]]
+set c_rx [b2i [string range $raw 48 55]]
+set c_tx [b2i [string range $raw 56 63]]
+puts [format "console: machine->host rx=%d wr=%d   host->machine rd=%d tx=%d (mod 256)" \
+        $c_rx $c_wr $c_rd $c_tx]
+
 # todebug, decoded.  This is the panel BRINGUP.md says to read first.
 puts [format "todebug: 0x%02x  heartbeat=%d reset=%d seen_err=%d fc_err=%d diag_wr=%d seen_stall=%d" \
         $todbg [expr {($todbg >> 7) & 1}] [expr {($todbg >> 6) & 1}] \

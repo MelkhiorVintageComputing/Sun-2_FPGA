@@ -215,7 +215,12 @@ MEM_PAGES ?= 3584
 ERAM      ?= 1
 QSTAGE    ?= map
 QTOPENT   ?= top
-QDIR = $(abspath $(TOP))/build/quartus/$(BOARD)-$(MACHINE)-$(CPU)-p$(MEM_PAGES)-cpu$(CPU_MHZ_TAG)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)
+QSEED    ?= 0
+# The seed is part of the directory name for the reason MEM_LATENCY is not, and
+# should have been: two builds that differ only in a knob absent from the name
+# share a directory and clobber each other, which is exactly the comparison the
+# knob was added to make.
+QDIR = $(abspath $(TOP))/build/quartus/$(BOARD)-$(MACHINE)-$(CPU)-p$(MEM_PAGES)-cpu$(CPU_MHZ_TAG)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)$(if $(filter 0,$(QSEED)),,-seed$(QSEED))
 
 quartus-run: rom inputs
 	@# A port left off an instantiation is an undriven wire, not an error --
@@ -230,7 +235,7 @@ quartus-run: rom inputs
 		-cpu $(CPU) -topent $(QTOPENT) -stage $(QSTAGE) \
 		-mem_pages $(MEM_PAGES) -cpu_hz $(CPU_HZ) \
 		-cpu_div $(if $(CPU_DIV),$(CPU_DIV),0) -eth5 $(ETH5_D) \
-		-eram $(ERAM) -jobs $(AJOBS) > $(QDIR)/quartus.log 2>&1 || \
+		-eram $(ERAM) -jobs $(AJOBS) -seed $(QSEED) > $(QDIR)/quartus.log 2>&1 || \
 		{ echo "== FAILED, tail of $(QDIR)/quartus.log =="; tail -40 $(QDIR)/quartus.log; exit 1; }
 	@grep -E '^== ' $(QDIR)/quartus.log
 	@# An implicit net is a mis-parse, not a style point.  Vivado's equivalent

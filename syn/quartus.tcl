@@ -48,6 +48,7 @@ array set opt {
     -eth5      224
     -eram      1
     -jobs      8
+    -seed      0
     -root      ""
     -outdir    ""
 }
@@ -145,6 +146,17 @@ project_new sun2 -overwrite
 set_global_assignment -name FAMILY               [board_family $opt(-board)]
 set_global_assignment -name DEVICE               [board_device $opt(-board)]
 set_global_assignment -name TOP_LEVEL_ENTITY     $opt(-topent)
+
+# The fitter's placement seed.  It exists because a failure that moves when
+# nothing about the logic moved is a placement-sensitive one, and this project
+# has met that category twice on the Wukong -- so "does the same frequency work
+# with a different placement?" has to be answerable without editing the RTL,
+# which would change two things at once.  Seed 0 leaves Quartus's default
+# alone, so every build recorded before this knob existed is still reproducible.
+if {$opt(-seed) != 0} {
+    set_global_assignment -name SEED $opt(-seed)
+    puts "== fitter seed $opt(-seed) =="
+}
 
 # The knob has to reach the logic, not just the build.  This project has shipped
 # three builds whose banner and whose gateware disagreed -- fb_video_en never
