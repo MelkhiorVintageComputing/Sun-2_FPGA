@@ -4,8 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A replica of a Sun-2 workstation in an FPGA: MC68010, the Sun-2 MMU, an Am9513
 timer, Zilog 8530 SCCs and (on VME machines) an Intel 82586 Ethernet, booting
-the real boot PROMs to the monitor prompt. Target board is a QMTech Wukong,
-V1 or V3 (XC7A100T, FGG676) with DDR3 main memory.
+the real boot PROMs to the monitor prompt and SunOS 4.0.3 to a login prompt.
+
+**Two boards, two vendors.** A QMTech Wukong V1 or V3 (Xilinx XC7A100T, FGG676)
+built with Vivado, and an Arrow DECA (Altera MAX 10 10M50DAF484C6GES) built with
+Quartus. Both boot SunOS from the same `rtl/`, which contains no vendor
+primitive and no vendor IP -- the two flows are the evidence for that claim
+rather than an assertion about it. Everything vendor-specific lives in
+`boards/<name>/` and `syn/`.
 
 ## Commands
 
@@ -492,6 +498,62 @@ exactly that. Every bit on it is a level or a latch, because a signal moving at
 tooling deferred until something misbehaves — the ILA among it. Add to that
 list rather than building diagnostics speculatively.
 
+**SunOS boots to a login prompt on the DECA too, and the port is what tested
+the vendor-neutrality claim.** A MAX 10 at 12.5 MHz with 7 MiB of DDR3 netboots
+SunOS 4.0.3 through RARP, TFTP, an NFS root and a 604688-byte kernel to
+`sun2_f_m login:`. 56% of the logic, 39% of the memory, 3 of 4 PLLs, timing met
+with Fmax 15.7 MHz against the 12.5 asked for.
+
+The claim held, but not for free: a second front-end found three defects in
+shared RTL that had survived the life of the project, each of which Vivado
+tolerates silently. They are in the traps section below.
+
+**The board layer is the seam, and it is small.** `boards/DECA/` is a clock
+generator (two ALTPLLs), a Wishbone-to-DDR3 adapter, a JTAG console bridge with
+two UART halves, a DP83620 sequencer, and a board top implementing
+`rtl/sun2-common/top_fpga.v`'s port list. `deca_wb_ocram.sv` -- main memory in
+on-chip M9K -- is kept beside the DDR3 path deliberately: both satisfy the same
+Wishbone contract, so they are interchangeable by construction and a
+disagreement between them is a real finding.
+
+`tools/portcheck.sh` diffs a module's port list against an instantiation
+mechanically. It exists because `fb_video_en` -- see the trap below -- sat
+unconnected for the entire life of the frame buffer, and it runs on every
+Quartus build. Both boards report 47 ports, all connected.
+
+**What the DECA does not have, and what follows.** No hardware UART, so the
+console goes over the on-board USB-Blaster II through an
+`altera_avalon_jtag_uart`; the machine's bit-serial `tx`/`rx` are kept and
+bridged rather than tapping bytes out of the SCC, because the SCC's own baud
+generator running correctly off a MAX 10 PLL is precisely what has to be
+proved. No hard memory controller, so DDR3 comes from `Inputs/BrianHG-DDR3`, a
+third-party soft controller hardware-verified on this exact board. And the
+MultiBus Ethernet card cannot fit at all: its 256 KiB of on-card RAM is
+2,097,152 bits against the 10M50's entire 1,490,944-bit M9K budget, which is why
+the DECA is a VME 2/50.
+
+**Standalone test designs, and they earn their keep.** `test/deca_console` and
+`test/deca_ddr3` are the DECA's equivalents of `test/hdmi`: the block, its
+clocks, a pattern generator and nothing else, at about 1% of the device and a
+minute to build. The console is the only instrument that board has, so when it
+fails there is nothing left to debug it with; the DDR3 test walks a mebibyte
+with an address-derived pattern and reports over JTAG. Both report through
+In-System Sources and Probes rather than through the console, so that a memory
+test and a console fault are never the same experiment.
+
+**The panels are readable over JTAG.** `tools/deca_reset.tcl` prints `todebug`
+and `diag_leds` -- the Sun-2 front panel and the debug ladder BRINGUP.md says to
+read first -- plus DDR3 calibration, PHY link state and the console's four event
+counters, and it can pulse the machine's reset. That reading is what ended a
+netboot investigation that had no fault in it: `seen_stall=0` says no bus cycle
+went unanswered, which exonerates the Wishbone bridge and DDR3 outright, and it
+was true while a memory-latency hypothesis was still being drafted.
+
+**Open:** the console's host-to-machine direction swaps adjacent bytes --
+`ABCDEFGH` arrives as `@CBEDGFI`. Output is byte-perfect. It reproduces without
+loopback, `tb_deca_console` passes on the same RTL, and the event counters are
+the place to start.
+
 ## Architecture
 
 **Reset is three nets, not one, and the differences are load-bearing.** A
@@ -660,7 +722,13 @@ the 82586 and the testbenches are SystemVerilog. `sim/run_xsim.sh` and
 ## Conventions
 
 **`Inputs/` is immutable.** It is third-party and reference material, mostly git
-submodules (`git submodule update --init` after a fresh clone). Never edit in
+submodules (`git submodule update --init` after a fresh clone).
+`Inputs/BrianHG-DDR3` is the DECA's DDR3 controller, vendored the same way; it
+carries no formal licence ("Written by Brian Guralnick. For public use."), which
+is worth knowing before anyone packages this. `Inputs/doc/` holds the datasheets
+that RTL comments cite -- `dp83620.pdf` for every PHY register value, and
+`DECA_board/` for the board's own schematic, pinout and reference projects. When
+a value in `boards/DECA/` looks arbitrary, it is quoted from one of those. Never edit in
 place. Where a change is genuinely needed it lives as a patch in
 `patches/<name>/`, applied to a copy under `build/inputs/` by
 `tools/patch_inputs.sh`, which the build flows invoke. Patches are meant to be
@@ -1216,6 +1284,109 @@ is mostly the machine *idling in the monitor afterwards*, where an unarmed
 counter reads 0 because that is correct.
 
 ## Traps that have already cost time
+
+* **A test harness that runs a stale snapshot when the compile fails, and this
+  one did, for every unit test.** `sim/run_unit.sh` guarded each step with
+  `if xvlog ... | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi` -- and xvlog
+  writes its diagnostics to **stderr**, which the pipe does not carry. grep saw
+  nothing, the guard passed, and xsim then ran whatever snapshot the last
+  successful build had left. Two compile errors in one session were reported as
+  "9 checks, 9 passed, PASS" from an older binary before this was chased down.
+  All 23 sites redirect stderr into the guard now. The failure mode is a *green*
+  test run, which is the worst one available.
+
+* **MAX 10 puts initialised memory in logic unless told not to, and says
+  nothing.** Without
+  `set_global_assignment -name INTERNAL_FLASH_UPDATE_MODE "SINGLE COMP IMAGE WITH ERAM"`
+  Quartus implements every initialised ROM in gates. Measured on this design,
+  three arms, everything else equal:
+
+  | | logic elements | memory bits |
+  |---|--:|--:|
+  | ERAM off | 56,092 (**113%**, does not fit) | 151,296 |
+  | ERAM on, `bootrom idx[14:0]` | 45,897 (92%) | 397,056 |
+  | ERAM on, `bootrom idx[13:0]` | **22,938 (46%)** | **659,200** |
+
+  Every figure decomposes exactly: 151,296 is the MMU maps plus the 82586, the
+  two *uninitialised* RAMs. So the assignment gates precisely the initialised
+  ones -- and both the boot PROM and RD68011's microcode store are initialised.
+
+* **A case statement wider than its labels is not a ROM, to Quartus.**
+  `bootrom.v` declared `idx[14:0]` -- 32768 entries -- while only 16384 are
+  generated, because the PROM is 32 KiB, and `sun2_fpga.v` padded the top bit
+  with a constant zero. A case that does not cover its selector is *incomplete*,
+  and Quartus declines to infer a ROM from an incomplete case, silently. Vivado
+  infers it either way, which is how a 15-bit index on a 14-bit ROM survived for
+  years. Synthesis went from 3h 04m to 5m 11s when it was narrowed, because
+  Quartus stopped grinding a 16384-way multiplexer into gates.
+
+* **`$random` in an unguarded `initial` is an error on one vendor and ignored on
+  the other.** `ctx_reg.v` and `gen8bit_reg.v` powered up random on purpose --
+  neither register has a reset on a real Sun-2 -- and Quartus stops with Error
+  10174 where Vivado shrugs. They are behind `SUN2_SIM` now.
+
+* **A JTAG UART clocked slower than TCK duplicates bytes.** The DECA's console
+  was on `clk_serial` at 4.915 MHz for good reasons -- the SCC's own domain, an
+  exact 512-clock bit period, no dependence on `CPU_HZ` -- and every one of them
+  was irrelevant: `alt_jtag_atlantic` crosses into the TCK domain, which
+  `quartus_sta` reports at 10 MHz, and a slower user clock made the host read
+  each byte twice and out of order. Five hypotheses about the RTL failed before
+  in-system probes showed the design doing exactly one receive, write, read and
+  transmit per byte while the host displayed ten characters for eight. Moving to
+  `cpu_clk` at 12.5 MHz fixed it with the counters unchanged. A design writing
+  sequentially into a FIFO cannot produce out-of-order output; only something
+  downstream can.
+
+* **"Hardware-verified" and "builds with today's tools" are different claims.**
+  `Inputs/BrianHG-DDR3`'s own DECA project runs its DDR3 at 400 MHz and reports
+  100% of timing met. On Quartus 25.1 that build is refused outright --
+  `Error (176060): ... DDR3_CK_p at data rate 800 Mbps exceeds the maximum
+  allowed data rate of 600 Mbps for Differential 1.5-V SSTL Class I` -- on the
+  same device, the same speed grade, the same I/O standard, with no waiver on
+  their side either. Theirs was Quartus 17.1. 250 MHz is used instead and costs
+  nothing: a 12.5 MHz Sun-2 wants a few MB/s against about 1000 MB/s raw.
+
+* **A write mask's polarity does not travel between controllers.** MIG's
+  `app_wdf_mask` is active high meaning *do not* write this byte; BrianHG's
+  `CMD_wmask` is active high meaning *do*. Carrying `wb_to_mig_ui`'s `mask_for()`
+  across unchanged would have written every byte the CPU did not ask for and
+  none of the ones it did, on sub-word accesses only -- which the boot PROM makes
+  constantly. `make -C sim decaddr3` fails all ten checks under that mutation.
+
+* **The DP83620's speed bit reads the opposite way round from instinct, and its
+  straps are shared with the FPGA.** `PHYSTS` bit 1 is named "Speed10" and is
+  *set* for 10 Mb/s; read backwards, a healthy 10 Mb/s Sun-2 reports 100 and
+  nothing complains. Separately, `MII_MODE` is strapped on the RX_DV pin, which
+  the DECA runs straight to the FPGA with no external pull -- so the part's
+  internal pulldown decides and the board is MII, which the schematic settles in
+  one look. But **before the FPGA is configured its pins are tri-stated with a
+  weak pull-UP**, and in that window `NET_RESET_n` floats high too, so the PHY is
+  not held in reset and latches RMII. What saves it is the reset the board
+  asserts once configured, which re-latches the straps. That recovery is
+  load-bearing; the sequencer clears the bit anyway.
+
+* **The M9K holds 8192 usable bits, not 9216.** The extra 1024 are only
+  reachable at widths 9, 18 and 36. Budgeting a MAX 10 at 9216 is 12% optimistic
+  and turns a decision about what fits into a wrong one.
+
+* **The boot PROM boots in far less memory than the tree claimed, and cannot
+  netboot in any of it.** `sun2_config.vh` said "the PROM is happy with as little
+  as 256 KiB"; measured, a VME machine reaches the monitor prompt at every size
+  down to **32 KiB**, on both cores. But the boot loader's buffer is at
+  `0x0a0462`, 640 KiB up, so a small machine takes a protection violation there
+  and drops to the prompt -- which is the eleventh bus error in those runs and
+  the reason on-chip memory can run the monitor and never SunOS.
+
+* **Configuring the FPGA tears down the JTAG console, so a boot cannot be
+  watched from its first byte unless the reset is pulsed first.**
+  `tools/deca_reset.tcl reset` *then* `juart-terminal` works; the other order
+  captures nothing, because ISSP and juart-terminal cannot both hold the chain.
+  One untried ordering was generalised into "the two are unusable together", and
+  a mechanism to hold the machine in reset until a console attached was built on
+  that premise, did not work, and was thrown away. The PROM spends seconds
+  testing 7 MiB before printing anything worth reading, which is the whole
+  margin needed.
+
 
 * **A chip-wide register written through the other channel.** The Z8530's WR2
   and WR9 belong to the chip, not to a channel, and may be written through
