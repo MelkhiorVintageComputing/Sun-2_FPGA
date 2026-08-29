@@ -815,6 +815,38 @@ netboot investigation that had no fault in it: `seen_stall=0` says no bus cycle
 went unanswered, which exonerates the Wishbone bridge and DDR3 outright, and it
 was true while a memory-latency hypothesis was still being drafted.
 
+**The console holds 2048 bytes toward the host, and it had to.** The bridge
+used to hold exactly one byte, with a timeout before giving up on it. That is
+not enough elasticity for a console: the machine emits 960 bytes a second into
+the JTAG UART's 64-byte write FIFO, so a host that pauses for 67 ms leaves the
+bridge nowhere to put the next byte, and it overwrote the one it held -- a
+silent loss mid-line. Long output truncated and the shell looked hung until
+something made it print again.
+
+The timeout made it worse rather than bounding it: it was reset on every
+arrival, so during continuous output it could never expire. "Wait up to 84 ms
+then give up on this byte" became "wait for as long as the machine keeps
+talking", and the whole burst was lost rather than one byte of it.
+
+`FIFO_LOG2` is a parameter -- 11 on the board, 2.1 seconds of output for two
+M9K of 182; `tb_deca_console` instantiates 3 so eighty bytes overflow 64+8 and
+the drop path is still tested, because the depth is a size and the dropping is
+a mechanism. Dropping only when *that* fills keeps the property the single byte
+existed to provide, a machine with nobody listening is never held up, while
+making the case that actually happens cost nothing.
+
+**It also retired the 65-byte artefact.** Every board capture used to lose the
+banner after `Sun Workstation, Model Sun-2` because the 64-byte FIFO filled
+before `juart-terminal` attached. The banner now arrives whole -- `Sun
+Workstation, Model Sun-2/50 or Sun-2/160, Sun-2 keyboard`, `ROM Rev Q, 7MB
+memory installed`, `Serial #3442, Ethernet address 8:0:20:1:6:E0` -- because
+the queue holds it until someone listens. A workaround that had been documented
+twice turned out to be a missing buffer.
+
+Measured on the board at 16.667 MHz: `ls -la /usr/bin` returns all 12310 bytes
+complete and in order, and `/dhryr` prints both its lines and gives the prompt
+back without a keystroke.
+
 **The console is fixed, and the answer was TCK.** Host-to-machine used to swap
 adjacent bytes -- `abcdefghij` came back `cbedgfiij` -- while machine-to-host was
 byte-perfect. The bridge now runs on `MAX10_CLK1_50`, and a 48-character string

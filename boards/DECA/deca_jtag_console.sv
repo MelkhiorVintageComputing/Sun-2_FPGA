@@ -61,23 +61,30 @@
 //
 // ------------------------------------------------------------ flow control
 //
-// Toward the host a byte with no room is **dropped, not held**.  `tx' is a
-// wire; there is nowhere to push back to.  With no terminal attached the
-// 64-byte write FIFO fills and WSPACE stays 0 for ever, so blocking would wedge
-// the bridge permanently and the first bytes after a host attached would be
-// stale.  The SCC produces a byte every 1.04 ms and the FIFO drains in
-// microseconds once someone is listening, so dropping costs nothing.  Drops are
-// counted and the flag goes to an LED, because a console that silently loses
-// output is worse than one that says it did.
+// Toward the host the bridge queues 2048 bytes and drops only when that is
+// full -- 2.1 seconds of 9600-baud output, two M9K of the device's 182.  `tx'
+// is a wire with nowhere to push back to, so blocking is not an option and
+// something has to give eventually; the question is only how much slack there
+// is first.  One byte was not enough.  The machine emits 960 bytes a second
+// into a 64-byte JTAG FIFO, so a host that pauses for 67 ms leaves the bridge
+// with nowhere to put the next byte, and it then overwrote the one it held --
+// a silent loss mid-line, which is what truncated long output and left the
+// shell looking hung until something made it print again.
 //
 // Toward the machine the DATA read is issued only when the serialiser is idle,
-// so the JTAG UART's own 64-byte read FIFO *is* the flow control and nothing is
-// ever lost.
+// so the JTAG UART's own 64-byte read FIFO *is* the flow control and nothing
+// is ever lost.
 //
 `timescale 1ns / 1ps
 
 module deca_jtag_console #(
-    parameter int CLKS_PER_BIT = 512
+    parameter int CLKS_PER_BIT = 512,
+    // log2 of the host-bound queue, in bytes.  11 = 2048 = 2.1 seconds of
+    // 9600-baud output for two M9K.  A parameter so a testbench can ask for a
+    // small one and reach the full case in a reasonable number of cycles --
+    // the drop behaviour is a mechanism, not a size, and testing it at the
+    // shipping depth would mean simulating two seconds of serial line.
+    parameter int FIFO_LOG2   = 11
 ) (
     input  wire clk,            // clk_serial
     input  wire rst,            // active high
@@ -186,14 +193,53 @@ module deca_jtag_console #(
                     S_TXW2    = 3'd6;   // ... and to finish
 
    reg [2:0] state;
-   reg [7:0]  pending;      // the byte waiting to go to the host
-   reg        have_pending;
-   reg        wspace_ok;
-   // How long a byte may wait for room before it is abandoned.  ~84 ms at
-   // 12.5 MHz, which is eighty bytes at 9600 baud -- long enough that a host
-   // draining in bursts never costs a character, short enough that a machine
-   // with nobody listening is not held up.
-   reg [19:0] wait_ctr;
+   reg       wspace_ok;
+
+   // ------------------------------------------------- the host-bound FIFO
+   //
+   // This used to be a single byte and a timeout, and that is not enough
+   // elasticity for a console.  The machine emits 960 bytes a second and the
+   // JTAG UART's own write FIFO is 64 deep, so a host that drains in bursts
+   // only has to fall 67 ms behind for the bridge to have nowhere to put the
+   // next byte.  It then overwrote the byte it was holding, which is a silent
+   // loss in the middle of a line -- long output truncated and did not resume
+   // until something else made the shell print again.
+   //
+   // The timeout made it worse rather than bounding it.  It was reset on every
+   // arrival, so during continuous output it could never expire: the intended
+   // "wait up to 84 ms, then give up on this byte" became "wait for as long as
+   // the machine keeps talking", and every byte in the burst was dropped
+   // rather than one.
+   //
+   // 2048 bytes is 2.1 seconds of 9600-baud output and costs two M9K of the
+   // 182 on the device.  Dropping only when *that* is full keeps the property
+   // the single byte was there to provide -- a machine with nobody listening
+   // is never held up -- while making the case that actually happens, a host
+   // that pauses, cost nothing.  It also means the boot banner survives until
+   // a terminal attaches, instead of the first 65 bytes being all that is left
+   // of it.
+   localparam int FIFO_SIZE = (1 << FIFO_LOG2);
+
+   reg [7:0]            fifo [0:FIFO_SIZE-1];
+   reg [FIFO_LOG2:0]    wptr, rptr;
+   reg [7:0]            fifo_q;
+
+   wire [FIFO_LOG2:0]   fifo_used  = wptr - rptr;
+   wire                 fifo_empty = (wptr == rptr);
+   wire                 fifo_full  = (fifo_used == FIFO_SIZE[FIFO_LOG2:0]);
+
+   // Registered read, so it infers an M9K rather than 2048 bytes of logic.
+   // rptr only advances when a byte has been written to the host, and the FSM
+   // takes several clocks to get from there to the next S_GAP, so fifo_q is
+   // always settled by the time av_writedata is loaded from it.
+   always @(posedge clk) fifo_q <= fifo[rptr[FIFO_LOG2-1:0]];
+
+   // How long to wait before asking the JTAG UART about space again.  Polling
+   // it back to back at 50 MHz is thousands of Avalon transfers per byte of
+   // real output, for no gain: the machine produces one byte every millisecond,
+   // so a retry every few microseconds is already far faster than it needs to
+   // be, and it keeps the slave quiet while the host drains.
+   reg [7:0] backoff;
 
    assign ev_rx_valid = rx_valid;
    assign ev_tx_start = tx_start;
@@ -212,24 +258,23 @@ module deca_jtag_console #(
          av_read_n     <= 1'b1;
          av_write_n    <= 1'b1;
          av_address    <= 1'b0;
-         have_pending  <= 1'b0;
          wspace_ok     <= 1'b0;
-         wait_ctr      <= 20'd0;
+         wptr          <= '0;
+         rptr          <= '0;
+         backoff       <= 8'd0;
          dropped       <= 1'b0;
       end else begin
-         // The machine's output is latched the moment it appears, whatever the
-         // FSM is doing.  One byte of holding is enough: at 9600 baud the next
-         // one is 1.04 ms away and the longest FSM path is a handful of clocks.
-         if (have_pending) begin
-            if (wait_ctr != 20'hFFFFF) wait_ctr <= wait_ctr + 20'd1;
-         end else
-           wait_ctr <= 20'd0;
+         if (backoff != 8'd0) backoff <= backoff - 8'd1;
 
+         // The machine's output is queued the moment it appears, whatever the
+         // FSM is doing.  A byte is only lost if 2048 of them are already
+         // waiting, which means nobody has drained for two seconds.
          if (rx_valid) begin
-            if (have_pending) dropped <= 1'b1;
-            pending      <= rx_data;
-            have_pending <= 1'b1;
-            wait_ctr     <= 20'd0;
+            if (fifo_full) dropped <= 1'b1;
+            else begin
+               fifo[wptr[FIFO_LOG2-1:0]] <= rx_data;
+               wptr <= wptr + 1'b1;
+            end
          end
 
          case (state)
@@ -237,7 +282,7 @@ module deca_jtag_console #(
               av_chipselect <= 1'b0;
               av_read_n     <= 1'b1;
               av_write_n    <= 1'b1;
-              if (have_pending) begin
+              if (!fifo_empty && backoff == 8'd0) begin
                  av_address    <= 1'b1;      // CONTROL
                  av_chipselect <= 1'b1;
                  av_read_n     <= 1'b0;
@@ -269,24 +314,17 @@ module deca_jtag_console #(
                 if (av_readdata[22:16] != 7'd0) begin
                    wspace_ok <= 1'b1;
                    state     <= S_GAP;
-                end else if (wait_ctr == 20'hFFFFF) begin
-                   // Waited long enough.  Nobody is listening; drop it and say
-                   // so, because holding for ever would wedge the bridge and
-                   // the first bytes after a host attached would be stale.
-                   dropped      <= 1'b1;
-                   have_pending <= 1'b0;
-                   state        <= S_IDLE;
                 end else begin
-                   // No room *yet*.  Keep the byte and try again.
+                   // No room in the JTAG UART's own 64-byte FIFO yet.  Keep
+                   // the byte -- it is safe in ours -- and come back shortly.
                    //
-                   // The first version dropped here immediately, and that lost
-                   // 117 of a 320-character boot banner -- measured, and
-                   // byte-identical across two runs, which is what said it was
-                   // structural and not a race.  A 64-byte FIFO and a host that
-                   // drains in bursts is the normal case, not the exceptional
-                   // one: at 9600 baud the next byte is a millisecond away, so
-                   // waiting is nearly free and dropping is nearly total.
-                   state <= S_IDLE;
+                   // Nothing is given up on here any more.  The byte is only
+                   // lost if our 2048-deep FIFO fills behind it, which takes
+                   // two seconds of a host that is not draining, and that
+                   // decision belongs where the queue is rather than in a
+                   // timer that a busy machine keeps resetting.
+                   backoff <= 8'hFF;
+                   state   <= S_IDLE;
                 end
              end
 
@@ -294,7 +332,7 @@ module deca_jtag_console #(
            S_GAP: begin
               av_chipselect <= 1'b1;
               av_address    <= 1'b0;         // DATA
-              av_writedata  <= {24'h0, pending};
+              av_writedata  <= {24'h0, fifo_q};
               av_write_n    <= 1'b0;
               wspace_ok     <= 1'b0;
               state         <= S_WDAT;
@@ -304,7 +342,7 @@ module deca_jtag_console #(
              if (!av_waitrequest) begin
                 av_chipselect <= 1'b0;
                 av_write_n    <= 1'b1;
-                have_pending  <= 1'b0;
+                rptr          <= rptr + 1'b1;   // the byte is away; pop it
                 state         <= S_IDLE;
              end
 

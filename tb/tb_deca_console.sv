@@ -64,7 +64,11 @@ module tb_deca_console;
    wire [31:0] av_readdata;
    wire        av_waitrequest;
 
-   deca_jtag_console #(.CLKS_PER_BIT(CPB)) dut (
+   // An 8-byte queue, not the 2048 the board gets.  The drop path is a
+   // mechanism and the depth is a parameter precisely so this test can reach
+   // the full case in eighty bytes instead of simulating two seconds of
+   // serial line to push two thousand.
+   deca_jtag_console #(.CLKS_PER_BIT(CPB), .FIFO_LOG2(3)) dut (
        .clk (clk), .rst (rst),
        .sun_tx (mach_tx), .sun_rx (mach_rx),
        .dropped (con_dropped), .frame_err (con_frame_err),
@@ -151,7 +155,7 @@ module tb_deca_console;
       got.delete();
       for (n = 0; n < 80; n++) send_byte(8'h41);
       repeat (CPB * 4) @(posedge clk);
-      check("a full host FIFO sets `dropped'", con_dropped === 1'b1);
+      check("a queue that fills sets `dropped'", con_dropped === 1'b1);
 
       drain = 1'b1;
       repeat (CPB * 8) @(posedge clk);
