@@ -624,6 +624,45 @@ nothing else, which is the signature of something counted in clocks against
 something fixed in time. `C_S24` is twelve clocks; the DDR3 round trip is a
 fixed number of nanoseconds. That is the pair to look at.
 
+**There is a logic analyser on the DECA now, and its first capture exonerated
+the bus.** `rtl/sun2-common/sun2_trace.v` is a 256-sample circular buffer on the
+same 118-bit `dbg_bus` the Wukong's ILA taps, read out over In-System Sources
+and Probes by `tools/deca_trace.tcl`, fitted with `make -C syn quartus TRACE=1`.
+It is ordinary RTL rather than SignalTap because **SignalTap cannot be
+scripted** -- `quartus_stp`'s `::quartus::stp` runs an acquisition and offers
+nothing at all for creating one -- and being ordinary RTL means it is
+unit-tested (`make -C sim trace`, 22 checks, both mutations caught) before a
+bitstream is spent on it.
+
+Triggering on page 0xEE2800 at **FC 5** on a 13.889 MHz cold boot, the run that
+prints `Probing I/O bus: sd ie`, catches the probe itself:
+
+```
+ rel  A       FC AS RW DTACK BERR C_S4 C_S6 C_S8 C_S24 ps_pmap TIMEOUT ERR MATCH_MEM
+  +0  EE280C   5  0  1   1     1    0    0    0    0     FE6      0     0      0
+  +1  EE280C   5  0  1   1     1    1    0    0    0     EC8      0     0      0
+  +3  EE280C   5  0  1   1     1    1    1    1    0     EC8      0     0      0
+ +11  EE280C   5  0  1   1     1    1    1    1    1     ECA      0     0      0
+ +12  EE280C   5  0  1   1     0    1    1    1    1     ECA      1     1      0
+ +13  EE280C   5  1  1   1     1    1    1    1    1     ECA      1     1      0
+```
+
+**That is a perfect timeout.** The page is VALID, `PROTERR` is clear,
+`MATCH_MEM` is 0 so the memory exemption correctly does not apply, DTACK never
+asserts, `C_S24` fires 11 clocks after `AS`, and `BERR` is asserted on the next
+one with `TIMEOUT` and `ERR` both set. The MMU, the device decode, the `C_S`
+chain and the bus timeout are all doing exactly the right thing at the
+frequency that fails.
+
+**So the fault is above the bus, not on it.** `sdprobe`
+(`rsun/sys/sunstand/sd.c`) reports a controller present only if
+`peek(&har->dma_count)` does *not* return -1; the hardware raises the bus error
+that should make it return -1, and the machine still prints `sd`. That moves the
+search to bus-error *delivery and recovery* -- the exception frame, the restart,
+and the bus error register -- and away from everything this file spent four
+builds suspecting. Note also `Boot: sd(2,0,0)`: `sdprobe` can only ever return 0
+or 1, so the controller number the PROM ends up with did not come from it.
+
 So the next move is not another frequency. It is SignalTap on the `C_S` chain
 and the DTACK terms at the SCSI probe address -- the DECA's equivalent of the
 ILA that found the Wukong's frame-buffer timeout race, which was this same
