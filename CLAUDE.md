@@ -671,6 +671,44 @@ in the act. The MMU, the device decode, the `C_S`
 chain and the bus timeout are all doing exactly the right thing at the
 frequency that fails.
 
+**And the trace then found it: an array bound that fails to stop the loop.**
+`sdprobe` walks `sdstd[] = { 0xEE2800, 0xF84000, 0 }` for `i < 2`. Both real
+entries probe correctly -- 0xEE280C and 0xF8400C each time out, each raises a
+textbook 68010 bus error, and the handler returns -1 both times, all visible in
+the capture. Then, with `i` just written to memory as **2**:
+
+```
+ +455  000F28 FC5 WR 0002        i = 2
+ +482  EF5682 FC6 RD 6C44        bges 0xEF56C8   (the loop exit)
+ +508  EF5684 ...                ... and execution continues HERE
+ +585  EF7944 FC5 RD             sdstd[2] -- the terminator, 0x00000000
+ +681  000F24 FC5 WR 000C        peek(0x0000000C)
+```
+
+**`cmpi.l #2` against an `i` of 2 did not take its `bge`.** The loop runs a
+third time, indexes one past the end of the table, reads the terminating zero,
+adds `dma_count`'s offset of 12, and probes **address 0x0C** -- which is low
+RAM, so it reads, it takes `0x6789`, it reads `0x6789` back, and `sdprobe`
+returns **2**.
+
+That is the whole failure, and it explains the thing that made no sense:
+`Boot: sd(2,0,0)`. `sdprobe` can only ever return 0, 1 or -1, so a controller
+number of 2 was impossible -- unless the loop ran with `i` = 2, which is exactly
+what it did. `Probing I/O bus: sd ie` is the same wrong verdict one call
+earlier, and the `scsi: timeout` / `cannot select` that follow are the driver
+talking to address 0x0C.
+
+**Two candidates remain for the wrong branch and they are cleanly separable.**
+`cmpi.l #2,%fp@(-8)` is a *longword* read, two bus cycles, and this project has
+history there: RD68011's fixed bug was a longword read losing its first half
+across a bus grant. Either the core's condition codes are wrong for that
+compare, or the compare read a stale `i` -- note the index computation a few
+instructions later read the same location and got 2, which is what makes the
+stale-read case interesting rather than obvious. Reading the value the CPU
+actually latched needs care: `dbg_data` lags by one *memory* transaction and
+PROM fetches do not go through the bridge, so the shift cannot be applied
+naively across a mixed sequence.
+
 **So the fault is above the bus, not on it.** `sdprobe`
 (`rsun/sys/sunstand/sd.c`) reports a controller present only if
 `peek(&har->dma_count)` does *not* return -1; the hardware raises the bus error

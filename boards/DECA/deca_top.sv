@@ -517,26 +517,41 @@ module deca_top #(
    // and 17 ps of hold margin in a build with no ILA in it, and the same
    // argument applies here with a 30 kbit buffer attached to it.
    // ------------------------------------------------------------------
+   // 1024 samples, not 256.  A 68010 bus-error frame is 29 words and each push
+   // is nine clocks, so the whole exception is about 260 clocks -- and the
+   // words that matter (status register, PC, format/vector, special status
+   // word, fault address) are pushed *last*, at the bottom of the frame.  A
+   // 256-sample buffer catches the top of the frame and stops exactly before
+   // the interesting part, which is how the first capture of it read.
+   localparam TRC_DEPTH_LOG2 = 10;
+   localparam TRC_POST       = 960;
+
    wire [117:0] trc_rd_data;
-   wire [7:0]   trc_wr_ptr;
+   wire [TRC_DEPTH_LOG2-1:0] trc_wr_ptr;
    wire         trc_triggered, trc_done;
-   wire [26:0]  trc_src;
+   wire [29:0]  trc_src;
 
    // The source carries the whole instrument's controls, not just a read
    // address:
    //
-   //   [7:0]   sample index          [8]     which half of the 118 bits
-   //   [21:9]  trigger page          [22]    hold (clears and holds the capture)
-   //   [25:23] trigger function code [26]    qualify on it
+   //   [9:0]   sample index          [11:10] which word: 0 low, 1 high, 2 status
+   //   [24:12] trigger page          [25]    hold (clears and holds the capture)
+   //   [28:26] trigger function code [29]    qualify on it
+   //
+   // The status word carries DEPTH_LOG2 and POST as well as the pointer, so the
+   // reader never has to be told the buffer's shape.  The first version had
+   // them as constants in the Tcl, which is two places for one fact and the
+   // sort of drift that makes a capture silently point at the wrong sample.
    //
    // `hold' rather than `arm' so that a source of all zeros -- which is what a
    // freshly configured device has, and what a boot with nobody attached runs
    // with -- means *running, on the page the bitstream was built with*.  An
    // arm-high polarity would have made every unattended capture empty.
-   wire [12:0] trc_page = (trc_src[21:9] != 13'd0) ? trc_src[21:9]
-                                                   : TRACE_PAGE[12:0];
+   wire [12:0] trc_page = (trc_src[24:12] != 13'd0) ? trc_src[24:12]
+                                                    : TRACE_PAGE[12:0];
 
-   sun2_trace #(.WIDTH(118), .DEPTH_LOG2(8), .POST(TRACE_POST)) u_trace (
+   sun2_trace #(.WIDTH(118), .DEPTH_LOG2(TRC_DEPTH_LOG2),
+                .POST(TRC_POST)) u_trace (
        .clk       (cpu_clk),
        .rst       (board_reset),
        .dbg_bus   (dbg_bus),
@@ -547,10 +562,10 @@ module deca_top #(
        // source and the probe happens before any host can write one.  A JTAG
        // reset is no substitute: it is a warm reset, and the PROM's
        // non-power-up path skips the device probes entirely.
-       .trig_fc   (trc_src[26] ? trc_src[25:23] : TRACE_FC[2:0]),
-       .trig_fc_en(trc_src[26] | (TRACE_FC_EN != 0)),
-       .arm       (~trc_src[22]),
-       .rd_addr   (trc_src[7:0]),
+       .trig_fc   (trc_src[29] ? trc_src[28:26] : TRACE_FC[2:0]),
+       .trig_fc_en(trc_src[29] | (TRACE_FC_EN != 0)),
+       .arm       (~trc_src[25]),
+       .rd_addr   (trc_src[9:0]),
        .rd_data   (trc_rd_data),
        .wr_ptr    (trc_wr_ptr),
        .triggered (trc_triggered),
@@ -564,14 +579,15 @@ module deca_top #(
        .sld_auto_instance_index ("YES"),
        .instance_id             ("TRAC"),
        .probe_width             (64),
-       .source_width            (27),
+       .source_width            (30),
        .source_initial_value    ("0"),
        .enable_metastability    ("YES")
    ) u_trace_issp (
        .source_clk (cpu_clk),
-       .probe  (trc_src[8] ? {trc_done, trc_triggered, trc_wr_ptr,
-                              trc_rd_data[117:64]}
-                           : trc_rd_data[63:0]),
+       .probe  ((trc_src[11:10] == 2'd0) ? trc_rd_data[63:0]
+              : (trc_src[11:10] == 2'd1) ? {10'd0, trc_rd_data[117:64]}
+              : {trc_done, trc_triggered, trc_wr_ptr,
+                 TRC_DEPTH_LOG2[3:0], TRC_POST[15:0], 32'd0}),
        .source (trc_src)
    );
 `endif

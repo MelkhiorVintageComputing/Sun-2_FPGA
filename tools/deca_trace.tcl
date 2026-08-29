@@ -12,9 +12,13 @@
 # Build the bitstream with TRACE=1; without it the instance is absent and this
 # says so rather than printing an empty capture.
 #
-#   source[7:0]  sample index      source[8]   which half of the 118 bits
-#   source[21:9] trigger page      source[22]  hold (clears and holds capture)
-#   source[25:23] trigger FC       source[26]  qualify on it
+#   source[9:0]   sample index     source[11:10] word: 0 low, 1 high, 2 status
+#   source[24:12] trigger page     source[25]    hold (clears and holds capture)
+#   source[28:26] trigger FC       source[29]    qualify on it
+#
+# The buffer's depth and post-trigger count come out of the status word rather
+# than being constants here: two places for one fact is how a reader ends up
+# pointing confidently at the wrong sample.
 #   probe        low half, or {done, triggered, wr_ptr[7:0], high 54 bits}
 #
 # Pass a page to retarget and re-arm:
@@ -72,34 +76,35 @@ if {$idx < 0} {
 
 start_insystem_source_probe -device_name $dv -hardware_name $hw
 
-set DEPTH 256
-set POST  192
-
 # Retarget and re-arm, if asked.  Hold clears the capture; releasing it starts
 # a fresh one on the new page.
 set page 0
 set fcbits 0
 if {[llength $argv] > 1} {
-    set fcbits [expr {(1 << 26) | ([lindex $argv 1] << 23)}]
+    set fcbits [expr {(1 << 29) | ([lindex $argv 1] << 26)}]
 }
 if {[llength $argv] > 0} {
     set page [expr {[lindex $argv 0]}]
-    wsrc $idx [expr {(1 << 22) | ($page << 9) | $fcbits}]
+    wsrc $idx [expr {(1 << 25) | ($page << 12) | $fcbits}]
     after 100
-    wsrc $idx [expr {($page << 9) | $fcbits}]
+    wsrc $idx [expr {($page << 12) | $fcbits}]
     puts [format "# re-armed on page A\[23:11\]=0x%04X (addresses 0x%06X..0x%06X)" \
             $page [expr {$page << 11}] [expr {($page << 11) + 0x7FF}]]
     puts "# the buffer is now empty; the machine must reach that page again."
 }
-set base [expr {($page << 9) | $fcbits}]
+set base [expr {($page << 12) | $fcbits}]
 
-# Status first.  It rides in the high half, so any address will do.
-wsrc $idx [expr {$base | (1 << 8)}]
+# Status word (word 2), which also tells us the buffer's shape.
+wsrc $idx [expr {$base | (2 << 10)}]
 after 5
-set hi [read_probe_data -instance_index $idx]
-set done      [fld $hi 64 63 63]
-set triggered [fld $hi 64 62 62]
-set wrptr     [fld $hi 64 61 54]
+set st [read_probe_data -instance_index $idx]
+set done      [fld $st 64 63 63]
+set triggered [fld $st 64 62 62]
+set wrptr     [fld $st 64 61 52]
+set dl2       [fld $st 64 51 48]
+set POST      [fld $st 64 47 32]
+set DEPTH     [expr {1 << $dl2}]
+puts "# buffer $DEPTH samples, POST $POST"
 
 puts "# triggered=$done/$triggered wr_ptr=$wrptr"
 if {!$triggered} {
@@ -119,7 +124,7 @@ for {set i 0} {$i < $DEPTH} {incr i} {
     wsrc $idx [expr {$base | $a}]
     after 2
     set lo [read_probe_data -instance_index $idx]
-    wsrc $idx [expr {$base | (1 << 8) | $a}]
+    wsrc $idx [expr {$base | (1 << 10) | $a}]
     after 2
     set hi [read_probe_data -instance_index $idx]
 
