@@ -1,0 +1,135 @@
+`timescale 1ns / 1ps
+//
+// sun2_trace: does the trigger fire where it should, and does the circular
+// buffer unwrap to the sequence that went in?
+//
+// Both halves matter and only one of them is obvious.  A recorder that
+// triggers correctly and hands back its samples rotated is worse than no
+// recorder, because the capture still looks plausible -- this project has
+// already read four versions of a memory checker that reported confident
+// nonsense, and the thing that caught each was a known-good expectation.  So
+// every sample carries a serial number in its low bits and the test checks the
+// whole sequence, not just the trigger.
+//
+module tb_sun2_trace;
+
+   localparam WIDTH = 118, DL2 = 4, DEPTH = 1 << DL2, POST = 8;
+   // Samples before the trigger sample = DEPTH - POST - 1.
+   localparam PRE = DEPTH - POST - 1;
+   localparam [12:0] PAGE = 13'h1DC5;
+
+   reg clk = 0, rst = 1;
+   always #5 clk = ~clk;
+
+   reg  [WIDTH-1:0] bus;
+   reg  [DL2-1:0]   rd_addr = 0;
+   wire [WIDTH-1:0] rd_data;
+   wire [DL2-1:0]   wr_ptr;
+   wire             triggered, done;
+
+   sun2_trace #(.WIDTH(WIDTH), .DEPTH_LOG2(DL2), .POST(POST))
+   dut (.clk(clk), .rst(rst), .dbg_bus(bus),
+	.trig_page(PAGE), .arm(1'b1), .rd_addr(rd_addr),
+	.rd_data(rd_data), .wr_ptr(wr_ptr), .triggered(triggered), .done(done));
+
+   integer checks = 0, fails = 0;
+   task ck(input cond, input [511:0] name);
+      begin
+	 checks = checks + 1;
+	 if (!cond) begin fails = fails + 1; $display("FAIL: %0s", name); end
+	 else $display("  ok: %0s", name);
+      end
+   endtask
+
+   // A dbg_bus word: AS_n at 47, A[23:11] at 73:61, a serial number in 15:0.
+   function [WIDTH-1:0] mk(input as_n, input [12:0] page, input [15:0] serial);
+      begin
+	 mk = {WIDTH{1'b0}};
+	 mk[47]    = as_n;
+	 mk[73:61] = page;
+	 mk[15:0]  = serial;
+      end
+   endfunction
+
+   integer i, idx, n;
+   reg [15:0] got, want;
+   integer trig_at;
+
+   // What was driven, in order.  Recording it beats recomputing it: the first
+   // version of this test derived the expected serials in closed form, got the
+   // arithmetic wrong in two places, and reported seventeen failures against a
+   // recorder that was very nearly right.  An expectation you can get wrong
+   // independently of the thing under test is not much of an expectation.
+   reg [15:0] drove [0:255];
+   reg        was_done;
+
+   // Driven on the falling edge, sampled on the rising one.  Assigning `bus'
+   // immediately after @(posedge clk) puts the assignment at the same
+   // simulation time as the edge the DUT samples on, which is a race: the
+   // recorder saw each value one clock later than this task recorded it, and
+   // the capture then looked shifted by one when it was exactly right.  A
+   // testbench that changes stimulus on the active edge is testing the
+   // scheduler.
+   task drive(input as_n, input [12:0] page, input [15:0] serial);
+      begin
+	 @(negedge clk);
+	 bus = mk(as_n, page, serial);
+	 // Whether this sample gets written is decided by done_q *before* the
+	 // edge, not after it: the last write and the setting of done happen on
+	 // the same edge, so reading done afterwards drops exactly one sample --
+	 // the most interesting one.
+	 was_done = done;
+	 @(posedge clk);
+	 // Settle before anyone reads triggered/done.  They are assigned
+	 // non-blockingly on this edge, so reading them in the same instant is
+	 // the same race in miniature -- and it costs no clock, because the
+	 // next drive waits for the falling edge.
+	 #1;
+	 if (!was_done) begin drove[n] = serial; n = n + 1; end
+      end
+   endtask
+
+   initial begin
+      n = 0;
+      bus = mk(1'b1, 13'h0000, 16'd0);
+      repeat (4) @(posedge clk);
+      rst = 0;
+      @(posedge clk);
+
+      trig_at = 100;
+      for (i = 0; i < 40; i = i + 1) drive(1'b0, 13'h0123, i[15:0]);
+
+      // The right page but AS *high* must not trigger -- the bus is idle and
+      // the address lines mean nothing.  This is the check a bare address
+      // compare would fail.
+      drive(1'b1, PAGE, 16'd99);
+      ck(!triggered, "an idle bus on the trigger page does not trigger");
+
+      drive(1'b0, PAGE, trig_at[15:0]);
+      ck(triggered, "AS low on the trigger page triggers");
+
+      for (i = 0; i < 40; i = i + 1) drive(1'b0, 13'h0456, 16'd200 + i[15:0]);
+      ck(done, "capture stops after POST more samples");
+      ck(n == 40 + 1 + 1 + POST, "exactly POST samples written after the trigger");
+
+      // Nothing may be written after done.
+      for (i = 0; i < 20; i = i + 1) drive(1'b0, 13'h1FFF, 16'hDEAD);
+
+      // Unwrap: the oldest sample is the one wr_ptr points at.
+      for (i = 0; i < DEPTH; i = i + 1) begin
+	 idx = (wr_ptr + i) % DEPTH;
+	 rd_addr = idx[DL2-1:0];
+	 @(posedge clk); @(posedge clk);
+	 got  = rd_data[15:0];
+	 want = drove[n - DEPTH + i];
+	 if (got !== want)
+	   $display("     sample %0d: got %0d want %0d", i, got, want);
+	 ck(got === want, "sample in order");
+	 if (i == PRE) ck(got == trig_at, "the trigger sample sits at DEPTH-POST-1");
+      end
+
+      $display("=== %0d checks, %0d failed ===", checks, fails);
+      if (fails == 0) $display("PASS"); else $display("FAIL");
+      $finish;
+   end
+endmodule

@@ -46,6 +46,8 @@ array set opt {
     -cpu_hz    12500000
     -cpu_div   0
     -cpu_duty  50
+    -trace     0
+    -trace_page 0
     -eth5      224
     -eram      1
     -jobs      8
@@ -104,6 +106,15 @@ if {$opt(-cpu_div) != 0} {
 
 lappend defines MEM_PAGES=$opt(-mem_pages)
 lappend defines SUN2_QUARTUS
+# The trace recorder taps dbg_bus, which only exists under SUN2_ILA -- so
+# asking for one implies the other.  Making the caller pass both would be one
+# more way to build a bitstream with the instrument silently absent, which is
+# the failure mode this project has recorded three times over.
+if {$opt(-trace) != 0} {
+    lappend defines SUN2_ILA
+    lappend defines SUN2_TRACE
+    puts "== trace recorder fitted, trigger page A\[23:11\] = [format 0x%04X $opt(-trace_page)] =="
+}
 if {$opt(-eth5) != 224} { lappend defines SUN2_IDPROM_ETH5=$opt(-eth5) }
 if {$opt(-cpu) eq "rd68011"} { lappend defines SUN2_CPU_RD68011 }
 
@@ -169,6 +180,9 @@ if {$opt(-topent) ne "top"} {
     set_parameter -name CPU_CLK_HZ $opt(-cpu_hz)
     set_parameter -name CPU_DIV    $opt(-cpu_div)
     set_parameter -name CPU_DUTY   $opt(-cpu_duty)
+    if {$opt(-trace_page) != 0} {
+        set_parameter -name TRACE_PAGE $opt(-trace_page)
+    }
 }
 set_global_assignment -name NUM_PARALLEL_PROCESSORS $opt(-jobs)
 
@@ -225,6 +239,7 @@ set v2001 [list \
     $top/rtl/sun2-common/top_fpga.v \
     $top/rtl/sun2-common/sun2_fpga.v \
     $top/rtl/sun2-common/sun2_mmu.v \
+    $top/rtl/sun2-common/sun2_trace.v \
     $top/rtl/sun2-common/ctx_reg.v \
     $top/rtl/sun2-common/pmap.v \
     $top/rtl/sun2-common/smap.v \

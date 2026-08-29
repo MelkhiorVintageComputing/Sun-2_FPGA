@@ -46,7 +46,12 @@ module deca_top #(
     // logic for exactly that reason.
     parameter int CPU_CLK_HZ = 12_500_000,
     parameter int CPU_DIV    = 0,
-    parameter int CPU_DUTY   = 50
+    parameter int CPU_DUTY   = 50,
+    // The trace recorder's trigger, as A[23:11] -- the 2 KiB page a bus cycle
+    // is on.  0x1DC5 is 0xEE2800, the Sun-2/50's SCSI registers, which is what
+    // sdprobe touches and what stops raising a bus error above 12.5 MHz.
+    parameter int TRACE_PAGE = 'h1DC5,
+    parameter int TRACE_POST = 192
 ) (
     input  wire        MAX10_CLK1_50,   // PIN_M8,  2.5 V
     input  wire [1:0]  KEY,             // H21 H22, 1.5 V Schmitt, active low
@@ -214,6 +219,9 @@ module deca_top #(
    wire        phy_present, phy_cfg_done, phy_link, phy_fd;
    wire [1:0]  phy_speed;
    wire        ev_rx_valid, ev_wr_data, ev_rd_valid, ev_tx_start;
+`ifdef SUN2_ILA
+   wire [117:0] dbg_bus;
+`endif
 
    top machine (
        .cpu_clk        (cpu_clk),
@@ -229,7 +237,7 @@ module deca_top #(
        .en_boot        (en_boot),
        .todebug        (todebug),
 `ifdef SUN2_ILA
-       .dbg_bus        (),
+       .dbg_bus        (dbg_bus),
 `endif
        .eth_crs_stuck  (eth_crs_stuck),
        .fb_video_en    (fb_video_en),
@@ -488,6 +496,71 @@ module deca_top #(
                  n_wr[7:0], n_rd[7:0], n_rx[7:0], n_tx[7:0]}),
        .source (jtag_reset)
    );
+
+`ifdef SUN2_TRACE
+   // ------------------------------------------------------------------
+   // The MMU trace recorder, read out over JTAG.
+   //
+   // The Wukong has an ILA on exactly this bus and the DECA cannot: SignalTap
+   // is a GUI artefact, `quartus_stp' will run an acquisition but will not
+   // create one, and this project's flow is scripted end to end.  So the
+   // buffer is plain RTL -- see rtl/sun2-common/sun2_trace.v -- and comes out
+   // through In-System Sources and Probes, which tools/deca_reset.tcl already
+   // uses and tools/deca_trace.tcl decodes.
+   //
+   // Fitted only under TRACE=1.  The bare dbg_bus port cost the Wukong 8 LUTs
+   // and 17 ps of hold margin in a build with no ILA in it, and the same
+   // argument applies here with a 30 kbit buffer attached to it.
+   // ------------------------------------------------------------------
+   wire [117:0] trc_rd_data;
+   wire [7:0]   trc_wr_ptr;
+   wire         trc_triggered, trc_done;
+   wire [22:0]  trc_src;
+
+   // The source carries the whole instrument's controls, not just a read
+   // address:
+   //
+   //   [7:0]   sample index          [8]     which half of the 118 bits
+   //   [21:9]  trigger page          [22]    hold (clears and holds the capture)
+   //
+   // `hold' rather than `arm' so that a source of all zeros -- which is what a
+   // freshly configured device has, and what a boot with nobody attached runs
+   // with -- means *running, on the page the bitstream was built with*.  An
+   // arm-high polarity would have made every unattended capture empty.
+   wire [12:0] trc_page = (trc_src[21:9] != 13'd0) ? trc_src[21:9]
+                                                   : TRACE_PAGE[12:0];
+
+   sun2_trace #(.WIDTH(118), .DEPTH_LOG2(8), .POST(TRACE_POST)) u_trace (
+       .clk       (cpu_clk),
+       .rst       (board_reset),
+       .dbg_bus   (dbg_bus),
+       .trig_page (trc_page),
+       .arm       (~trc_src[22]),
+       .rd_addr   (trc_src[7:0]),
+       .rd_data   (trc_rd_data),
+       .wr_ptr    (trc_wr_ptr),
+       .triggered (trc_triggered),
+       .done      (trc_done));
+
+   // 118 bits does not fit a 64-bit probe, so the source's top bit picks the
+   // half.  The status rides in the high half rather than in a third read,
+   // because a reader that has to issue three transfers per sample to learn
+   // whether the capture even finished will issue them 256 times.
+   altsource_probe #(
+       .sld_auto_instance_index ("YES"),
+       .instance_id             ("TRAC"),
+       .probe_width             (64),
+       .source_width            (23),
+       .source_initial_value    ("0"),
+       .enable_metastability    ("YES")
+   ) u_trace_issp (
+       .source_clk (cpu_clk),
+       .probe  (trc_src[8] ? {trc_done, trc_triggered, trc_wr_ptr,
+                              trc_rd_data[117:64]}
+                           : trc_rd_data[63:0]),
+       .source (trc_src)
+   );
+`endif
 
    // ------------------------------------------------------------------
    // Board outputs
