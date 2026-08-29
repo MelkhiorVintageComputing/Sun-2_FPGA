@@ -587,6 +587,43 @@ each was plausible enough to spend a build on:
   with both cleared when `MATCH_ANY` drops, so a late ack cannot acknowledge a
   device cycle. Read the RTL rather than rebuilding.
 
+**The duty cycle is a knob now, and it buys margin but not frequency.** Both
+worst paths are half-period ones and they are *not equal* -- at 16.667 MHz
+rising-to-falling needs 27.96 ns and falling-to-rising 25.35 ns, and a 50/50
+clock hands both 30 ns. `clk0_duty_cycle` was hardcoded to 50 in
+`deca_clkgen.sv`; it is `CPU_DUTY` now, so `make -C syn quartus CPU_DUTY=53`
+splits the period the way the paths want it. The duty is the C counter's high
+count, so the achievable values are k/N and ALTPLL rounds -- 53 lands on 17/32
+at 15.625 MHz and 19/36 at 13.889 -- and `derive_pll_clocks` reads it back, so
+STA re-times both halves against the real waveform:
+
+```
+                     R->F     F->R    worst
+  15.625  50/50     2.504    6.380   2.504
+  15.625  53/47     3.968    5.545   3.968     +58%
+  13.889  50/50     4.883    8.524   4.883
+  13.889  53/47     7.533    8.266   7.533     +54%
+```
+
+Free -- no logic, no area, no frequency change. **What it cannot do is raise
+the ceiling**, because the two halves share one period: the constraint is their
+*sum*, 53.3 ns at best, which caps cpu_clk near 18.8 MHz however it is split.
+
+**And the experiment split the problem in two, which is the useful part.** At
+15.625 MHz the better split visibly helped -- one run of three got past the
+third-stage loader's ID PROM check, `Downloaded 120936 bytes`, its own RARP and
+`hostname: sun2_f_m`, where 50/50 never did -- so *that* failure really was the
+half-period path, and it moved from deterministic to intermittent, which is
+what running near a real timing edge looks like.
+
+**The spurious `sd` probe did not move at all.** 13.889 MHz at 53/47 has 7.533
+ns on a 38 ns half period -- 19.8%, the same proportion 12.5 MHz has at 50/50
+(8.147 on 40, 20.4%) -- and it still finds a SCSI controller that does not
+exist. So it is not a timing-margin fault: it tracks *absolute frequency* and
+nothing else, which is the signature of something counted in clocks against
+something fixed in time. `C_S24` is twelve clocks; the DDR3 round trip is a
+fixed number of nanoseconds. That is the pair to look at.
+
 So the next move is not another frequency. It is SignalTap on the `C_S` chain
 and the DTACK terms at the SCSI probe address -- the DECA's equivalent of the
 ILA that found the Wukong's frame-buffer timeout race, which was this same
