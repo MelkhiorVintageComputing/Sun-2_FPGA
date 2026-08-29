@@ -508,7 +508,45 @@ The claim held, but not for free: a second front-end found three defects in
 shared RTL that had survived the life of the project, each of which Vivado
 tolerates silently. They are in the traps section below.
 
-**12.5 MHz is the ceiling, the cause is a half-period path inside the CPU
+**The ceiling was a stale read cache in the DDR3 controller, and with it gone
+the DECA netboots SunOS to a login prompt at 17.857 MHz -- 43% faster than the
+12.5 MHz this file called the ceiling.**
+
+| clock | duty | what happens |
+|---|---|---|
+| 13.889 MHz (VCO/72) | 50/50 | full boot, `rc`, daemons |
+| 16.667 MHz (VCO/60) | 50/50 | full boot to `sun2_f_m login:` |
+| 17.857 MHz (VCO/56) | 50/50 | correct `Boot: ie(0,0,0)`, then `can't open ethernet` |
+| 17.857 MHz (VCO/56) | **53/47** | **full boot to `sun2_f_m login:`** |
+
+Two independent fixes, and the order matters. The cache was the bug; the duty
+cycle is the remaining *limit*. With the cache still in, splitting the period
+correctly bought margin and no frequency, because the thing failing was not
+timing. With the cache out, the half-period path in the CPU core becomes the
+real limit and the same knob turns a clock that fails into one that boots --
+which is the experiment that finally tells the two apart. Everything below in
+this section was measured honestly and interpreted wrongly: the failures above
+12.5 MHz were never timing. `boards/DECA/deca_top.sv` now sets
+`PORT_W_CACHE_TOUT`, `PORT_R_CACHE_TOUT` and `PORT_CACHE_SMART` to zero on
+BrianHG's controller, and `Probing I/O bus: sd ie` becomes `ie`, `Boot:
+sd(2,0,0)` becomes `Boot: ie(0,0,0)`, and the machine boots.
+
+`sun2_trace` caught the fault directly: the PROM's `sdprobe` wrote 2 to its loop
+counter at 0x000F28, and the `cmpi.l #2` forty-seven clocks later read the same
+address back as **1**, with a read forty-one clocks after that returning 2. So
+the bound check failed, the loop indexed one past the end of `sdstd[]`, read the
+terminating zero, added `dma_count`'s offset of 12 and probed **address 0x0C** --
+low RAM, which reads, stores 0x6789 and reads it back. That is where the
+impossible `sd(2,0,0)` came from.
+
+**Why it looked like a clock problem.** A cache whose freshness is a timeout
+counted in *clocks*, against a CPU whose access spacing is also fixed in clocks,
+gives a fault that is frequency-dependent, deterministic and insensitive to
+placement -- which is every property this section recorded and could not
+account for. The half-period path below is real and is now the actual limit;
+it simply was not what was failing.
+
+**12.5 MHz was the ceiling, the limit is a half-period path inside the CPU
 core, and every cheaper explanation was measured and rejected.** The knob to
 ask the question with did not exist until recently -- `-cpu_hz` reached no
 parameter in the Quartus flow, so every DECA build ran at `deca_top`'s default
