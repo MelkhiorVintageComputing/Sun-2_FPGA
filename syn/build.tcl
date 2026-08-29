@@ -38,6 +38,7 @@ set fbprobe  0
 set fbforce  0
 set eth5     224
 set cpu_div  0
+set mb_3c400 0
 if {[llength $argv] > 0} { set cpu_hz   [lindex $argv 0] }
 if {[llength $argv] > 1} { set machine  [lindex $argv 1] }
 if {[llength $argv] > 2} { set mb_ether [lindex $argv 2] }
@@ -53,6 +54,7 @@ if {[llength $argv] > 11} { set fbprobe [lindex $argv 11] }
 if {[llength $argv] > 12} { set fbforce [lindex $argv 12] }
 if {[llength $argv] > 13} { set eth5    [lindex $argv 13] }
 if {[llength $argv] > 14} { set cpu_div [lindex $argv 14] }
+if {[llength $argv] > 15} { set mb_3c400 [lindex $argv 15] }
 
 # CPU_DIV names the MMCM divider directly and wins over CPU_HZ in
 # wukong_clkgen.sv:63, so from here on cpu_hz has to mean the clock that will
@@ -137,6 +139,20 @@ if {$mb_ether == 1} {
         exit 1
     }
     lappend defines SUN2_MB_ETHER
+}
+
+# The other MultiBus Ethernet.  Mutually exclusive with the Sun card: one card
+# cage, one MII port, and top_fpga.v's two arms both drive mii_txd.
+if {$mb_3c400 == 1} {
+    if {$machine ne "multibus"} {
+        puts "ERROR: MB_3C400 is MultiBus only: a 2/50 has its Ethernet on board"
+        exit 1
+    }
+    if {$mb_ether == 1} {
+        puts "ERROR: MB_ETHER and MB_3C400 are mutually exclusive: one card cage, one MII port"
+        exit 1
+    }
+    lappend defines SUN2_MB_3C400
 }
 
 # Both machines have a frame buffer; they differ only in where it decodes.  On
@@ -261,7 +277,7 @@ set ipdir   $top/build/ip/$board
 # -- make reported one path while Vivado wrote to another, quietly overwriting
 # the bitstream the new knob existed to leave alone.  Add to both, or to
 # neither.
-set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu$cputag[expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$fbdebug == 1 ? "-fbdbg" : ""}][expr {$fbprobe == 1 ? "-fbprobe" : ""}][expr {$fbforce == 1 ? "-fbforce" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}]
+set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$mb_3c400 == 1 ? "-3c400" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu$cputag[expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$fbdebug == 1 ? "-fbdbg" : ""}][expr {$fbprobe == 1 ? "-fbprobe" : ""}][expr {$fbforce == 1 ? "-fbforce" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir
@@ -374,6 +390,7 @@ read_verilog -sv [list \
     $top/build/inputs/Wish82586/src/wb_mdio.sv \
     $top/rtl/sun2-vme/sun2_ethernet.sv \
     $top/rtl/sun2-multibus/sun2_mb_ether.sv \
+    $top/rtl/sun2-multibus/sun2_mb_3c400.sv \
     $top/rtl/sun2-multibus/sun2_xy450.sv \
     $top/build/inputs/Wish5380/src/wish5380_pkg.sv \
     $top/build/inputs/Wish5380/src/sd_spi.sv \

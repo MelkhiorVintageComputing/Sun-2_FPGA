@@ -50,6 +50,8 @@ array set opt {
     -trace_page 0
     -trace_fc  5
     -xy450     0
+    -mb_ether  0
+    -mb_3c400  0
     -eth5      224
     -eram      1
     -jobs      8
@@ -89,8 +91,35 @@ switch -- $opt(-machine) {
 # not enforced on this path.  The ones that matter are repeated here as Tcl,
 # where they are enforced.  This is the same job build.tcl:133-189 does for
 # Vivado, and arguably where the checks belonged in the first place.
+#
+# The two MultiBus Ethernet cards.  Neither was plumbed into this flow before:
+# there was no -mb_ether option, SUN2_MB_ETHER was never appended, and the
+# guard below therefore tested a define nothing could set.  It could not fire.
+# Adding both knobs together is the point -- one alone is exactly the drift
+# build.tcl:264 warns about.
+#
+if {$opt(-mb_ether) != 0} { lappend defines SUN2_MB_ETHER }
+if {$opt(-mb_3c400) != 0} { lappend defines SUN2_MB_3C400 }
+
 if {$opt(-machine) ne "multibus" && [lsearch $defines SUN2_MB_ETHER] >= 0} {
     puts "ERROR: the MultiBus Ethernet card only exists on a 2/120"
+    exit 1
+}
+if {$opt(-machine) ne "multibus" && [lsearch $defines SUN2_MB_3C400] >= 0} {
+    puts "ERROR: the 3Com 3C400 only exists on a 2/120"
+    exit 1
+}
+if {[lsearch $defines SUN2_MB_ETHER] >= 0 && [lsearch $defines SUN2_MB_3C400] >= 0} {
+    puts "ERROR: MB_ETHER and MB_3C400 are mutually exclusive: one card cage, one MII port"
+    exit 1
+}
+# The Sun card's 256 KiB of on-card RAM is 2,097,152 bits against the 10M50's
+# entire 1,490,944-bit M9K budget.  Quartus would say so eventually, several
+# hours into a fit; say it now.
+if {$opt(-board) eq "deca" && [lsearch $defines SUN2_MB_ETHER] >= 0} {
+    puts "ERROR: the Sun MultiBus Ethernet card does not fit on a MAX 10:"
+    puts "       256 KiB of on-card RAM is 256 M9K on a device that has 182."
+    puts "       Use -mb_3c400 1, which is 8 KiB."
     exit 1
 }
 # The Xylogics 450.  Both guards are transcribed from sun2_fpga.v:151-167,
@@ -310,6 +339,7 @@ set sv [list \
 
 if {$opt(-machine) eq "multibus"} {
     lappend sv $top/rtl/sun2-multibus/sun2_mb_ether.sv \
+        $top/rtl/sun2-multibus/sun2_mb_3c400.sv \
                $top/rtl/sun2-multibus/sun2_xy450.sv
 }
 

@@ -49,6 +49,7 @@ fi
 # second run would recompile the snapshot under the first.
 rundir_tag=""
 case " $SUN2_DEFINES " in *" SUN2_MB_ETHER "*) rundir_tag="$rundir_tag-mbether" ;; esac
+case " $SUN2_DEFINES " in *" SUN2_MB_3C400 "*) rundir_tag="$rundir_tag-3c400" ;; esac
 case " $SUN2_DEFINES " in *" SUN2_FB "*)       rundir_tag="$rundir_tag-fb" ;; esac
 case " $SUN2_DEFINES " in *" SUN2_XY450 "*)    rundir_tag="$rundir_tag-xy450" ;; esac
 # ... and the experiment that powers the maps up as zeros rather than X, which
@@ -157,6 +158,7 @@ xvlog --sv --work sun2 \
 	"$top/build/inputs/Wish82586/src/wish82586.sv" \
 	"$top/rtl/sun2-vme/sun2_ethernet.sv" \
 	"$top/rtl/sun2-multibus/sun2_mb_ether.sv" \
+	"$top/rtl/sun2-multibus/sun2_mb_3c400.sv" \
 	"$top/rtl/sun2-multibus/sun2_xy450.sv" \
 	"$top/build/inputs/z8530_scc/z8530_scc.sv" \
 	"$top/tb/wb_ram_model.sv" \

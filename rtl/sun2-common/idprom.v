@@ -31,19 +31,14 @@ module idprom(input CLK,
    localparam [7:0] FORMAT  = 8'h01;
    localparam [7:0] MACHINE = `IDPROM_MACHINE_TYPE;
 
-   // 8:0:20:1:6:e0
-   //
-   // The last byte is overridable, because a boot server picks which root it
-   // hands out by MAC address: building with a different ETH5 is how one board
-   // asks for a different operating system.  Given as a plain integer rather
-   // than 8'hXX so it survives the trip through -verilog_define without
-   // quoting.  Nothing else has to change -- CKSUM below is computed, not
-   // written down, which is exactly the trap the comment above warns about.
-`ifndef SUN2_IDPROM_ETH5
- `define SUN2_IDPROM_ETH5 224
-`endif
-   localparam [7:0] ETH0 = 8'h08, ETH1 = 8'h00, ETH2 = 8'h20;
-   localparam [7:0] ETH3 = 8'h01, ETH4 = 8'h06;
+   // 8:0:20:1:6:e0, from sun2_config.vh, which is where it lives now that the
+   // 3C400's address ROM wants the same six bytes.  Nothing else has to change
+   // -- CKSUM below is computed, not written down, which is exactly the trap
+   // the comment above warns about.
+   localparam [39:0] ETH_HI = `SUN2_IDPROM_ETH_HI;
+   localparam [7:0] ETH0 = ETH_HI[39:32], ETH1 = ETH_HI[31:24];
+   localparam [7:0] ETH2 = ETH_HI[23:16], ETH3 = ETH_HI[15:8];
+   localparam [7:0] ETH4 = ETH_HI[7:0];
    localparam [7:0] ETH5 = `SUN2_IDPROM_ETH5;
 
    localparam [7:0] DATE0 = 8'h1a, DATE1 = 8'he4, DATE2 = 8'h23, DATE3 = 8'h3b;

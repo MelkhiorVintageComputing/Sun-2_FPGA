@@ -6,7 +6,8 @@
 #   make xsim MEM_MIB=1    pretend only 1 MiB is installed (much faster boot)
 #   make xsim MEM_LATENCY=7  memory as slow as the real DDR3 path
 #   make xsim MACHINE=vme  be a Sun 2/50 (VME) instead of a 2/120 (MultiBus)
-#   make xsim MB_ETHER=1   fit the MultiBus Ethernet board (MultiBus only)
+#   make xsim MB_ETHER=1   fit the Sun MultiBus Ethernet board (MultiBus only)
+#   make xsim MB_3C400=1   fit a 3Com 3C400 instead (MultiBus only, exclusive)
 #   make xsim FB=1         fit the frame buffer (either machine)
 #   make xsim XY450=1      fit the Xylogics 450 disk controller (MultiBus only)
 #   make xsim CPU=rd68011  build with the RD68011 core instead of Suska
@@ -27,7 +28,8 @@
 #   make bridge                    the Wishbone bridge against back-to-back cycles
 #   make dvma                      check the Wishbone-to-68010 DVMA bridge
 #   make phy                       check the RTL8211EG bring-up sequence
-#   make mbether                   check the MultiBus Ethernet board
+#   make mbether                   check the Sun MultiBus Ethernet board
+#   make mb3c400                   check the 3Com 3C400 MultiBus Ethernet board
 #   make xy450                     check the Xylogics 450's registers
 #   make xychain                   boot a 68010 program that drives real chains
 #   make scanout                   check the frame buffer scan-out
@@ -79,6 +81,13 @@ endif
 # 23,629-bus-error fingerprint describes.
 ifeq ($(MB_ETHER),1)
 DEFINES += SUN2_MB_ETHER
+endif
+# Or a 3Com 3C400 instead.  Mutually exclusive with the above -- one card cage,
+# one MII port, and sun2_fpga.v $fatals on the pair.  This is the MultiBus
+# Ethernet that fits on a MAX 10: 8 KiB of buffers against the Sun card's
+# 256 KiB, which is 256 M9K on a device that has 182.
+ifeq ($(MB_3C400),1)
+DEFINES += SUN2_MB_3C400
 endif
 # Fit the 2/50's frame buffer.  VME only, and note it changes what the machine
 # looks like from outside: with a display the boot PROM puts the console on the
@@ -208,7 +217,7 @@ board-phy:
 	$(MAKE) board-check MACHINE=vme
 
 # --- unit tests for the board layer ---------------------------------------
-clkgen adapter migddr3 dvma bridge phy mbether xy450 scc mm58167 scanout decauart decaconsole decaddr3 decaphy trace: rom
+clkgen adapter migddr3 dvma bridge phy mbether mb3c400 xy450 scc mm58167 scanout decauart decaconsole decaddr3 decaphy trace: rom
 	BOARD=$(BOARD) XSIMARGS="$(XSIMARGS)" ./run_unit.sh $@
 
 # --- a picture of what the machine drew -----------------------------------
@@ -267,7 +276,7 @@ iverilog: rom
 # CPU=rd68011' reads the Suska run's log and passes on it.  Note this still
 # does not carry CPU_HZ or BAUD, which also tag a run directory -- pass
 # FBIMAGE= or the log path by hand for those.
-RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)$(CPUTAG)
+RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)$(CPUTAG)
 # What check_console.sh should expect, in order of what wins.  A display wins
 # outright: with one fitted the console moves to the screen and there is no
 # serial output left to check, whatever else is in the cage.  A disk beats an
@@ -275,7 +284,8 @@ RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(FB)),-fb,)$(i
 # auto-boot reaches the disk and never tries the network.
 FITTED  = $(if $(filter 1,$(FB)),fb,\
           $(if $(filter 1,$(XY450)),xy450,\
-          $(if $(filter 1,$(MB_ETHER)),mbether,)))
+          $(if $(filter 1,$(MB_ETHER)),mbether,\
+          $(if $(filter 1,$(MB_3C400)),mb3c400,))))
 
 check:
 	./check_console.sh $(BUILD)/xsim-$(MACHINE)$(RUNTAG)/console.log $(MACHINE) $(FITTED)
@@ -284,4 +294,4 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: all rom xsim board board-check board-phy iverilog check clean
-.PHONY: clkgen adapter migddr3 dvma bridge phy mbether xy450 xychain mm58167 scanout decauart decaconsole decaddr3 decaphy screenshot
+.PHONY: clkgen adapter migddr3 dvma bridge phy mbether mb3c400 xy450 xychain mm58167 scanout decauart decaconsole decaddr3 decaphy screenshot

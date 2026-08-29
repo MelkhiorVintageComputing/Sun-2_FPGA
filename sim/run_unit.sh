@@ -8,6 +8,7 @@
 #   ./run_unit.sh bridge    sun2_wishbone_bridge against back-to-back (loop mode) cycles
 #   ./run_unit.sh phy       phy_rtl8211_init + wb_mdio against a PHY model
 #   ./run_unit.sh mbether   sun2_mb_ether against the boot PROM's own sequences
+#   ./run_unit.sh mb3c400  sun2_mb_3c400, the other MultiBus Ethernet
 #   ./run_unit.sh xy450     sun2_xy450's registers, as the PROM and SunOS probe them
 #   ./run_unit.sh scc       the Z8530's interrupts, driven as SunOS drives them
 #   ./run_unit.sh trace     sun2_trace: the DECA's JTAG-readable capture buffer
@@ -83,6 +84,25 @@ mbether)
 	if xelab -debug off --timescale 1ns/1ps work.tb_mb_ether -s mbether_sim \
 		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	xsim mbether_sim -R | grep -E '===|PASS|FAIL|checks|ISCP'
+	;;
+
+mb3c400)
+	"$top/tools/patch_inputs.sh" Wish82586
+	W="$top/build/inputs/Wish82586/src"
+	# The 3Com card.  Note the file list: the 3C400 masters nothing, so it
+	# needs no wb_arb/wb_master and no wish82586_pkg -- only the four MII
+	# pieces and dp_ram, which is the measurement behind "8 KiB, not 256".
+	if xvlog --sv \
+		"$W/dp_ram.sv" "$W/async_fifo.sv" "$W/crc32_eth.sv" \
+		"$W/mii_rx.sv" "$W/mii_tx.sv" \
+		-i "$top/rtl/sun2-common" \
+		-d SUN2_SIM \
+		"$top/rtl/sun2-multibus/sun2_mb_3c400.sv" \
+		"$top/tb/mii_peer.sv" "$top/tb/tb_mb_3c400.sv" \
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug off --timescale 1ns/1ps work.tb_mb_3c400 -s mb3c400_sim \
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	xsim mb3c400_sim -R | grep -E '===|PASS|FAIL|checks|\.\.\.'
 	;;
 
 xy450)

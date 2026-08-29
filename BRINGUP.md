@@ -313,6 +313,41 @@ this file used to say about that are wrong**, and both cost time:
 MultiBus 2/120 with the Xylogics on the board's micro-SD slot. It boots SunOS
 4.0.3 to a root shell with no network involved.
 
+**Halt the machine before you reprogram it.** Configuring the FPGA is a
+power-cut: no `sync`, no unmount, and every buffered inode and bitmap block the
+kernel was holding is gone. With `/` mounted read-write that reliably corrupts
+the card, and the damage does not show up until the *next* boot -- as
+`PARTIALLY ALLOCATED INODE`, `UNKNOWN FILE TYPE` and `BLK(S) MISSING IN BIT
+MAPS`, followed by `Reboot failed...help!` and a read-only single-user shell.
+It reads like a disk or controller fault and is neither. So:
+
+```
+# /etc/halt          (or /etc/reboot, or shutdown)
+  ...syncing file systems... done
+  halted
+$ quartus_pgm ...    only now
+```
+
+Skipping it is only safe when the root is already read-only -- which is exactly
+what a machine that dropped to single-user after a failed `fsck` is, so a
+corrupted card protects itself from further corruption and hides how it got
+that way.
+
+**The one exception is straight after `fsck` repairs a mounted filesystem.**
+Then the kernel's in-core superblock and inodes are *stale*, and syncing writes
+them back over the repairs -- which is why fsck itself prints `***** REBOOT THE
+SYSTEM *****` and why `reboot -n` exists. There, and only there, a hard reset by
+reprogramming is the correct thing. Recovering a card is therefore:
+
+```
+# /usr/etc/fsck -y /dev/rxy0a
+  ***** FILE SYSTEM WAS MODIFIED *****
+  ***** REBOOT THE SYSTEM *****
+$ quartus_pgm ...    deliberately without halting
+```
+
+Do not generalise that exception into a habit; it is one command in one state.
+
 **Read the JTAG panel before the console.** `tools/deca_reset.tcl` prints
 
 ```

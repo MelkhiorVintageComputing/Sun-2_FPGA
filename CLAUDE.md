@@ -832,6 +832,77 @@ invalidate a decode that indexes the returned bit string MSB-first.
 So "no card" and "a card that never initialised" are the same reading, and the
 only way to tell them apart is to try another card.
 
+**The DECA has a network again, and it is a 3Com 3C400.** `MB_3C400=1` fits
+`rtl/sun2-multibus/sun2_mb_3c400.sv`, the *other* MultiBus Ethernet -- three
+2 KiB buffers and two registers in an 8 KiB window, against the Sun card's
+256 KiB, which is 256 M9K on a device that has 182 and therefore cannot be
+built here at any clock. Mutually exclusive with `SUN2_MB_ETHER`: one card
+cage, one MII port, and `top_fpga.v`'s two arms both drive `mii_txd`, so
+`sun2_fpga.v` `$fatal`s on the pair rather than leaving a multiply-driven net
+to synthesis.
+
+It costs **+1,234 LE and +52,224 memory bits** over the disk-only build at the
+same clock (24,788 -> 26,022 LE, 50% -> 52%), and the memory decomposes exactly:
+six 1024x8 buffer halves (49,152 = 6 M9K) plus the 256x12 receive FIFO (3,072).
+Timing came out *better* than the build without it -- 0.854 ns against 0.637 --
+which is placement variance, not the card being free. **So the DECA can now have
+disk and network at once**, which no machine in this project has had.
+
+Measured: MultiBus with the card is **20 bus errors and 279 characters**,
+decomposing exactly as 22 - 2, the two removed being both probes of `0xFE0000`
+= `MBMEM_BASE + 0xE0000`, the card's own address. The empty-cage reference
+(22/274), VME (10/312) and `mbether` are all unchanged. `make -C sim mb3c400`
+is 58 checks; eight mutations were tried and all eight caught, each by the
+check that names it.
+
+**On hardware it netboots.** A DECA at 16.667 MHz runs `Probing Multibus: ec`,
+`Boot: ec(0,0,0)vmunix`, RARP, 120936 bytes of bootloader over TFTP, an NFS
+root and swap, and a 604688-byte kernel -- all of it through the card, so the
+receive path is proved at volume and not merely in simulation. With the disk
+fitted too, SunOS attaches **`ec0 at mbmem 0xe0000 pri 3`** beside `xy0`.
+
+**What stops it short of a login is IP fragmentation, and the card has two
+receive buffers.** A 4096-byte NFS read reply is three Ethernet frames; buffers
+A and B take the first two and the third has nowhere to go, so IP never
+reassembles and the kernel retries `READ init 0+4096` for ever. Counted on the
+machine, five three-fragment datagrams: **+10 `fragments received`, +5
+`fragments dropped after timeout`** -- exactly two of every three arrive. Two
+fragments are reliable, 60 consecutive at 0% loss.
+
+Confirmed through NFS itself rather than inferred, same file and same mount
+with only `rsize` varied:
+
+```
+  rsize 1024   1 fragment    sum 63736   48
+  rsize 2048   2 fragments   sum 63736   48     identical
+  rsize 4096   3 fragments   NFS read failed ... RPC: Timed out
+```
+
+**Two traps met on the way there, both of which produced confident nonsense
+first.** `ec0`'s `Ipkts` looked like it proved all three fragments arrive; it
+counts *every* frame including background broadcast, which on this LAN is about
+13 per 40 s, and subtracting it leaves exactly the 10 IP saw. And SunOS's
+`ping` cannot send more than 2048 bytes -- its raw socket's send buffer, not
+the card -- so `ping -s 4000` from the Sun fails with `ret=-1` at a size
+threshold that looks exactly like a fragment threshold. Driving the sweep from
+another host is what separated them: 2000 *and* 2900 bytes pass, 3000 fails, so
+it tracks fragment count and not size.
+
+**Whether that is inherent to a two-buffer card is not settled.** The driver
+has ~1.2 ms at 10 Mb/s to return a buffer before the third frame starts, and a
+real 2/120 ran `ecread`'s 1500-byte copy out of static RAM where this one goes
+through the MMU to DDR3. The measurement that would settle it is a drop counter
+in the card -- frames rejected for want of a free buffer -- which does not exist
+yet.
+
+**The root mount's transfer size is a compile-time constant**, so there is no
+knob: `nfs_mountroot`/`nfsrootvp` build the mount themselves, no fstab, no
+bootparams field, and nothing in the kernel's data or bss symbols carries a
+size. It is set once, at `_nfsrootvp+0x1a2`, `movel #8192,%a3@(34)`, whose
+immediate is four bytes at file offset `0x14170` in the 4.0.3 GENERIC a.out
+(text base 0x4000, header 0x20, so file = vaddr - 16352). Recorded because it
+was expensive to find, not because anything here patches it.
+
 **The board layer is the seam, and it is small.** `boards/DECA/` is a clock
 generator (two ALTPLLs), a Wishbone-to-DDR3 adapter, a JTAG console bridge with
 two UART halves, a DP83620 sequencer, and a board top implementing
@@ -1239,11 +1310,13 @@ changes add up:
 | no cards (the reference) | **22** |
 | `FB=1` | **21** |
 | `MB_ETHER=1` | **19** |
+| `MB_3C400=1` | **20** |
 | `FB=1 MB_ETHER=1` | **18** |
 | `XY450=1` with an image, stopping at the boot block | **10** |
 | `XY450=1 MB_ETHER=1 FB=1` with an image, `TIMEOUT_MS=8000` | **8** |
 
-One error for the display's probe at `0xEC0000`, three for the Ethernet card,
+One error for the display's probe at `0xEC0000`, three for the Sun Ethernet
+card, two for the 3Com's own address probed twice,
 twelve for the disk — so 22 - 1 - 3 is exactly the pair and 22 - 14 the trio. A
 count that does not decompose that way is worth running down before anything
 else. These were measured together after the `PROTERR` fixes, and every one is

@@ -626,6 +626,51 @@ module top(input         cpu_clk,
    // The card cannot report a stuck carrier -- that flag is part of the VME
    // side's own diagnostics, and there is no device page here to read it from.
    assign eth_crs_stuck = 1'b0;
+ `elsif SUN2_MB_3C400
+   //
+   // A 3Com 3C400 in the card cage instead.  See
+   // rtl/sun2-multibus/sun2_mb_3c400.sv.  It is a third arm rather than an OR
+   // into the same instance because the two cards share a wire and nothing
+   // else -- no registers, no addressing, no byte order -- and because both
+   // arms drive mii_txd, which is what makes the exclusion structural instead
+   // of a matter of taste.
+   //
+   // Same interrupt wire and same level: `priority 3' in GENERIC for both, so
+   // mb_ether_int is reused rather than duplicated.
+   //
+   sun2_mb_3c400 #(.EC_BASE(`MB_3C400_BASE),
+		   .STATION_ADDR({`SUN2_IDPROM_ETH_HI, 8'd`SUN2_IDPROM_ETH5}),
+		   .PHY_DATA_W(4)) mb3c400
+     (.CLK(C100),
+      .RESET(~P_RESET_n),   // P.RESET-: a card on the bus
+
+      .mb_sel(mb_sel),
+      .mb_addr(mb_addr),
+      .mb_we(mb_we),
+      .mb_uds_n(mb_uds_n),
+      .mb_lds_n(mb_lds_n),
+      .mb_din(mb_cpu_dout),
+      .mb_dout(mb_card_dout),
+      .mb_hit(mb_hit),
+      .mb_ack(mb_ack),
+
+      .int_o(mb_ether_int),
+
+      .mii_tx_clk(mii_tx_clk),
+      .mii_txd(mii_txd),
+      .mii_tx_en(mii_tx_en),
+      .mii_tx_er(mii_tx_er),
+      .mii_rx_clk(mii_rx_clk),
+      .mii_rxd(mii_rxd),
+      .mii_rx_dv(mii_rx_dv),
+      .mii_rx_er(mii_rx_er),
+      .mii_crs(mii_crs),
+      .mii_col(mii_col)
+      );
+
+   // No stuck-carrier diagnostic on this card either, and less excuse: the
+   // 3C400 has no status register that could carry one.
+   assign eth_crs_stuck = 1'b0;
  `else
    assign eth_crs_stuck = 1'b0;
    assign mii_txd       = 4'h0;

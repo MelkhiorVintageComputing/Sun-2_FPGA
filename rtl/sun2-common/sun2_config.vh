@@ -188,6 +188,57 @@
 `endif
 
 //---------------------------------------------------------------------
+// The station Ethernet address
+//---------------------------------------------------------------------
+// 8:0:20:1:6:e0.  It lives here rather than in idprom.v because two devices
+// now need it: the ID PROM, which is what the PROM and the kernel actually
+// read, and the 3C400's address ROM, which the kernel passes to
+// localetheraddr().  Two copies of a MAC address would drift, and the way
+// that would present is a machine whose boot server hands it the wrong root.
+//
+// The last byte is overridable, because a boot server picks which root it
+// hands out by MAC address: building with a different ETH5 is how one board
+// asks for a different operating system.  Given as a plain integer rather than
+// 8'hXX so it survives the trip through -verilog_define without quoting.
+//
+`ifndef SUN2_IDPROM_ETH5
+ `define SUN2_IDPROM_ETH5 224
+`endif
+`ifndef SUN2_IDPROM_ETH_HI
+ `define SUN2_IDPROM_ETH_HI 40'h08_00_20_01_06
+`endif
+
+//---------------------------------------------------------------------
+// The 3Com 3C400 MultiBus Ethernet board
+//---------------------------------------------------------------------
+// The other MultiBus Ethernet, and the one that fits on a MAX 10.  Where the
+// Sun card is an 82586 behind 256 KiB of dual-ported RAM -- 256 M9K on a
+// device that has 182, so it cannot be built there at all -- the 3C400 is
+// three 2 KiB buffers and two registers in an 8 KiB window, which is 6 M9K.
+// See rtl/sun2-multibus/sun2_mb_3c400.sv.
+//
+// Mutually exclusive with SUN2_MB_ETHER: there is one MII port and both cards
+// would drive it.  sun2_fpga.v $fatals on the pair rather than leaving it to
+// synthesis to report a multiply-driven net in whatever way it chooses.
+//
+// The software is already in the tree.  The MultiBus boot PROM probes `ec'
+// fifth, right after `ie', and the SunOS 4.0.3 GENERIC kernel this project
+// boots carries the whole driver -- _ecprobe, _ecattach, _ecinit, _ecintr,
+// _ecoutput, _ecread, _ecstart, _ecreset, _ecdocoll -- so this is a network
+// under SunOS and not merely a boot path.
+//
+// MEBASE is switch-selectable on any 8 KiB boundary; the PROM's ecstd[] is
+// { 0xE0000, 0xE2000 }, controllers 0 and 1.  Only controller 0 is fitted, so
+// the 0xE2000 probe must still time out -- see the note about a blanket TYPE 2
+// decode making the machine hallucinate a 3Com, which is exactly this address.
+//
+//`define SUN2_MB_3C400
+
+`ifndef MB_3C400_BASE
+ `define MB_3C400_BASE 20'hE0000
+`endif
+
+//---------------------------------------------------------------------
 // The Xylogics 450 disk controller
 //---------------------------------------------------------------------
 // A Xylogics 450 in the MultiBus card cage, with its four SMD drives replaced

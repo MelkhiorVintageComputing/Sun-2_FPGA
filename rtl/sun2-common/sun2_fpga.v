@@ -151,6 +151,21 @@ module sun2_fpga(input         cpu_clk,
  `ifdef SUN2_XY450
       $fatal(1, "SUN2_XY450 is MultiBus only: a 2/50 takes a Xylogics 451 on the VME bus");
  `endif
+ `ifdef SUN2_MB_3C400
+      $fatal(1, "SUN2_MB_3C400 is MultiBus only: a 2/50 has its Ethernet on board, in device page 1");
+ `endif
+`endif
+`ifdef SUN2_MB_ETHER
+ `ifdef SUN2_MB_3C400
+      // One MII port, and top_fpga.v's two arms both drive mii_txd.  Left to
+      // the tools this is a multiply-driven net, which Vivado reports as a
+      // warning and Quartus as an error -- so it is caught here instead, in
+      // the one place both flows read.
+      $fatal(1, "SUN2_MB_ETHER and SUN2_MB_3C400 are mutually exclusive: one card cage, one MII port");
+ `endif
+`endif
+`ifdef SUN2_MB_3C400
+      $display("   3Com 3C400 Ethernet: 8 KiB at MultiBus memory 0x%05x", `MB_3C400_BASE);
 `endif
 `ifdef SUN2_MB_ETHER
       $display("   MultiBus Ethernet: registers at 0x%05x, %0d KiB of memory at 0x%05x",

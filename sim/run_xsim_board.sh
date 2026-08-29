@@ -169,6 +169,7 @@ xvlog --sv --work sun2 "${defargs[@]}" "${incargs[@]}" \
 	"$top/boards/Wukong/phy_rtl8211_init.sv" \
 	"$top/rtl/sun2-vme/sun2_ethernet.sv" \
 	"$top/rtl/sun2-multibus/sun2_mb_ether.sv" \
+	"$top/rtl/sun2-multibus/sun2_mb_3c400.sv" \
 	"$top/rtl/sun2-multibus/sun2_xy450.sv" \
 	"$top/build/inputs/Wish5380/src/wish5380_pkg.sv" \
 	"$top/build/inputs/Wish5380/src/sd_spi.sv" \
