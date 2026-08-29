@@ -25,3 +25,6 @@
 [submodule "Inputs/BrianHG-DDR3"]
 	path = Inputs/BrianHG-DDR3
 	url = https://github.com/BrianHGinc/BrianHG-DDR3-Controller.git
+[submodule "Inputs/doc/DECA_board"]
+	path = Inputs/doc/DECA_board
+	url = https://github.com/DECAfpga/DECA_board
