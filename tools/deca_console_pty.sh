@@ -25,60 +25,26 @@
 # /dev/ttyUSB* with no JTAG involvement -- and, unlike this, leaves the chain
 # free for programming and probing at the same time.
 #
-# ----------------------------------------------------------------- CAVEAT
+# ------------------------------------------------------------------- STATUS
 #
-# Output works; **input is corrupted**, and the fault is in the gateware, not
-# here.  Everything the machine prints is byte-perfect, so this is usable for
-# watching a boot and not yet for driving a shell.
+# Both directions work.  A 48-character string echoes back byte for byte and
+# typed commands reach the shell verbatim.
 #
-# What it is has been measured rather than guessed, and the measurement moved
-# the search a long way:
+# It was not always so, and the fix is worth knowing because it constrains any
+# future change to this block: **the JTAG UART's user clock must be
+# comfortably faster than TCK**, which quartus_sta puts at 10 MHz.  The bridge
+# runs on MAX10_CLK1_50 -- 5x TCK -- and moving it back onto a PLL output near
+# TCK brings the fault back.  At 4.915 MHz, below TCK, the host read every byte
+# twice and out of order; at 12.5 and 16.667 MHz, 1.25x and 1.67x, output was
+# clean and input came back with adjacent bytes swapped in pairs.
 #
-#   * It is **not the machine, at all**.  `make -C test/deca_console LOOPBACK=1
-#     CON_ON_CPU=1' wires the bridge's own transmitter back to its own
-#     receiver -- no SCC, no boot PROM, no CPU -- and typing abcdefghijklmnop
-#     returns `cbedgfihkjmlon.  The same signature with the machine removed, so
-#     the whole fault lives in deca_jtag_console plus the two UART halves.  It
-#     also reproduces at the monitor's polled prompt, which had already ruled
-#     out SunOS from the other end.
+# ------------------------------------------------------------------ minicom
 #
-#   * **The byte counts are exact at every stage.**  Typing ten bytes and
-#     differencing the event counters through tools/deca_reset.tcl gives
-#     rd +10, tx +10 host->machine and rx +10, wr +10 machine->host.  Nothing
-#     is read twice and nothing is dropped, in either direction.  So it is a
-#     data-value fault, not a flow-control or FIFO-ordering one.
-#
-#   * **The signature depends on the typing rate.**  Sent back to back,
-#     abcdefghij returns `cbedgfiij; sent with 400 ms between bytes -- one byte
-#     in flight, forty character times of idle -- the same input returns
-#     `bbddffhhj.  As indices into what was sent the output comes in pairs:
-#     (n+1, n) when the bytes are close together, (n, n) when far apart.  One
-#     mechanism gives both: a two-entry buffer emitted newest-first.
-#
-#   * **It is not the TCK ratio.**  CLAUDE.md records this signature once
-#     before -- a JTAG UART clocked slower than TCK's 10 MHz made the host read
-#     each byte twice and out of order -- and moving the bridge to cpu_clk at
-#     12.5 MHz fixed the *output* direction.  Input is unchanged at 16.667 MHz,
-#     1.67x TCK, over a 48-character string.  So the remaining fault is not
-#     simply "too slow".
-#
-#   * The RTL reads correctly against the IP's own source.  deca_uart_tx sends
-#     one start bit, eight data bits LSB first and one stop bit, each held
-#     CLKS_PER_BIT.  The Avalon read matches altera_avalon_jtag_uart.sv exactly:
-#     read_0 and rvalid are registered on the A->B edge, fifo_rd is
-#     combinational in A, and the read FIFO really is lpm_showahead="OFF", so
-#     its q lands in B -- which is the cycle the FSM samples.
-#
-#   * Byte 0 is separate: at 12.5 MHz it comes back with bit 0 cleared
-#     ('a' -> 0x60), and at 16.667 MHz it does not.  A boundary artefact, not
-#     the main fault.
-#
-# tb_deca_console's loopback case passes on the same RTL, so the modelled JTAG
-# UART does not reproduce any of this -- the same limit that hid the console's
-# clock fault earlier.  The next place to look is the two-entry buffer the pair
-# signature names, on the host->machine side: deca_jtag_console's tx_data latch
-# against deca_uart_tx's sampling of `data', which is the only two-deep thing
-# between the Avalon read and the wire.
+# Line settings are meaningless on this link -- the bytes never touch a UART
+# between here and the FPGA -- so minicom's baud, bits and flow control are
+# ignored.  The 9600 8N1 framing exists only *inside* the FPGA, between the SCC
+# and the console bridge.  Turn hardware flow control OFF; with it on, minicom
+# waits for a CTS that no pseudo-terminal will ever assert.
 #
 set -e -o pipefail
 
