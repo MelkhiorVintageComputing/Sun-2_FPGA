@@ -647,10 +647,27 @@ prints `Probing I/O bus: sd ie`, catches the probe itself:
  +13  EE280C   5  1  1   1     1    1    1    1    1     ECA      1     1      0
 ```
 
-**That is a perfect timeout.** The page is VALID, `PROTERR` is clear,
+**That is a perfect timeout, and it is the only thing the hardware could do.**
+There is no SCSI anywhere in this design -- `grep -i scsi rtl/sun2-common/sun2_fpga.v`
+returns nothing -- so no `MATCH_*` term covers the page, nothing sources DTACK,
+and the cycle must time out. That is the documented contract for TYPE 2 space
+and it is how the PROM discovers empty addresses at all.
+
+Decoding `ps_pmap` (`ps_pmap2devices`, entry bits 31..20) says where the cycle
+actually went: **0xEC8 is VALID, TYPE 2 -- the system bus**, not on-board I/O.
+So although `SCSI_BASE` sits in `s2addrs.h`'s "on-board and off-board I/O"
+block between the parallel port at 0xEE2000 and the *on-board* Ethernet at
+0xEE3000, the PROM maps that page out to the bus, where on this machine nothing
+is plugged in. The genuinely off-board controller is the other entry,
+`sdstd[1] = MBMEM_BASE+0x84000 = 0xF84000`.
+
+The page is VALID, `PROTERR` is clear,
 `MATCH_MEM` is 0 so the memory exemption correctly does not apply, DTACK never
 asserts, `C_S24` fires 11 clocks after `AS`, and `BERR` is asserted on the next
-one with `TIMEOUT` and `ERR` both set. The MMU, the device decode, the `C_S`
+one with `TIMEOUT` and `ERR` both set. As a free corroboration that the field
+map is being read correctly, `ps_pmap` goes 0xEC8 -> 0xECA *during* the cycle:
+bit 1 is ACC, and that is the MMU's accessed-bit writer doing its job, caught
+in the act. The MMU, the device decode, the `C_S`
 chain and the bus timeout are all doing exactly the right thing at the
 frequency that fails.
 
