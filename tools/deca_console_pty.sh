@@ -34,30 +34,44 @@
 # What it is has been measured rather than guessed, and the measurement moved
 # the search a long way:
 #
-#   * It is **not SunOS**.  It reproduces at the monitor's own `>' prompt,
-#     where input is polled by the PROM and no zs driver, silo or soft
-#     interrupt exists -- typing abcdefghij there echoes `cbedgfiij.
+#   * It is **not the machine, at all**.  `make -C test/deca_console LOOPBACK=1
+#     CON_ON_CPU=1' wires the bridge's own transmitter back to its own
+#     receiver -- no SCC, no boot PROM, no CPU -- and typing abcdefghijklmnop
+#     returns `cbedgfihkjmlon.  The same signature with the machine removed, so
+#     the whole fault lives in deca_jtag_console plus the two UART halves.  It
+#     also reproduces at the monitor's polled prompt, which had already ruled
+#     out SunOS from the other end.
 #
 #   * **The byte counts are exact at every stage.**  Typing ten bytes and
 #     differencing the event counters through tools/deca_reset.tcl gives
 #     rd +10, tx +10 host->machine and rx +10, wr +10 machine->host.  Nothing
-#     is read twice, nothing is dropped, in either direction.  So it is a
-#     data-value fault, not a flow-control or FIFO-ordering one -- which is
-#     what "does ev_rd_valid match the bytes typed" was put there to ask, and
-#     the answer rules out the whole class it was aimed at.
+#     is read twice and nothing is dropped, in either direction.  So it is a
+#     data-value fault, not a flow-control or FIFO-ordering one.
 #
-#   * **The signature depends on the typing rate**, and that is the real clue.
-#     Sent back to back, abcdefghij returns `cbedgfiij; sent with 400 ms
-#     between bytes -- one byte in flight, forty character times of idle --
-#     the same input returns `bbddffhhj.  Written as indices into what was
-#     sent, the output is emitted in pairs: (n+1, n) when the bytes are close
-#     together and (n, n) when they are far apart.  One mechanism gives both:
-#     a two-entry buffer emitted newest-first, which swaps when the second
-#     entry has been refilled and repeats when it has not.
+#   * **The signature depends on the typing rate.**  Sent back to back,
+#     abcdefghij returns `cbedgfiij; sent with 400 ms between bytes -- one byte
+#     in flight, forty character times of idle -- the same input returns
+#     `bbddffhhj.  As indices into what was sent the output comes in pairs:
+#     (n+1, n) when the bytes are close together, (n, n) when far apart.  One
+#     mechanism gives both: a two-entry buffer emitted newest-first.
 #
-#   * Byte 0 is separate and unexplained: it always comes back with bit 0
-#     cleared ('a' -> 0x60, 'A' -> 0x40) and only the first byte after a
-#     terminal attaches does it.
+#   * **It is not the TCK ratio.**  CLAUDE.md records this signature once
+#     before -- a JTAG UART clocked slower than TCK's 10 MHz made the host read
+#     each byte twice and out of order -- and moving the bridge to cpu_clk at
+#     12.5 MHz fixed the *output* direction.  Input is unchanged at 16.667 MHz,
+#     1.67x TCK, over a 48-character string.  So the remaining fault is not
+#     simply "too slow".
+#
+#   * The RTL reads correctly against the IP's own source.  deca_uart_tx sends
+#     one start bit, eight data bits LSB first and one stop bit, each held
+#     CLKS_PER_BIT.  The Avalon read matches altera_avalon_jtag_uart.sv exactly:
+#     read_0 and rvalid are registered on the A->B edge, fifo_rd is
+#     combinational in A, and the read FIFO really is lpm_showahead="OFF", so
+#     its q lands in B -- which is the cycle the FSM samples.
+#
+#   * Byte 0 is separate: at 12.5 MHz it comes back with bit 0 cleared
+#     ('a' -> 0x60), and at 16.667 MHz it does not.  A boundary artefact, not
+#     the main fault.
 #
 # tb_deca_console's loopback case passes on the same RTL, so the modelled JTAG
 # UART does not reproduce any of this -- the same limit that hid the console's
