@@ -815,10 +815,34 @@ netboot investigation that had no fault in it: `seen_stall=0` says no bus cycle
 went unanswered, which exonerates the Wishbone bridge and DDR3 outright, and it
 was true while a memory-latency hypothesis was still being drafted.
 
-**Open:** the console's host-to-machine direction swaps adjacent bytes --
-`ABCDEFGH` arrives as `@CBEDGFI`. Output is byte-perfect. It reproduces without
-loopback, `tb_deca_console` passes on the same RTL, and the event counters are
-the place to start.
+**The console is fixed, and the answer was TCK.** Host-to-machine used to swap
+adjacent bytes -- `abcdefghij` came back `cbedgfiij` -- while machine-to-host was
+byte-perfect. The bridge now runs on `MAX10_CLK1_50`, and a 48-character string
+echoes byte for byte; the machine takes typed commands.
+
+The rule is the one already half-learned here: **the JTAG UART's user clock must
+be comfortably faster than TCK**, which the timing report puts at 10 MHz. At
+4.915 MHz -- below TCK -- the host read each byte twice and out of order, and
+moving to cpu_clk at 12.5 MHz was recorded as the fix. It was half of one: 12.5
+and 16.667 MHz are 1.25x and 1.67x TCK, enough for one direction and not the
+other. 50 MHz is 5x and fixes both. It is also a real board oscillator rather
+than a PLL output, so the console runs before and independently of everything
+else -- which is what the board's only instrument should do -- and its framing
+no longer depends on `CPU_CLK_HZ`.
+
+What made it findable was eliminating everything else first, and each step is
+worth keeping. The event counters read exactly ten in and ten out at all four
+stages for ten bytes typed, so it was a data-value fault and not flow control.
+`make -C test/deca_console LOOPBACK=1 CON_ON_CPU=1` wires the bridge's
+transmitter back to its own receiver -- no SCC, no PROM, no CPU -- and
+reproduced the swap, so the machine was not involved at all. `deca_uart_rx`
+declares `valid` at 9.5 bit times and `deca_uart_tx` drops `busy` at 10, so the
+echo is always latched before the FSM leaves `S_TXW2` and the FSM's ordering is
+provably right. And the Avalon read matches `altera_avalon_jtag_uart.sv` line
+for line -- `read_0` and `rvalid` registered on the A->B edge, `fifo_rd`
+combinational in A, the read FIFO confirmed `lpm_showahead="OFF"` so its `q`
+lands in the cycle the FSM samples. A FIFO cannot reorder; only the crossing
+could.
 
 ## Architecture
 

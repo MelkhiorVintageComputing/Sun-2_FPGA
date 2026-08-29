@@ -430,33 +430,54 @@ module deca_top #(
    // different clock, so feeding it straight in would leave the release
    // unsynchronised, which is the whole reason reset_sync exists.
    // ------------------------------------------------------------------
-   // The console runs on cpu_clk, not clk_serial, and that is a measurement
-   // rather than a preference.
+   // The console runs on the board's own 50 MHz oscillator, and the clock is
+   // the whole story of this block.
    //
-   // clk_serial is the tidier choice on paper -- the SCC's own domain, and
+   // clk_serial is the tidiest choice on paper -- the SCC's own domain, and
    // 4915254/9600 = 512.005 makes a bit exactly 512 clocks.  It does not work.
    // The JTAG Atlantic inside altera_avalon_jtag_uart crosses into the TCK
    // domain, which the timing report puts at 10 MHz, and with a 4.915 MHz user
-   // clock -- slower than TCK -- the host reads each byte twice and out of
+   // clock -- *slower* than TCK -- the host read each byte twice and out of
    // order.  Measured with in-system probes: for 8 bytes the design's own
    // counters read 8 receives, 8 writes, 8 reads and 8 transmits, one of each
    // per byte, while both juart-terminal and nios2-terminal showed ten
    // characters.  A design writing sequentially into a FIFO cannot produce
-   // out-of-order output; only something downstream can.  Moving to 12.5 MHz
-   // fixed it with the counters unchanged at 8/8/8/8.
+   // out-of-order output; only something downstream can.
    //
-   // The cost is that a bit is 12500000/9600 = 1302.08 clocks and 1302 is used
-   // -- a 0.006% rate error, four hundred times smaller than the +/-2% the
-   // receiver is tested to tolerate.  Note this makes the console's framing
-   // depend on CPU_HZ, which is exactly what putting it on clk_serial avoided;
-   // if CPU_DIV changes, CLKS_PER_BIT must change with it.
+   // Moving to cpu_clk at 12.5 MHz fixed the machine-to-host direction and was
+   // recorded here as the fix.  It was half of one.  Host-to-machine kept the
+   // same signature -- adjacent bytes swapped in pairs -- and kept it at
+   // 16.667 MHz too, over a 48-character string.  What those two clocks have
+   // in common is that neither is far from TCK: 1.25x and 1.67x.  The counters
+   // say the fault is downstream of this FSM, the loopback build says it is
+   // downstream of the machine as well, and the RTL matches the IP's own
+   // source line for line -- so what is left is the crossing itself, and the
+   // remedy for a crossing that is too close in rate is rate.
+   //
+   // MAX10_CLK1_50 is **5x TCK**, is a real board oscillator rather than a PLL
+   // output, and runs before and independently of everything else -- which is
+   // exactly what a console wants to be, since it is the only instrument this
+   // board has when the rest of the design is broken.  A bit is
+   // 50000000/9600 = 5208.33 clocks and 5208 is used: a 0.006% rate error,
+   // four hundred times smaller than the +/-2% the receiver is tested to
+   // tolerate, and identical to what cpu_clk gave.
+   //
+   // It also takes the console's framing off CPU_CLK_HZ, which putting it on
+   // clk_serial had achieved and moving to cpu_clk had given away: CPU_DIV can
+   // now move without CLKS_PER_BIT having to move with it.
+   //
+   // The two serial pins cross domains and both are safe by construction:
+   // deca_uart_rx synchronises `sun_tx' with two flops of its own, and
+   // `sun_rx' is a 9600-baud line the SCC samples at 16x.
+   localparam int CON_CLK_HZ = 50_000_000;
+
    wire con_rst;
-   reset_sync rst_con (.clk(cpu_clk),
+   reset_sync rst_con (.clk(MAX10_CLK1_50),
                        .rst_async_in (board_reset),
                        .rst_sync_out (con_rst));
 
-   deca_jtag_console #(.CLKS_PER_BIT(CPU_CLK_HZ / 9600)) console (
-       .clk       (cpu_clk),
+   deca_jtag_console #(.CLKS_PER_BIT(CON_CLK_HZ / 9600)) console (
+       .clk       (MAX10_CLK1_50),
        .rst       (con_rst),
        .sun_tx    (sun_tx),
        .sun_rx    (sun_rx),
@@ -477,8 +498,12 @@ module deca_top #(
    // downstream.  They stay because that class of question recurs and a probe
    // cannot be attached after the fact without a rebuild.
    // ------------------------------------------------------------------
+   // On the console's clock, not cpu_clk: the ev_* taps are one-clock pulses
+   // at 50 MHz and cpu_clk at 16.667 MHz would miss two of every three.  They
+   // are read over JTAG, where a torn count is a diagnostic that reads wrong
+   // once, not a machine that behaves wrong.
    reg [15:0] n_rx, n_wr, n_rd, n_tx;
-   always @(posedge cpu_clk)
+   always @(posedge MAX10_CLK1_50)
      if (con_rst) begin
         n_rx <= 16'd0; n_wr <= 16'd0; n_rd <= 16'd0; n_tx <= 16'd0;
      end else begin

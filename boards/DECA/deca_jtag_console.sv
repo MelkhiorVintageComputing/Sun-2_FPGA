@@ -19,10 +19,18 @@
 //
 // ------------------------------------------------------------- the clock
 //
-// clk_serial, not cpu_clk.  z8530_scc.sv drives txda from registers clocked on
-// sclk_a, which sun2_fpga.v wires to clk4m9152 -- so `tx' and `rx' are already
-// in this domain and the bridge crosses nothing.  4915254/9600 = 512.005, so a
-// bit is exactly 512 clocks with no dependence on CPU_HZ or CPU_DIV.
+// Neither clk_serial nor cpu_clk: the board's own 50 MHz oscillator.  What
+// decides this is not the baud arithmetic but **TCK**.  The JTAG Atlantic
+// inside altera_avalon_jtag_uart crosses into the TCK domain, which the timing
+// report puts at 10 MHz, and a user clock close to that rate reorders bytes --
+// at 4.915 MHz, below TCK, the host read each byte twice and out of order; at
+// 12.5 and 16.667 MHz, 1.25x and 1.67x, machine-to-host was clean and
+// host-to-machine still came back with adjacent bytes swapped in pairs.  At
+// 50 MHz, 5x TCK, a 48-character string echoes byte for byte.
+//
+// See boards/DECA/deca_top.sv for the full argument and the measurements that
+// eliminated everything else -- the counters, the loopback build, and the IP's
+// own source.
 //
 // ---------------------------------------------- the Avalon-MM handshake
 //
