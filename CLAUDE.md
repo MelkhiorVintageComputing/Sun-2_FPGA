@@ -774,6 +774,64 @@ separate reset step buys back most of it. Do not read a mangled banner as a
 machine fault: compare the drop against a known-good clock first, which is what
 turned this from a finding into an artefact.
 
+**The DECA boots SunOS from a micro-SD card, with no network anywhere in it.**
+`make -C syn quartus MACHINE=multibus CPU_DIV=60 XY450=1` builds a MultiBus
+2/120 -- the first non-VME build for this board -- with the Xylogics 450's four
+SMD drives replaced by the slot on the edge of the board:
+
+```
+  Sun Workstation, Model Sun-2/120 or Sun-2/170, Sun-2 keyboard
+  Probing Multibus: xy      Boot: xy(0,0,0)vmunix
+  xyc0 at mbio 0xee40 pri 2
+  xy0: <Fujitsu-M2351 Eagle cyl 840 alt 2 hd 20 sec 46>
+  root on xy0a fstype 4.2   swap on xy0b fstype spec size 46000K
+  sun2# /bin/df
+  /dev/xy0a   327599  29667  265172   10%   /
+```
+
+`fsck` reads and writes the card on the way past (`2721 files, 29559 used`), so
+this is not a read-only demonstration.
+
+**It is smaller than the VME machine it replaces** -- 24,788 LE (50%) against
+27,563 (55%), 660,640 memory bits against 676,768, Fmax 17.85 MHz against the
+16.667 asked for -- because dropping the on-board 82586 gives back more than the
+disk path costs. It has to be MultiBus (`sun2_fpga.v` `$fatal`s on `SUN2_XY450`
+under `SUN2_VME`), and MultiBus means **no Ethernet at all**: the card's 256 KiB
+is four banks of 65536x8, which is 256 M9K on a device that has 182.
+
+**The level shifter is the whole of what is new here.** The FPGA does not reach
+the card. Between them is U22, an `SN74AVCA406L`, whose A side sits on the 1.5 V
+DDR3 rail -- which is why the SD pins live in bank 4 -- and whose B side is
+powered through load switches. So four of the eight pins carry no data at all;
+they steer the translator, and in SPI mode they are constants: `SD_SEL=0` puts
+3.3 V on the card, and `CMD_DIR=1`, `D0_DIR=0`, `D123_DIR=1` point MOSI out,
+MISO in and DAT3-as-chip-select out. Pinout is Table 3-21 of the board manual,
+polarities are the board's own porting guide; nothing is inferred. `SD_SEL` is
+the one pin that is not 1.5 V, and the board's own template assigns its location
+while commenting its I/O standard out -- the manual says 3.3 V and the fitter
+agrees.
+
+**DAT1 and DAT2 are driven high rather than left unassigned**, because
+`SD_D123_DIR` is one pin for all three of DAT1/2/3 and Quartus's default for a
+reserved pin is to drive ground -- which would hold the card's DAT1/DAT2 low
+through the translator. A card in SPI mode ignores them either way, but that is
+not a thing to leave implicit on the far side of a level shifter.
+
+**The acceptance test needs no disk image, and that is deliberate.**
+`tools/deca_reset.tcl` prints `disk: ready=1 err=0 blocks=7626752 (3.6 GiB)` --
+`blk_ready` is `blk_sd` having completed CMD0/CMD8/ACMD41/CMD58/CMD9, and the
+count is what it read out of the card's CSD. Both are true of a blank card, so
+the pins, the translator, the direction constants and the 8.3 MHz SPI clock are
+all provable before any content exists. With an empty slot the same line reads
+`ready=0 blocks=0` and the console says `Waiting for disk to spin up...` -- two
+instruments, one answer. The fields are appended at the **bottom** of the ISSP
+probe: adding them at the top would shift every existing offset and silently
+invalidate a decode that indexes the returned bit string MSB-first.
+
+**No card detect reaches the FPGA on this board**, unlike the Wukong's `sd_cd`.
+So "no card" and "a card that never initialised" are the same reading, and the
+only way to tell them apart is to try another card.
+
 **The board layer is the seam, and it is small.** `boards/DECA/` is a clock
 generator (two ALTPLLs), a Wishbone-to-DDR3 adapter, a JTAG console bridge with
 two UART halves, a DP83620 sequencer, and a board top implementing

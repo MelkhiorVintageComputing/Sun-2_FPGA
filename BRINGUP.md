@@ -307,6 +307,41 @@ this file used to say about that are wrong**, and both cost time:
   knob is **`HDMI30=1`**, which halves the clock in `hdmi_clkgen.sv` and leaves
   the code at 16.
 
+### The disk on the DECA
+
+`make -C syn quartus MACHINE=multibus CPU_DIV=60 XY450=1` makes the DECA a
+MultiBus 2/120 with the Xylogics on the board's micro-SD slot. It boots SunOS
+4.0.3 to a root shell with no network involved.
+
+**Read the JTAG panel before the console.** `tools/deca_reset.tcl` prints
+
+```
+disk   : ready=1 err=0 blocks=7626752 (3.6 GiB)
+```
+
+`ready` is `blk_sd` having completed CMD0, CMD8, ACMD41, CMD58 and CMD9, and the
+count is the capacity it read out of the card's CSD. **Both are true of a blank
+card**, so this proves the pins, the level translator, the direction constants
+and the SPI clock without depending on a single byte of disk content -- which is
+the whole reason the fields are on the probe. `ready=0 blocks=0` with the
+console saying `Waiting for disk to spin up...` is an empty slot, and the two
+instruments should always agree.
+
+**There is no card-detect line on this board.** The Wukong has `sd_cd`; the DECA
+routes nothing to the FPGA. So a missing card and a card that never finished its
+SPI init read identically, and the only way to separate them is another card.
+
+**Everything between the FPGA and the card goes through U22, an SN74AVCA406L.**
+Its A side is on the 1.5 V DDR3 rail, its B side is powered through load
+switches selected by `SD_SEL`. Four of the eight pins are configuration, not
+data, and in SPI mode they are constants -- `SD_SEL=0` for 3.3 V at the card,
+`SD_CMD_DIR=1`, `SD_D0_DIR=0`, `SD_D123_DIR=1`. If a card never comes ready and
+the panel says `ready=0`, those four are the first suspects and they are one
+build apart, not a soldering job.
+
+The failure decode below is the Wukong's and applies unchanged, because
+everything above the SPI pins is the same RTL.
+
 ### The disk, if it is built
 
 `make -C syn bitstream XY450=1 BOARD=v3` fits the Xylogics 450 and drives the
