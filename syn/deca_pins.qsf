@@ -141,3 +141,42 @@ foreach i {0 1 2 3} {
     set_instance_assignment -name IO_STANDARD "2.5 V" -to NET_RXD[$i]
 }
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to NET_PCF_EN
+
+# --------------------------------------------------------------- micro-SD
+# The Xylogics 450's media, in SPI mode.
+#
+# The FPGA does not reach the card: U22 is an SN74AVCA406L level translator
+# whose A side sits on the 1.5 V DDR3 rail -- which is why these live in bank 4
+# with DDR3 -- and whose B side is powered through load switches that SD_SEL
+# selects.  Four of the eight pins therefore carry no data at all; they
+# configure the translator, and in SPI mode they are constants driven in
+# deca_top.sv.  Pinout is DECA_User_manual.pdf Table 3-21, polarities are
+# Inputs/doc/DECA_board/Tutorials/Porting-Cores/README.md.  Nothing inferred.
+#
+# SD_DAT1 (T18), SD_DAT2 (T19) and SD_FB_CLK (R22) are not used in SPI mode and
+# are deliberately left unassigned.
+set_location_assignment PIN_T20 -to SD_CLK        ;# SCK
+set_location_assignment PIN_T21 -to SD_CMD        ;# MOSI
+set_location_assignment PIN_R18 -to SD_MISO       ;# DAT0
+set_location_assignment PIN_R20 -to SD_CS_N       ;# DAT3, used as chip select
+set_location_assignment PIN_T18 -to SD_DAT1       ;# unused in SPI mode, driven
+set_location_assignment PIN_T19 -to SD_DAT2       ;#   high rather than reserved
+set_location_assignment PIN_U22 -to SD_CMD_DIR
+set_location_assignment PIN_T22 -to SD_D0_DIR
+set_location_assignment PIN_U21 -to SD_D123_DIR
+foreach p {SD_CLK SD_CMD SD_MISO SD_CS_N SD_DAT1 SD_DAT2 \
+           SD_CMD_DIR SD_D0_DIR SD_D123_DIR} {
+    set_instance_assignment -name IO_STANDARD "1.5 V" -to $p
+}
+
+# The board template turns this on and it costs nothing: an SD card releases
+# MISO between transfers, and blk_sd reads the line while it is released.
+set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to SD_MISO
+
+# SD_SEL is the odd one out and the one to watch.  The user manual gives it as
+# 3.3 V -- Table 3-21, "FPGA output SD card VCCIO select, 3.3V" -- while the
+# board's own template assigns the location and comments the IO_STANDARD out.
+# The manual is the authority and an omitted standard would silently default to
+# 2.5 V, which is the failure this file's header warns about.
+set_location_assignment PIN_P13 -to SD_SEL
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to SD_SEL

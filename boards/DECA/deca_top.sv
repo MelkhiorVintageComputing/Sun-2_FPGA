@@ -97,7 +97,28 @@ module deca_top #(
     inout  wire [1:0]  DDR3_DM,
     inout  wire [15:0] DDR3_DQ,
     inout  wire [1:0]  DDR3_DQS_p,
-    inout  wire [1:0]  DDR3_DQS_n
+    inout  wire [1:0]  DDR3_DQS_n,
+
+    // ---- micro-SD, in SPI mode, through the board's level translator -----
+    //
+    // The FPGA does not reach the card.  Between them is U22, an
+    // SN74AVCA406L, whose A side sits on the 1.5 V DDR3 rail and whose B side
+    // is powered through load switches that SD_SEL selects.  So four of these
+    // seven pins carry no data at all -- they configure the translator -- and
+    // in SPI mode all four are constants.  Pins and polarities are the board's
+    // own: DECA_User_manual.pdf Table 3-21 for the pinout,
+    // Inputs/doc/DECA_board/Tutorials/Porting-Cores/README.md for the SPI
+    // recipe.  Nothing here is inferred.
+    output wire        SD_CLK,        // T20, = SCK
+    output wire        SD_CMD,        // T21, = MOSI
+    input  wire        SD_MISO,       // R18, = DAT0
+    output wire        SD_CS_N,       // R20, = DAT3 used as chip select
+    output wire        SD_DAT1,       // T18, unused in SPI mode -- see below
+    output wire        SD_DAT2,       // T19, likewise
+    output wire        SD_SEL,        // P13, card VCCIO select
+    output wire        SD_CMD_DIR,    // U22
+    output wire        SD_D0_DIR,     // T22
+    output wire        SD_D123_DIR    // U21
 );
 
    // ------------------------------------------------------------------
@@ -207,13 +228,18 @@ module deca_top #(
    wire [31:0] wb_dat_w, wb_dat_r;
    wire [3:0]  wb_sel;
 
-   // Block back end: a VME machine has no Xylogics, so the outputs go nowhere
-   // and the inputs are tied.  Named rather than omitted -- a port left off an
+   // Block back end.  Under SUN2_XY450 this is a real SD card; otherwise the
+   // outputs go nowhere and the inputs are tied, because a VME machine has no
+   // Xylogics.  Named rather than omitted either way -- a port left off an
    // instantiation becomes an undriven wire and reaches the board dead, which
    // is exactly how fb_video_en spent the life of the frame buffer at zero.
-   wire        blk_start, blk_we_o;
-   wire [31:0] blk_lba;
-   wire [7:0]  blk_buf_rdata;
+   //
+   // blk_req_t and blk_rsp_t are declared at file scope in wish5380_pkg.sv
+   // rather than inside a package -- see the note on interfaces in
+   // Inputs/Wish5380/doc/block.md -- so they are compilation-unit types with
+   // nothing to import, and the package file merely has to be read first.
+   blk_req_t blk_req;
+   blk_rsp_t blk_rsp;
 
    wire        mdio_i, mdio_o, mdio_oe;
    wire        mdio_cyc, mdio_stb, mdio_we, mdio_ack;
@@ -265,17 +291,18 @@ module deca_top #(
        .mii_crs        (NET_CRS),
        .mii_col        (NET_COL),
 
-       .blk_start      (blk_start),
-       .blk_we         (blk_we_o),
-       .blk_lba        (blk_lba),
-       .blk_buf_rdata  (blk_buf_rdata),
-       .blk_done       (1'b0),
-       .blk_err        (1'b0),
-       .blk_ready      (1'b0),
-       .blk_count      (32'h0),
-       .blk_buf_we     (1'b0),
-       .blk_buf_addr   (9'h0),
-       .blk_buf_wdata  (8'h0),
+       // The Xylogics 450's media: the micro-SD slot, through blk_sd.
+       .blk_start      (blk_req.start),
+       .blk_we         (blk_req.we),
+       .blk_lba        (blk_req.lba),
+       .blk_buf_rdata  (blk_req.buf_rdata),
+       .blk_done       (blk_rsp.done),
+       .blk_err        (blk_rsp.err),
+       .blk_ready      (blk_rsp.ready),
+       .blk_count      (blk_rsp.count),
+       .blk_buf_we     (blk_rsp.buf_we),
+       .blk_buf_addr   (blk_rsp.buf_addr),
+       .blk_buf_wdata  (blk_rsp.buf_wdata),
 
        .wb_cyc_o       (wb_cyc),
        .wb_stb_o       (wb_stb),
@@ -532,7 +559,11 @@ module deca_top #(
    altsource_probe #(
        .sld_auto_instance_index ("YES"),
        .instance_id             ("SUN2"),
-       .probe_width             (64),
+       // 98, not 64: the disk status is appended at the *bottom*.  Adding it
+       // at the top would shift every existing field's offset and silently
+       // invalidate tools/deca_reset.tcl's decode, which indexes the returned
+       // bit string MSB-first from zero.
+       .probe_width             (98),
        .source_width            (1),
        .source_initial_value    ("0"),
        // source_clk is what clocks the hardening registers this asks for.  It
@@ -549,7 +580,18 @@ module deca_top #(
                  phy_present, phy_cfg_done, phy_speed, phy_fd, // 52:48
                  todebug,                             // 47:40
                  diag_leds,                           // 39:32
-                 n_wr[7:0], n_rd[7:0], n_rx[7:0], n_tx[7:0]}),
+                 n_wr[7:0], n_rd[7:0], n_rx[7:0], n_tx[7:0],
+                 // 65:64 and 63:32 counting from the LSB -- the disk.
+                 //
+                 // This is the whole acceptance test for the SD path and it
+                 // needs no disk image to exist.  blk_ready means blk_sd got
+                 // through CMD0, CMD8, ACMD41, CMD58 and CMD9, which is true
+                 // of a blank card; blk_count is the capacity it read out of
+                 // the CSD.  Together they separate the three ways this board
+                 // can fail -- no controller, a controller with a card that
+                 // never initialises, and a card that initialises and reports
+                 // nonsense -- which the console alone cannot do.
+                 blk_rsp.ready, blk_rsp.err, blk_rsp.count}),
        .source (jtag_reset)
    );
 
@@ -644,6 +686,66 @@ module deca_top #(
 `endif
 
    // ------------------------------------------------------------------
+   // The disk: a Xylogics 450's media, on the micro-SD slot
+   //
+   // blk_sd comes from Inputs/Wish5380 unchanged -- an SD card in SPI mode
+   // behind the block seam Inputs/Wish5380/doc/block.md defines, the same one
+   // the Wukong uses.  It runs on cpu_clk and that is not a preference: the
+   // seam has no clock crossing in it by contract, so the back end has to
+   // share the controller's domain.  blk_sd divides that down itself, 400 kHz
+   // to bring the card up and then as fast as the divider allows.  At
+   // 16.667 MHz the fast divisor clamps to one, giving SCLK = cpu_clk/2 =
+   // 8.3 MHz, well inside the 25 MHz a card will take.
+   //
+   // The level translator's four control pins are constants because SPI mode
+   // never changes direction: CMD is always out, DAT0 always in, DAT3 is a
+   // chip select and always out.  A 4-bit engine would have to switch all
+   // three per transfer phase, which is the real reason this is SPI.
+   // ------------------------------------------------------------------
+   assign SD_SEL      = 1'b0;   // 0 => VCCIO_SD = 3.3 V at the card
+   assign SD_CMD_DIR  = 1'b1;   // MOSI, FPGA drives out
+   assign SD_D0_DIR   = 1'b0;   // MISO, FPGA reads
+   assign SD_D123_DIR = 1'b1;   // DAT3 as /CS, FPGA drives out
+
+   // DAT1 and DAT2 carry nothing in SPI mode, but SD_D123_DIR is one pin for
+   // all three of DAT1/2/3, so setting it for the chip select also points
+   // these two at the card.  Left unassigned they would take Quartus's default
+   // for a reserved pin -- driving ground -- and hold the card's DAT1/DAT2 low
+   // through the translator.  A card in SPI mode ignores them either way, but
+   // "probably harmless" is not a thing to leave implicit on the far side of a
+   // level shifter, so they are driven to the idle state a pull-up would give.
+   assign SD_DAT1     = 1'b1;
+   assign SD_DAT2     = 1'b1;
+
+`ifdef SUN2_XY450
+   // In picoseconds, computed in two steps rather than from a 1e12 literal --
+   // some Verilog front ends reject a decimal constant that large and
+   // substitute a negative number without saying so.
+   localparam int SD_CLK_PERIOD_PS = 1_000_000_000 / (CPU_CLK_HZ / 1000);
+
+   blk_sd #(.CLK_PERIOD_PS(SD_CLK_PERIOD_PS)) sdcard (
+       .clk_i     (cpu_clk),
+       .rst_i     (sys_reset),
+       .blk_i     (blk_req),
+       .blk_o     (blk_rsp),
+       .sd_clk_o  (SD_CLK),
+       .sd_cs_n_o (SD_CS_N),
+       .sd_mosi_o (SD_CMD),
+       .sd_miso_i (SD_MISO)
+   );
+`else
+   // No Xylogics, so no media.  The card is left deselected rather than
+   // undriven: these pins are assigned in deca_pins.qsf whether or not a disk
+   // is fitted, and a floating chip select into a level translator is not a
+   // state worth having on a board.
+   assign blk_rsp = '0;
+   assign SD_CLK  = 1'b0;
+   assign SD_CMD  = 1'b0;
+   assign SD_CS_N = 1'b1;
+   wire _unused_sd = &{1'b0, SD_MISO, blk_req, 1'b0};
+`endif
+
+   // ------------------------------------------------------------------
    // Board outputs
    // ------------------------------------------------------------------
    // Active low, and one panel at a time.  ~SW[0] rather than SW[0] so the
@@ -731,8 +833,7 @@ module deca_top #(
    // reports an assigned-but-never-read object, which is the warning we want:
    // it names a signal that is deliberately unused rather than one that got
    // lost.
-   wire _unused = &{1'b0, en_boot, eth_crs_stuck, fb_video_en, blk_start,
-                    blk_we_o, blk_lba, blk_buf_rdata,
+   wire _unused = &{1'b0, en_boot, eth_crs_stuck, fb_video_en,
                     KEY[1], SW[1], ddr3_cal_pass, ddr3_rdcal, 1'b0};
 
 endmodule

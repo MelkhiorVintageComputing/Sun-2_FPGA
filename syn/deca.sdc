@@ -65,3 +65,11 @@ set_false_path -to   [get_ports {LED[*] GPIO0_D[*] GPIO1_D[*]}]
 set_false_path -to   [get_ports {NET_RESET_n NET_PCF_EN NET_MDC}]
 set_false_path -from [get_ports NET_MDIO]
 set_false_path -to   [get_ports NET_MDIO]
+
+# The micro-SD, in SPI mode.  There is deliberately no create_clock on SD_CLK:
+# it is a counter-divided output of cpu_clk inside sd_spi.sv, not a clock net,
+# so there is no clock here to constrain.  MISO comes back from a card whose
+# only timing relationship to us is the one blk_sd enforces in logic.
+set_false_path -from [get_ports SD_MISO]
+set_false_path -to   [get_ports {SD_CLK SD_CMD SD_CS_N SD_DAT1 SD_DAT2 SD_SEL \
+                                 SD_CMD_DIR SD_D0_DIR SD_D123_DIR}]

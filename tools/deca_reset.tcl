@@ -60,6 +60,8 @@ end_insystem_source_probe
 #   63:56 RDCAL  55 cal_pass  54 ddr3_ready  53 link  52 phy_present
 #   51 cfg_done  50:49 speed  48 full_duplex
 #   47:40 todebug  39:32 diag_leds  31:24 wr  23:16 rd  15:8 rx  7:0 tx
+# then, appended below those (so nothing above moves):
+#   blk_ready  blk_err  blk_count[31:0]   -- string indices 64, 65, 66..97
 set rdcal   [b2i [string range $raw  0  7]]
 set calpass [string index $raw  8]
 set ready   [string index $raw  9]
@@ -90,6 +92,25 @@ set c_rx [b2i [string range $raw 48 55]]
 set c_tx [b2i [string range $raw 56 63]]
 puts [format "console: machine->host rx=%d wr=%d   host->machine rd=%d tx=%d (mod 256)" \
         $c_rx $c_wr $c_rd $c_tx]
+
+# The disk, if one is fitted.  Meaningful with any card, blank or not: ready is
+# blk_sd having completed the SPI init handshake and count is the capacity out
+# of the card's CSD, neither of which needs a valid disk image.  A build with no
+# Xylogics reports ready=0 count=0, which is also what a missing card gives --
+# the DECA brings no card-detect line to the FPGA, so those two cannot be told
+# apart here.
+if {[string length $raw] >= 98} {
+    set d_ready [string index $raw 64]
+    set d_err   [string index $raw 65]
+    set d_count [b2i [string range $raw 66 97]]
+    set gib     [expr {$d_count * 512.0 / 1073741824.0}]
+    puts [format "disk   : ready=%s err=%s blocks=%d (%.1f GiB)" \
+            $d_ready $d_err $d_count $gib]
+    if {$d_ready eq "0" && $d_count == 0} {
+        puts "         ^ no media: either no card, a card that never finished"
+        puts "           its SPI init, or a build without SUN2_XY450."
+    }
+}
 
 # todebug, decoded.  This is the panel BRINGUP.md says to read first.
 puts [format "todebug: 0x%02x  heartbeat=%d reset=%d seen_err=%d fc_err=%d diag_wr=%d seen_stall=%d" \

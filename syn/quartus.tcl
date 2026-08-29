@@ -49,6 +49,7 @@ array set opt {
     -trace     0
     -trace_page 0
     -trace_fc  5
+    -xy450     0
     -eth5      224
     -eram      1
     -jobs      8
@@ -91,6 +92,23 @@ switch -- $opt(-machine) {
 if {$opt(-machine) ne "multibus" && [lsearch $defines SUN2_MB_ETHER] >= 0} {
     puts "ERROR: the MultiBus Ethernet card only exists on a 2/120"
     exit 1
+}
+# The Xylogics 450.  Both guards are transcribed from sun2_fpga.v:151-167,
+# where they are $fatal in an initial block -- which Quartus discards, so on
+# this path they are enforced here or nowhere.
+if {$opt(-xy450) != 0} {
+    if {$opt(-machine) ne "multibus"} {
+        puts "ERROR: XY450 is MultiBus only: a 2/50 takes a Xylogics 451 on the"
+        puts "       VME bus, which is a different card"
+        exit 1
+    }
+    if {$opt(-mem_pages) < 512} {
+        puts "ERROR: XY450 needs at least 1 MiB installed (mem_pages >= 512):"
+        puts "       the boot map puts the DVMA window on physical 0xC0000"
+        exit 1
+    }
+    lappend defines SUN2_XY450
+    puts "== Xylogics 450 fitted, media on the micro-SD slot =="
 }
 if {$opt(-mem_pages) < 8 || $opt(-mem_pages) > 4096} {
     puts "ERROR: -mem_pages $opt(-mem_pages) is outside 8..4096"
@@ -293,6 +311,17 @@ set sv [list \
 if {$opt(-machine) eq "multibus"} {
     lappend sv $top/rtl/sun2-multibus/sun2_mb_ether.sv \
                $top/rtl/sun2-multibus/sun2_xy450.sv
+}
+
+# The SD back end behind the block seam.  wish5380_pkg.sv comes first and that
+# ordering is load-bearing: blk_req_t and blk_rsp_t are declared at file scope
+# rather than inside the package, so they are compilation-unit types that must
+# already exist when deca_top.sv is read.  Read for any board top, not just
+# under -xy450, because deca_top.sv declares blk_req/blk_rsp unconditionally --
+# the tie-off arm needs the types too.
+if {$opt(-topent) ne "top"} {
+    set w5 $top/build/inputs/Wish5380/src
+    lappend sv $w5/wish5380_pkg.sv $w5/sd_spi.sv $w5/blk_sd.sv
 }
 
 # The CPU core.
