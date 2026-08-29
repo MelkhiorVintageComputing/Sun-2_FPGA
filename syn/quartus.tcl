@@ -48,6 +48,7 @@ array set opt {
     -cpu_duty  50
     -trace     0
     -trace_page 0
+    -trace_fc  5
     -eth5      224
     -eram      1
     -jobs      8
@@ -113,7 +114,7 @@ lappend defines SUN2_QUARTUS
 if {$opt(-trace) != 0} {
     lappend defines SUN2_ILA
     lappend defines SUN2_TRACE
-    puts "== trace recorder fitted, trigger page A\[23:11\] = [format 0x%04X $opt(-trace_page)] =="
+    puts "== trace recorder fitted, trigger page A\[23:11\] = [format 0x%04X [expr {$opt(-trace_page)}]] = addresses [format 0x%06X [expr {$opt(-trace_page) << 11}]].., FC $opt(-trace_fc) =="
 }
 if {$opt(-eth5) != 224} { lappend defines SUN2_IDPROM_ETH5=$opt(-eth5) }
 if {$opt(-cpu) eq "rd68011"} { lappend defines SUN2_CPU_RD68011 }
@@ -181,8 +182,15 @@ if {$opt(-topent) ne "top"} {
     set_parameter -name CPU_DIV    $opt(-cpu_div)
     set_parameter -name CPU_DUTY   $opt(-cpu_duty)
     if {$opt(-trace_page) != 0} {
-        set_parameter -name TRACE_PAGE $opt(-trace_page)
+        # Decimal, not "0x1DC5".  Tcl is happy to compare and print a 0x
+        # string, and set_parameter is happy to store one, and Verilog then
+        # does not read it as the number meant -- the trigger came up as page
+        # 0x333 and a capture of the wrong page looks exactly like a machine
+        # that never touched the right one.  expr collapses it to an integer
+        # here, and the banner below prints what was actually set.
+        set_parameter -name TRACE_PAGE [expr {$opt(-trace_page)}]
     }
+    set_parameter -name TRACE_FC [expr {$opt(-trace_fc)}]
 }
 set_global_assignment -name NUM_PARALLEL_PROCESSORS $opt(-jobs)
 

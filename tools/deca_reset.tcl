@@ -40,10 +40,17 @@ if {$idx < 0} { puts "no SUN2 probe instance found; is this the DECA machine bui
 start_insystem_source_probe -device_name $dv -hardware_name $hw
 
 if {[lindex $argv 0] eq "reset"} {
-    write_source_data -instance_index $idx -value 1
+    # -value_in_hex, because write_source_data silently ignores a decimal
+    # value -- no error, no warning, the source simply keeps what it had.
+    # Found with the wider source on the trace recorder, where read_source_data
+    # could show it; a 1-bit source gives no such hint, so whether this reset
+    # ever actually pulsed before now is not something the old code could say.
+    write_source_data -instance_index $idx -value 1 -value_in_hex
     after 50
-    write_source_data -instance_index $idx -value 0
-    puts "reset pulsed"
+    write_source_data -instance_index $idx -value 0 -value_in_hex
+    puts "reset pulsed (a warm reset: the PROM takes its non-power-up path and"
+    puts "  prints `Watchdog reset!' and goes straight to the prompt, skipping the"
+    puts "  device probes.  Re-program the device for a cold boot.)"
 }
 
 set raw [read_probe_data -instance_index $idx]

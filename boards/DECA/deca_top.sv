@@ -51,7 +51,12 @@ module deca_top #(
     // is on.  0x1DC5 is 0xEE2800, the Sun-2/50's SCSI registers, which is what
     // sdprobe touches and what stops raising a bus error above 12.5 MHz.
     parameter int TRACE_PAGE = 'h1DC5,
-    parameter int TRACE_POST = 192
+    parameter int TRACE_POST = 192,
+    // Function code to qualify the trigger on, and whether to.  Defaults to 5,
+    // supervisor data, which is what a device probe is -- the untypical case
+    // is wanting *any* function code, not wanting one.
+    parameter int TRACE_FC    = 5,
+    parameter int TRACE_FC_EN = 1
 ) (
     input  wire        MAX10_CLK1_50,   // PIN_M8,  2.5 V
     input  wire [1:0]  KEY,             // H21 H22, 1.5 V Schmitt, active low
@@ -515,13 +520,14 @@ module deca_top #(
    wire [117:0] trc_rd_data;
    wire [7:0]   trc_wr_ptr;
    wire         trc_triggered, trc_done;
-   wire [22:0]  trc_src;
+   wire [26:0]  trc_src;
 
    // The source carries the whole instrument's controls, not just a read
    // address:
    //
    //   [7:0]   sample index          [8]     which half of the 118 bits
    //   [21:9]  trigger page          [22]    hold (clears and holds the capture)
+   //   [25:23] trigger function code [26]    qualify on it
    //
    // `hold' rather than `arm' so that a source of all zeros -- which is what a
    // freshly configured device has, and what a boot with nobody attached runs
@@ -535,6 +541,14 @@ module deca_top #(
        .rst       (board_reset),
        .dbg_bus   (dbg_bus),
        .trig_page (trc_page),
+       // As with the page: the source wins when the host has set it, and the
+       // build-time default applies until then -- which is the only thing that
+       // works for a *cold* boot, where configuring the device zeroes the
+       // source and the probe happens before any host can write one.  A JTAG
+       // reset is no substitute: it is a warm reset, and the PROM's
+       // non-power-up path skips the device probes entirely.
+       .trig_fc   (trc_src[26] ? trc_src[25:23] : TRACE_FC[2:0]),
+       .trig_fc_en(trc_src[26] | (TRACE_FC_EN != 0)),
        .arm       (~trc_src[22]),
        .rd_addr   (trc_src[7:0]),
        .rd_data   (trc_rd_data),
@@ -550,7 +564,7 @@ module deca_top #(
        .sld_auto_instance_index ("YES"),
        .instance_id             ("TRAC"),
        .probe_width             (64),
-       .source_width            (23),
+       .source_width            (27),
        .source_initial_value    ("0"),
        .enable_metastability    ("YES")
    ) u_trace_issp (

@@ -14,12 +14,19 @@
 #
 #   source[7:0]  sample index      source[8]   which half of the 118 bits
 #   source[21:9] trigger page      source[22]  hold (clears and holds capture)
+#   source[25:23] trigger FC       source[26]  qualify on it
 #   probe        low half, or {done, triggered, wr_ptr[7:0], high 54 bits}
 #
 # Pass a page to retarget and re-arm:
 #
-#     quartus_stp -t tools/deca_trace.tcl 0x1DE0     the VME boot PROM
-#     quartus_stp -t tools/deca_trace.tcl 0x1DC5     the SCSI registers
+#     quartus_stp -t tools/deca_trace.tcl 0x1DC5 5   the SCSI registers, FC 5
+#     quartus_stp -t tools/deca_trace.tcl 0x1DC5     ... at any function code
+#
+# Give the function code.  Without it the trigger fires on the boot PROM's
+# page-map *write* for that page, which is a control-space (FC 3) access
+# carrying the page's own address bits and is answered in two clocks by the
+# fast-device DTACK -- a perfectly healthy cycle that looks like the probe and
+# is not.  A device probe is FC 5.
 #
 # With no argument it reads whatever the running capture holds, on the page the
 # bitstream was built with.  Re-arming clears the buffer, so the machine has to
@@ -32,6 +39,19 @@
 
 package require ::quartus::jtag
 package require ::quartus::insystem_source_probe
+
+# write_source_data takes a DECIMAL value and silently ignores it.
+#
+# Not an error, not a warning: the source simply keeps its old contents, which
+# is how this instrument's first capture came back with the trigger never fired
+# on a page the machine executes from thousands of times a second.  Only
+# -value_in_hex and a raw binary string actually land.  Every write goes
+# through here so there is one place that can be wrong, and read_source_data is
+# what proved it -- an instrument whose controls cannot be read back cannot be
+# told from a broken machine.
+proc wsrc {idx v} {
+    write_source_data -instance_index $idx -value [format %X $v] -value_in_hex
+}
 
 proc b2i {s} { set v 0; foreach c [split $s ""] { set v [expr {$v*2 + ($c eq "1")}] }; return $v }
 
@@ -58,19 +78,23 @@ set POST  192
 # Retarget and re-arm, if asked.  Hold clears the capture; releasing it starts
 # a fresh one on the new page.
 set page 0
+set fcbits 0
+if {[llength $argv] > 1} {
+    set fcbits [expr {(1 << 26) | ([lindex $argv 1] << 23)}]
+}
 if {[llength $argv] > 0} {
     set page [expr {[lindex $argv 0]}]
-    write_source_data -instance_index $idx -value [expr {(1 << 22) | ($page << 9)}]
+    wsrc $idx [expr {(1 << 22) | ($page << 9) | $fcbits}]
     after 100
-    write_source_data -instance_index $idx -value [expr {$page << 9}]
+    wsrc $idx [expr {($page << 9) | $fcbits}]
     puts [format "# re-armed on page A\[23:11\]=0x%04X (addresses 0x%06X..0x%06X)" \
             $page [expr {$page << 11}] [expr {($page << 11) + 0x7FF}]]
     puts "# the buffer is now empty; the machine must reach that page again."
 }
-set base [expr {$page << 9}]
+set base [expr {($page << 9) | $fcbits}]
 
 # Status first.  It rides in the high half, so any address will do.
-write_source_data -instance_index $idx -value [expr {$base | (1 << 8)}]
+wsrc $idx [expr {$base | (1 << 8)}]
 after 5
 set hi [read_probe_data -instance_index $idx]
 set done      [fld $hi 64 63 63]
@@ -92,10 +116,10 @@ puts "row,rel,A,FC,AS,RW,UDS,LDS,DTACK,BERR,C_S4,C_S6,C_S8,C_S24,smap,ps_pmap,ma
 for {set i 0} {$i < $DEPTH} {incr i} {
     set a [expr {($wrptr + $i) % $DEPTH}]
 
-    write_source_data -instance_index $idx -value [expr {$base | $a}]
+    wsrc $idx [expr {$base | $a}]
     after 2
     set lo [read_probe_data -instance_index $idx]
-    write_source_data -instance_index $idx -value [expr {$base | (1 << 8) | $a}]
+    wsrc $idx [expr {$base | (1 << 8) | $a}]
     after 2
     set hi [read_probe_data -instance_index $idx]
 

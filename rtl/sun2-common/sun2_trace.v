@@ -67,6 +67,14 @@ module sun2_trace
     // capture is held cleared, so the host sets a page, releases arm, and can
     // retry as often as it likes on one bitstream.
     input  wire [12:0]           trig_page,
+    // Function code to qualify on, and whether to.  Without it the trigger is
+    // useless on a device page: the boot PROM writes the *page map entry* for
+    // a page at a control-space (FC 3) address carrying that page's own
+    // address bits, so the first cycle to touch 0xEE2800 is the map setup and
+    // not the probe, and a capture of the map setup looks like a perfectly
+    // healthy two-clock DTACK. A device probe is FC 5.
+    input  wire [2:0]            trig_fc,
+    input  wire                  trig_fc_en,
     input  wire                  arm,
 
     input  wire [DEPTH_LOG2-1:0] rd_addr,
@@ -89,7 +97,9 @@ module sun2_trace
 
    wire        as_low = ~dbg_bus[47];
    wire [12:0] page   =  dbg_bus[73:61];
-   wire        hit    = as_low && (page == trig_page);
+   wire [2:0]  fc     =  dbg_bus[50:48];
+   wire        hit    = as_low && (page == trig_page)
+                        && (!trig_fc_en || (fc == trig_fc));
 
    assign wr_ptr    = wp;
    assign triggered = trig_q;

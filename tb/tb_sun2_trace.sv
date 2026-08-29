@@ -17,6 +17,7 @@ module tb_sun2_trace;
    // Samples before the trigger sample = DEPTH - POST - 1.
    localparam PRE = DEPTH - POST - 1;
    localparam [12:0] PAGE = 13'h1DC5;
+   localparam [2:0]  TRIG_FC = 3'd5;
 
    reg clk = 0, rst = 1;
    always #5 clk = ~clk;
@@ -29,7 +30,8 @@ module tb_sun2_trace;
 
    sun2_trace #(.WIDTH(WIDTH), .DEPTH_LOG2(DL2), .POST(POST))
    dut (.clk(clk), .rst(rst), .dbg_bus(bus),
-	.trig_page(PAGE), .arm(1'b1), .rd_addr(rd_addr),
+	.trig_page(PAGE), .trig_fc(TRIG_FC), .trig_fc_en(1'b1),
+	.arm(1'b1), .rd_addr(rd_addr),
 	.rd_data(rd_data), .wr_ptr(wr_ptr), .triggered(triggered), .done(done));
 
    integer checks = 0, fails = 0;
@@ -43,11 +45,17 @@ module tb_sun2_trace;
 
    // A dbg_bus word: AS_n at 47, A[23:11] at 73:61, a serial number in 15:0.
    function [WIDTH-1:0] mk(input as_n, input [12:0] page, input [15:0] serial);
+      begin mk = mkfc(as_n, page, TRIG_FC, serial); end
+   endfunction
+
+   function [WIDTH-1:0] mkfc(input as_n, input [12:0] page, input [2:0] fc,
+			     input [15:0] serial);
       begin
-	 mk = {WIDTH{1'b0}};
-	 mk[47]    = as_n;
-	 mk[73:61] = page;
-	 mk[15:0]  = serial;
+	 mkfc = {WIDTH{1'b0}};
+	 mkfc[47]    = as_n;
+	 mkfc[73:61] = page;
+	 mkfc[50:48] = fc;
+	 mkfc[15:0]  = serial;
       end
    endfunction
 
@@ -105,12 +113,25 @@ module tb_sun2_trace;
       drive(1'b1, PAGE, 16'd99);
       ck(!triggered, "an idle bus on the trigger page does not trigger");
 
+      // The right page and a live bus, but the wrong function code.  This is
+      // the case that actually bit: the PROM's page-map write lands on the
+      // device page's own address in control space, so without this qualifier
+      // the trigger fires on the map setup and never sees the probe.
+      begin
+	 @(negedge clk);
+	 bus = mkfc(1'b0, PAGE, 3'd3, 16'd98);
+	 was_done = done;
+	 @(posedge clk); #1;
+	 if (!was_done) begin drove[n] = 16'd98; n = n + 1; end
+      end
+      ck(!triggered, "the right page at the wrong FC does not trigger");
+
       drive(1'b0, PAGE, trig_at[15:0]);
-      ck(triggered, "AS low on the trigger page triggers");
+      ck(triggered, "AS low on the trigger page and FC triggers");
 
       for (i = 0; i < 40; i = i + 1) drive(1'b0, 13'h0456, 16'd200 + i[15:0]);
       ck(done, "capture stops after POST more samples");
-      ck(n == 40 + 1 + 1 + POST, "exactly POST samples written after the trigger");
+      ck(n == 40 + 1 + 1 + 1 + POST, "exactly POST samples written after the trigger");
 
       // Nothing may be written after done.
       for (i = 0; i < 20; i = i + 1) drive(1'b0, 13'h1FFF, 16'hDEAD);
