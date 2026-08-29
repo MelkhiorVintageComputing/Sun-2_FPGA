@@ -215,7 +215,7 @@ MEM_PAGES ?= 3584
 ERAM      ?= 1
 QSTAGE    ?= map
 QTOPENT   ?= top
-QDIR = $(abspath $(TOP))/build/quartus/$(BOARD)-$(MACHINE)-$(CPU)-p$(MEM_PAGES)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)
+QDIR = $(abspath $(TOP))/build/quartus/$(BOARD)-$(MACHINE)-$(CPU)-p$(MEM_PAGES)-cpu$(CPU_MHZ_TAG)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)
 
 quartus-run: rom inputs
 	@# A port left off an instantiation is an undriven wire, not an error --
@@ -228,7 +228,8 @@ quartus-run: rom inputs
 	cd $(QDIR) && $(QUARTUS) quartus_sh -t $(HERE)/quartus.tcl \
 		-root $(abspath $(TOP)) -board $(BOARD) -machine $(MACHINE) \
 		-cpu $(CPU) -topent $(QTOPENT) -stage $(QSTAGE) \
-		-mem_pages $(MEM_PAGES) -cpu_hz $(CPU_HZ) -eth5 $(ETH5_D) \
+		-mem_pages $(MEM_PAGES) -cpu_hz $(CPU_HZ) \
+		-cpu_div $(if $(CPU_DIV),$(CPU_DIV),0) -eth5 $(ETH5_D) \
 		-eram $(ERAM) -jobs $(AJOBS) > $(QDIR)/quartus.log 2>&1 || \
 		{ echo "== FAILED, tail of $(QDIR)/quartus.log =="; tail -40 $(QDIR)/quartus.log; exit 1; }
 	@grep -E '^== ' $(QDIR)/quartus.log

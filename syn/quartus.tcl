@@ -19,6 +19,9 @@
 #   -stage     map | fit | asm          how far to go
 #   -mem_pages <n>                      2 KiB pages of main memory
 #   -cpu_hz    <hz>                     CPU clock
+#   -cpu_div   <n>                      ... or name the PLL divider directly.
+#                                       Wins over -cpu_hz, which is then
+#                                       derived from it.
 #   -eth5      <n>                      last byte of the ID PROM MAC
 #   -eram      0 | 1                    the assignment below.  It is a knob
 #                                       ONLY so that its effect can be measured
@@ -41,6 +44,7 @@ array set opt {
     -stage     map
     -mem_pages 32
     -cpu_hz    12500000
+    -cpu_div   0
     -eth5      224
     -eram      1
     -jobs      8
@@ -88,6 +92,14 @@ if {$opt(-mem_pages) < 8 || $opt(-mem_pages) > 4096} {
     exit 1
 }
 
+# CPU_DIV wins over CPU_HZ, and the reported frequency is recomputed from it --
+# the same rule build.tcl follows, and for the reason recorded there: a banner
+# saying 20000000 Hz over a build running at VCO/51 is a lie that survives into
+# every measurement taken from it.
+if {$opt(-cpu_div) != 0} {
+    set opt(-cpu_hz) [expr {1000000000 / $opt(-cpu_div)}]
+}
+
 lappend defines MEM_PAGES=$opt(-mem_pages)
 lappend defines SUN2_QUARTUS
 if {$opt(-eth5) != 224} { lappend defines SUN2_IDPROM_ETH5=$opt(-eth5) }
@@ -119,6 +131,11 @@ foreach {n v} [list SUN2_RTC_MON  [lindex $rtc 0] SUN2_RTC_DAY  [lindex $rtc 1] 
 puts "== Sun-2 for [board_family $opt(-board)] [board_device $opt(-board)] ([board_vendor $opt(-board)]) =="
 puts "== board $opt(-board), machine $opt(-machine), core $opt(-cpu), entity $opt(-topent) =="
 puts "== memory $opt(-mem_pages) pages = [expr {$opt(-mem_pages) * 2}] KiB =="
+if {$opt(-cpu_div) != 0} {
+    puts "== CPU clock $opt(-cpu_hz) Hz (VCO/$opt(-cpu_div)) =="
+} else {
+    puts "== CPU clock $opt(-cpu_hz) Hz =="
+}
 puts "== defines: $defines =="
 puts "== eram: $opt(-eram) =="
 
@@ -128,6 +145,17 @@ project_new sun2 -overwrite
 set_global_assignment -name FAMILY               [board_family $opt(-board)]
 set_global_assignment -name DEVICE               [board_device $opt(-board)]
 set_global_assignment -name TOP_LEVEL_ENTITY     $opt(-topent)
+
+# The knob has to reach the logic, not just the build.  This project has shipped
+# three builds whose banner and whose gateware disagreed -- fb_video_en never
+# connected, HDMI30=1 read by no file, CPU_DIV declared on the clkgen and not
+# forwarded past the top -- and this flow accepted -cpu_hz and passed it to
+# nothing at all for the whole of the port.  set_parameter reaches the top-level
+# entity's parameters; deca_top forwards both to deca_clkgen.
+if {$opt(-topent) ne "top"} {
+    set_parameter -name CPU_CLK_HZ $opt(-cpu_hz)
+    set_parameter -name CPU_DIV    $opt(-cpu_div)
+}
 set_global_assignment -name NUM_PARALLEL_PROCESSORS $opt(-jobs)
 
 # --- the trap that emits no warning ---------------------------------------

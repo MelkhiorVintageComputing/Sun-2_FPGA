@@ -37,6 +37,7 @@
 `timescale 1ns / 1ps
 
 `include "sun2_config.vh"
+`include "sun2_attr.vh"
 
 module deca_top #(
     // Declared here as well as on deca_clkgen, and forwarded to the instance.
@@ -119,6 +120,45 @@ module deca_top #(
      if (!pll_locked)          hold_ctr <= 16'hFFFF;
      else if (hold_ctr != 0)   hold_ctr <= hold_ctr - 16'd1;
 
+   // Everything that goes into the reset is synchronised into cpu_clk first,
+   // and the result is a register rather than a combinational net.
+   //
+   // This is the Wukong's CDC-10 bug, and it was reproduced here in a worse
+   // form before anyone looked: board_reset was five terms OR'd together --
+   // KEY[0] (a button), pll_locked (asynchronous), hold_ctr (cpu_clk),
+   // jtag_reset (the TCK domain, through ISSP) and ddr3_ready (the DDR3
+   // domain) -- driving reset_sync's *asynchronous* reset input in three
+   // places, the PHY's reset pin and the DDR3 controller's.  When two terms
+   // move in opposite directions on one edge the skew between their routes is
+   // a glitch on an async reset, and whether it is wide enough to take depends
+   // on placement.  CLAUDE.md records what that cost on the other board: a
+   // machine that froze part-way through an NFS read, with WNS *better* in the
+   // builds that failed.
+   //
+   // Quartus says the same thing its own way.  report_metastability puts
+   // DDR3_READY at the top of the synchroniser list and gives the design a
+   // worst-case MTBF of 8.07e+03 seconds -- about two hours.
+   `SUN2_ASYNC_REG reg key_s1, key_s2;
+   `SUN2_ASYNC_REG reg rdy_s1, rdy_s2;
+   `SUN2_ASYNC_REG reg jrst_s1, jrst_s2;
+
+   always @(posedge cpu_clk) begin
+      key_s1  <= ~KEY[0];    key_s2  <= key_s1;
+      rdy_s1  <= ddr3_ready; rdy_s2  <= rdy_s1;
+      jrst_s1 <= jtag_reset; jrst_s2 <= jrst_s1;
+   end
+
+   // Both start asserted, so the machine is held until cpu_clk actually runs --
+   // which cannot happen before the PLL locks, so there is no window where a
+   // stale register releases the design early.
+   reg board_reset_raw_q = 1'b1;
+   reg board_reset_q     = 1'b1;
+
+   always @(posedge cpu_clk) begin
+      board_reset_raw_q <= key_s2 | ~pll_locked | (hold_ctr != 16'd0) | jrst_s2;
+      board_reset_q     <= board_reset_raw_q | ~rdy_s2;
+   end
+
    // A reset that can be asserted over JTAG, because the DECA's only reset is a
    // physical button and this machine is worked on remotely.
    //
@@ -135,8 +175,8 @@ module deca_top #(
    // out of calibration and is what the machine sees.  Feeding ~ddr3_ready back
    // into the controller's own reset would be circular -- it would never
    // calibrate, because calibrating requires not being in reset.
-   wire board_reset_raw = ~KEY[0] | ~pll_locked | (hold_ctr != 16'd0) | jtag_reset;
-   wire board_reset     = board_reset_raw | ~ddr3_ready;
+   wire board_reset_raw = board_reset_raw_q;
+   wire board_reset     = board_reset_q;
 
    wire sys_reset;
    reset_sync rst_cpu (.clk(cpu_clk),
@@ -429,8 +469,15 @@ module deca_top #(
        .probe_width             (64),
        .source_width            (1),
        .source_initial_value    ("0"),
+       // source_clk is what clocks the hardening registers this asks for.  It
+       // was left unconnected, which meant the JTAG source bit crossed from the
+       // TCK domain into an asynchronous reset with no synchroniser at all --
+       // "enable_metastability" with nothing to clock it is a comment, not a
+       // synchroniser.  It is still resynchronised in the reset assembly above,
+       // because two flops in the right domain beat one megafunction parameter.
        .enable_metastability    ("YES")
    ) u_issp (
+       .source_clk (cpu_clk),
        .probe  ({ddr3_rdcal,                          // 63:56
                  ddr3_cal_pass, ddr3_ready, phy_link, // 55:53
                  phy_present, phy_cfg_done, phy_speed, phy_fd, // 52:48
