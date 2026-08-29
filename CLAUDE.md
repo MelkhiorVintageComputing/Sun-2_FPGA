@@ -508,6 +508,103 @@ The claim held, but not for free: a second front-end found three defects in
 shared RTL that had survived the life of the project, each of which Vivado
 tolerates silently. They are in the traps section below.
 
+**12.5 MHz is the ceiling, the cause is a half-period path inside the CPU
+core, and every cheaper explanation was measured and rejected.** The knob to
+ask the question with did not exist until recently -- `-cpu_hz` reached no
+parameter in the Quartus flow, so every DECA build ran at `deca_top`'s default
+whatever the banner said. With it wired through, the board says:
+
+| clock | what the PROM does |
+|---|---|
+| 12.5 MHz (VCO/80) | `Probing I/O bus: ie`, `Boot: ie(0,0,0)vmunix` -- correct |
+| 13.889 MHz (VCO/72) | `Probing I/O bus: sd ie`, boots `sd(2,0,0)`, `scsi: cannot select` x20, `Giving up...` |
+| 14.286 MHz (VCO/70) | `sd ie` again, boots `sd(0,0,0)`, `Timeout Bus Error, addr: 00EE2804` |
+| 16.667 MHz (VCO/60) | `ie` alone, but `Boot: mt(FFFFFFFF,0,0)` / `No controller at mbio FFFFFFFF` |
+
+**Every one of those is a device-probe verdict, decided before a single packet
+leaves the machine**, so the comparison stands whether or not a netboot server
+is listening. `sdprobe` (`rsun/sys/sunstand/sd.c`) reports a controller present
+only if reading `dma_count` does *not* bus-error **and** a written `0x6789`
+reads back -- so above 12.5 MHz an address that must time out is being
+acknowledged *and* is storing data. At 16.667 MHz it is the other way round:
+`ieprobe` on a VME machine touches no Ethernet hardware at all, it reads the ID
+PROM and checks a 16-byte XOR checksum, and it fails.
+
+**It is deterministic and it is not placement.** Three runs at 16.667 MHz are
+byte-identical, and `QSEED=3` -- a different fitter seed, Fmax 17.88 -> 17.98
+MHz, so the placement really moved -- fails identically twice more. That is the
+opposite of the Wukong, where placement flipped outcomes twice, and it is worth
+knowing that the same instrument gives the opposite answer here.
+
+**Timing is clean and says nothing.** At 16.667 MHz the design meets setup at
+every corner (2.042 ns at 85 C, 4.552 at 0 C) and hold at all three (0.097 ns
+fast); `report_ucp` finds no unconstrained *internal* path, only I/O pads. The
+worst path in the whole design is 0.682 ns and it is inside the DDR3 PHY at
+250 MHz, not in the machine at all.
+
+**What the critical path actually is, and why WNS flatters it.** The machine's
+worst path is
+`u_seq|u_urom|...porta_address_reg0` -> `u_biu|d_o[7]` -- the microcode ROM's
+address register to the bus interface's data output, which is the same seq->biu
+path that caps the Wukong at 20 MHz. Its **Relationship is half the clock
+period** in every build measured:
+
+```
+  12.5   MHz   requirement 40.000   data delay 31.401   slack 8.147
+  14.286 MHz   requirement 35.000   data delay 29.277   slack 5.257
+  15.625 MHz   requirement 32.000   data delay 29.093   slack 2.504
+  16.667 MHz   requirement 30.000   data delay 27.510   slack 2.042
+```
+
+Rising edge to falling edge, so **the requirement is the PLL output's high
+time, and STA models that as exactly 50% of the period.** `derive_clock_uncertainty`
+adds jitter; it does not add duty-cycle distortion, because for a full-period
+path there is none to add. On a half-period path there is, and it comes
+straight off a margin of 2.042 ns on 30 ns -- 6.8%. That is a principled reason
+why the reported slack overstates the real one *on exactly the class of path
+that limits this design*, and it applies to the Wukong's 40 MHz ambition too.
+
+Note also the data delay only compresses from 31.4 to 27.5 ns across a 2.7x
+range of constraint: the router works as hard as it is asked and no harder, so
+"Fmax" rises as you demand more (15.70 at 12.5 MHz, 17.44 at 16.667) and none
+of those numbers predicted the board.
+
+**Rejected, each by measurement rather than argument**, and recorded because
+each was plausible enough to spend a build on:
+
+* *DDR3 placement variance.* Its worst slack is flat across all four builds --
+  0.68, 0.85, 0.85, 1.14 ns -- including the working one. Not the discriminator.
+* *PLL duty-cycle distortion from an odd divider.* Every build's C0 counter is
+  **even** with an exact 50/50 split (24/24, 21/21, 16/16, 18/18); ALTPLL picks
+  a VCO that makes it so. A good theory, and simply not what the hardware does.
+* *Metastability.* `report_metastability` -- Quartus's `report_cdc` -- gives a
+  worst-case design MTBF of 5.28e3 s over 1472 chains, dominated by BrianHG's
+  `DDR3_READY` fanning into the commander with a shortest chain of **one**
+  register. Real, worth fixing, and not this: metastability is random and this
+  failure is 5-for-5 identical.
+* *A stale Wishbone acknowledgement answering a device cycle* -- the Wukong trap
+  in this file. `sun2_wishbone_bridge.v` is `W_ACK = (wb_ack_i & issued) | done`
+  with both cleared when `MATCH_ANY` drops, so a late ack cannot acknowledge a
+  device cycle. Read the RTL rather than rebuilding.
+
+So the next move is not another frequency. It is SignalTap on the `C_S` chain
+and the DTACK terms at the SCSI probe address -- the DECA's equivalent of the
+ILA that found the Wukong's frame-buffer timeout race, which was this same
+shape: `C_S24` firing on clock 12 against a DTACK on clock 13.
+
+**A capture that starts 65 bytes in is the JTAG FIFO, not the machine.** Every
+board capture this project has taken loses a run of the banner and resumes
+mid-word, and the resume point moves between runs, which reads exactly like
+corruption. It is not. The prefix that survives is
+`Self Test completed successfully.\r\n\r\nSun Workstation, Model Sun-2` --
+**65 bytes, every time, at every clock**: the JTAG UART's 64-byte write FIFO
+plus one in flight, filled before `juart-terminal` finishes attaching, after
+which the bridge drops until someone drains it. Programming the device is
+itself a reset, so attaching immediately after `quartus_pgm` and skipping the
+separate reset step buys back most of it. Do not read a mangled banner as a
+machine fault: compare the drop against a known-good clock first, which is what
+turned this from a finding into an artefact.
+
 **The board layer is the seam, and it is small.** `boards/DECA/` is a clock
 generator (two ALTPLLs), a Wishbone-to-DDR3 adapter, a JTAG console bridge with
 two UART halves, a DP83620 sequencer, and a board top implementing
