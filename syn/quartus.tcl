@@ -45,6 +45,7 @@ array set opt {
     -mem_pages 32
     -cpu_hz    12500000
     -cpu_div   0
+    -cpu_duty  50
     -eth5      224
     -eram      1
     -jobs      8
@@ -167,6 +168,7 @@ if {$opt(-seed) != 0} {
 if {$opt(-topent) ne "top"} {
     set_parameter -name CPU_CLK_HZ $opt(-cpu_hz)
     set_parameter -name CPU_DIV    $opt(-cpu_div)
+    set_parameter -name CPU_DUTY   $opt(-cpu_duty)
 }
 set_global_assignment -name NUM_PARALLEL_PROCESSORS $opt(-jobs)
 

@@ -49,7 +49,28 @@ module deca_clkgen #(
     // number of hertz; it wins over CPU_CLK_HZ, and quartus.tcl recomputes the
     // reported frequency from it so the banner cannot disagree with the logic.
     parameter int CPU_CLK_HZ = 12_500_000,
-    parameter int CPU_DIV    = 0
+    parameter int CPU_DIV    = 0,
+    // The CPU clock's duty cycle, in percent high.
+    //
+    // Not cosmetic, and not 50 for a good reason.  The machine's two worst
+    // paths are both **half-period** ones -- rising-to-falling inside the CPU
+    // core's bus interface, which drives data on the falling edge the way a
+    // real 68000 does, and falling-to-rising coming back.  Measured on the
+    // DECA at 16.667 MHz they need 27.96 ns and 25.35 ns, so they are not
+    // equal, and a 50/50 clock hands the smaller need the same 30 ns as the
+    // larger.  Splitting the period the way the paths actually want it is
+    // worth 64% on the worst-case slack at 16.667 MHz and 77% at 15.625, for
+    // no logic and no area.
+    //
+    // What it cannot do is raise the ceiling much: the two halves share one
+    // period, so the *sum* -- 53.3 ns at best -- is the real limit and caps
+    // the clock near 18.8 MHz however it is split.  Read this as buying
+    // margin, not frequency.
+    //
+    // The achievable values are k/CPU_DIVIDE, since the duty is the C counter's
+    // high count; ALTPLL rounds to the nearest.  With CPU_DIV=64 (15.625 MHz)
+    // the counter is 32 and 53 lands exactly on 17/32.
+    parameter int CPU_DUTY   = 50
 ) (
     input  wire clk50,        // MAX10_CLK1_50, straight off PIN_M8
     input  wire reset,        // active high, asynchronous
@@ -135,7 +156,7 @@ module deca_clkgen #(
        .inclk0_input_frequency (20000),      // ps: 50 MHz
        .clk0_multiply_by       (20),         // VCO 1000 MHz
        .clk0_divide_by         (CPU_DIVIDE),
-       .clk0_duty_cycle        (50),
+       .clk0_duty_cycle        (CPU_DUTY),
        .clk0_phase_shift       ("0"),
        .lpm_type               ("altpll"),
        .port_clk0              ("PORT_USED"),

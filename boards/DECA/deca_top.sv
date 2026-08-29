@@ -45,7 +45,8 @@ module deca_top #(
     // this project has produced three builds whose banner disagreed with their
     // logic for exactly that reason.
     parameter int CPU_CLK_HZ = 12_500_000,
-    parameter int CPU_DIV    = 0
+    parameter int CPU_DIV    = 0,
+    parameter int CPU_DUTY   = 50
 ) (
     input  wire        MAX10_CLK1_50,   // PIN_M8,  2.5 V
     input  wire [1:0]  KEY,             // H21 H22, 1.5 V Schmitt, active low
@@ -94,7 +95,8 @@ module deca_top #(
    // ------------------------------------------------------------------
    wire cpu_clk, clk_serial, pll_locked;
 
-   deca_clkgen #(.CPU_CLK_HZ(CPU_CLK_HZ), .CPU_DIV(CPU_DIV)) clkgen (
+   deca_clkgen #(.CPU_CLK_HZ(CPU_CLK_HZ), .CPU_DIV(CPU_DIV),
+                 .CPU_DUTY(CPU_DUTY)) clkgen (
        .clk50      (MAX10_CLK1_50),
        .reset      (~KEY[0]),
        .clk_cpu    (cpu_clk),
