@@ -919,6 +919,75 @@ immediate is four bytes at file offset `0x14170` in the 4.0.3 GENERIC a.out
 (text base 0x4000, header 0x20, so file = vaddr - 16352). Recorded because it
 was expensive to find, not because anything here patches it.
 
+**The DECA drives a monitor, on both machines.** `FB=1` fits the Sun-2 frame
+buffer and a 1280x1024 display. A MultiBus 2/120 boots SunOS 4.0.3 from the SD
+card with its console on the screen and autoconfig reporting **`bwtwo0` beside
+`zs1`**; a VME 2/50 shows the 2/50 banner and netboots to a login prompt. Those
+two device names are the point on MultiBus: `bwtwo0` is the kernel recognising
+the frame buffer, and `zs1` is the keyboard/mouse SCC that `SUN2_FB` builds
+because on a real 2/120 that SCC is on the video board.
+
+**Almost none of the Wukong's video ported, and almost all of the Sun-2's did.**
+The Wukong makes HDMI itself -- an MMCM, a 5x bit clock, eight OSERDESE2 and
+four OBUFDS. The DECA has an **ADV7513**: a transmitter chip taking parallel
+24-bit RGB with CLK/DE/HS/VS, configured over I2C. So `Inputs/hdmi`'s TMDS
+encoder, serialiser and packet files are all useless here, and what replaced
+them is `rtl/sun2-common/video_timing.sv` (the raster, sixty lines of VESA
+arithmetic) and `boards/DECA/deca_adv7513_init.sv` (an I2C sequencer, the third
+of its kind after the two PHY ones, tested against an independent target by
+`make -C sim adv7513`). Nothing in `rtl/sun2-common/` had to change except
+`fb_scanout.sv` moving into it, with `sun2_attr.vh`'s macros in place of raw
+Xilinx attributes.
+
+| | MultiBus + disk + 3C400 | VME |
+|---|---|---|
+| logic | 28,347 (57%) | 28,840 (58%) |
+| memory bits | 716,960 | 680,864 |
+| Fmax cpu_clk | 17.65 MHz | 17.58 MHz, against 16.667 |
+
+Both are their own base **+4,096 memory bits exactly** -- `fb_scanout`'s 32x128
+line buffer. The logic costs differ, +2,327 against +1,260, and that asymmetry
+is the shared decode behaving correctly: `SUN2_FB` brings the keyboard SCC on a
+2/120 and not on a 2/50, where it arrives through `MATCH_PARALLEL` instead. All
+four PLLs are now used.
+
+**Two bugs, both found on a monitor and neither reachable any other way.**
+
+`deca_wb_to_ddr3.sv` took `req_adr[PORT_ADDR_SIZE-5:2]` where its own header
+comment said `[26:2]` -- two bits short, silently capping the adapter at
+128 MiB. Nothing noticed for the life of the port because main memory is 7 MiB.
+The frame buffer is the first thing ever placed high (`FB_WB_BASE` is 248 MiB),
+so the CPU's pixel writes landed at 120 MiB with bit 25 lost while scan-out read
+248 MiB and found uninitialised DDR3. **On a correctly-synced raster that is
+noise**, which implicates the display and is an address fault.
+`tb_deca_wb_ddr3` passed with the bug present because it only used addresses 0
+to 31; it now writes two addresses differing solely in bit 25 and requires them
+not to alias.
+
+And **`fb_scanout` speaks MIG's protocol**: `c_req` is a *level*, held for a
+whole line, advancing one beat per `c_done`, which `mig_arb` consumes on the
+Wukong. BrianHG's `CMD_ena` is a single-clock *command strobe*. Wired straight
+through, the port took a fresh command every clock at 125 MHz for the address of
+the beat still in flight, and every returned beat carried beat 0's data -- the
+screen showed **nine copies of the leftmost 128 pixels**, `BEATS_PER_LINE` being
+9 and a beat 128 bits. That reads as a line-buffer fault and is a handshake one.
+`deca_top` carries the adapter now and `fb_scanout` states its contract, which
+nothing in it did.
+
+**A DECA with a display has no console, and cannot be halted.** `sunmon.c:396`
+sets `g_outsink = OUTSCREEN` whenever `s2fbthere()` succeeds and offers no way
+to ask for both, and the keyboard SCC is instantiated with nothing connected --
+so an `FB=1` machine is one you can photograph and not talk to. It also cannot
+be shut down cleanly, which matters because reprogramming is a power cut: see
+the note in `BRINGUP.md`. `tools/deca_reset.tcl` and `sun2_trace` are the only
+instruments left.
+
+**`test/deca_hdmi` exists for that reason** -- the output path with no Sun-2 at
+all, 310 logic elements and a minute to build, so the first attempt at a picture
+has nothing else that could be blamed. It also settled the one thing that cannot
+be settled by reading: the ADV7513 samples on the rising edge of its CLK, so the
+pixel clock goes out inverted. A working board there reads `0 0 0 1 0 B 1 1`.
+
 **The board layer is the seam, and it is small.** `boards/DECA/` is a clock
 generator (two ALTPLLs), a Wishbone-to-DDR3 adapter, a JTAG console bridge with
 two UART halves, a DP83620 sequencer, and a board top implementing
@@ -932,7 +1001,8 @@ mechanically. It exists because `fb_video_en` -- see the trap below -- sat
 unconnected for the entire life of the frame buffer, and it runs on every
 Quartus build. Both boards report 47 ports, all connected.
 
-**What the DECA does not have, and what follows.** No hardware UART, so the
+**What the DECA does not have, and what follows.** (Video is no longer on this
+list -- see above.) No hardware UART, so the
 console goes over the on-board USB-Blaster II through an
 `altera_avalon_jtag_uart`; the machine's bit-serial `tx`/`rx` are kept and
 bridged rather than tapping bytes out of the SCC, because the SCC's own baud

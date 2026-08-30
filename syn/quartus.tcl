@@ -42,7 +42,7 @@ array set opt {
     -cpu       rd68011
     -topent    top
     -stage     map
-    -mem_pages 32
+    -mem_pages ""
     -cpu_hz    12500000
     -cpu_div   0
     -cpu_duty  50
@@ -113,15 +113,33 @@ switch -- $opt(-machine) {
 #
 if {$opt(-fb) != 0} {
     lappend defines SUN2_FB
+    # Where the frame buffer lives in DDR3.  sun2_config.vh defaults to
+    # 0x03E00000 words = 248 MiB, which is the top 8 MiB of the Wukong's 256 MB
+    # part -- the *rule* is "the top 8 MiB", and this board has 512 MB, so the
+    # same rule gives 504 MiB.  Carrying the number across instead would strand
+    # the aperture in the middle and cap contiguous main memory at half the
+    # device for no reason.
+    #
+    # 0x07E00000 words = 0x1F800000 bytes = 504 MiB, and it needs word-address
+    # bit 26 -- exactly the top bit deca_wb_to_ddr3's corrected [26:2] slice
+    # keeps.  With the old [24:2] it was unreachable, so this placement and that
+    # fix are the same constraint from two directions.
+    #
+    # Plain decimal, not 30'h07E00000: a sized literal does not survive the trip
+    # through VERILOG_MACRO, which is why SUN2_IDPROM_ETH5 is an integer too.
+    # Simulation keeps the 248 MiB default and that is harmless -- the address is
+    # invisible to the software, being only where in DDR3 the aperture lands.
     # sun2_fpga.v:188-199 $fatals on this and Quartus discards system tasks, so
     # it is enforced here or nowhere: on MultiBus the video board owns page
     # 0xE00 upward, so memory may not reach it.  The default 3584 is exactly at
     # the limit, so only an override trips this.
-    if {$opt(-machine) eq "multibus" && $opt(-mem_pages) > 3584} {
+    if {$opt(-machine) eq "multibus" && $opt(-mem_pages) ne "" \
+        && $opt(-mem_pages) > 3584} {
         puts "ERROR: with a frame buffer a MultiBus machine may have at most 3584"
         puts "       pages of memory: the video board decodes from page 0xE00 up."
         exit 1
     }
+    lappend defines FB_WB_BASE=132120576
 }
 
 if {$opt(-mb_ether) != 0} { lappend defines SUN2_MB_ETHER }
@@ -157,7 +175,7 @@ if {$opt(-xy450) != 0} {
         puts "       VME bus, which is a different card"
         exit 1
     }
-    if {$opt(-mem_pages) < 512} {
+    if {$opt(-mem_pages) ne "" && $opt(-mem_pages) < 512} {
         puts "ERROR: XY450 needs at least 1 MiB installed (mem_pages >= 512):"
         puts "       the boot map puts the DVMA window on physical 0xC0000"
         exit 1
@@ -165,7 +183,9 @@ if {$opt(-xy450) != 0} {
     lappend defines SUN2_XY450
     puts "== Xylogics 450 fitted, media on the micro-SD slot =="
 }
-if {$opt(-mem_pages) < 8 || $opt(-mem_pages) > 4096} {
+# Only when given.  Empty means "let sun2_config.vh choose", which it does per
+# machine, and both of its answers are inside this range by construction.
+if {$opt(-mem_pages) ne "" && ($opt(-mem_pages) < 8 || $opt(-mem_pages) > 4096)} {
     puts "ERROR: -mem_pages $opt(-mem_pages) is outside 8..4096"
     exit 1
 }
@@ -178,7 +198,10 @@ if {$opt(-cpu_div) != 0} {
     set opt(-cpu_hz) [expr {1000000000 / $opt(-cpu_div)}]
 }
 
-lappend defines MEM_PAGES=$opt(-mem_pages)
+# Only when asked.  Left alone, sun2_config.vh picks MEM_SPACE_PAGES, which is
+# the machine's own maximum -- 4096 pages on a 2/50, 3584 on a 2/120 -- and
+# forcing a number here would silently take that away.
+if {$opt(-mem_pages) ne ""} { lappend defines MEM_PAGES=$opt(-mem_pages) }
 lappend defines SUN2_QUARTUS
 # The trace recorder taps dbg_bus, which only exists under SUN2_ILA -- so
 # asking for one implies the other.  Making the caller pass both would be one
@@ -217,7 +240,11 @@ foreach {n v} [list SUN2_RTC_MON  [lindex $rtc 0] SUN2_RTC_DAY  [lindex $rtc 1] 
 # facts, and this project has shipped three builds where they disagreed.
 puts "== Sun-2 for [board_family $opt(-board)] [board_device $opt(-board)] ([board_vendor $opt(-board)]) =="
 puts "== board $opt(-board), machine $opt(-machine), core $opt(-cpu), entity $opt(-topent) =="
-puts "== memory $opt(-mem_pages) pages = [expr {$opt(-mem_pages) * 2}] KiB =="
+if {$opt(-mem_pages) eq ""} {
+    puts "== memory: MEM_SPACE_PAGES, the machine's own maximum (8 MiB on vme, 7 on multibus) =="
+} else {
+    puts "== memory $opt(-mem_pages) pages = [expr {$opt(-mem_pages) * 2}] KiB =="
+}
 if {$opt(-cpu_div) != 0} {
     puts "== CPU clock $opt(-cpu_hz) Hz (VCO/$opt(-cpu_div)) =="
 } else {

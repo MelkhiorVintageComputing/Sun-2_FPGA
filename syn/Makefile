@@ -222,7 +222,10 @@ AJOBS   ?= 8
 # enough to netboot, because the boot loader's buffer is at 0x0a0462, 640 KiB
 # up.  With the board's DDR3 behind the Wishbone port that limit is gone, and
 # the machine can be the size a real one was.
-MEM_PAGES ?= 3584
+# Empty by default, so sun2_config.vh's machine-dependent default applies: the
+# whole of MEM_SPACE_PAGES, which is 8 MiB on a 2/50 and 7 on a 2/120.  Set it
+# to override, and the output directory is tagged only when it is set.
+MEM_PAGES ?=
 ERAM      ?= 1
 QSTAGE    ?= map
 QTOPENT   ?= top
@@ -243,7 +246,7 @@ TRACE_FC   ?= 5
 # should have been: two builds that differ only in a knob absent from the name
 # share a directory and clobber each other, which is exactly the comparison the
 # knob was added to make.
-QDIR = $(abspath $(SYNDIR))/quartus/$(BOARD)-$(MACHINE)-$(CPU)-p$(MEM_PAGES)-cpu$(CPU_MHZ_TAG)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)$(if $(filter 0,$(QSEED)),,-seed$(QSEED))$(if $(filter 50,$(CPU_DUTY)),,-duty$(CPU_DUTY))$(if $(filter 0,$(TRACE)),,-trace$(TRACE_PAGE)fc$(TRACE_FC))$(if $(filter 0,$(XY450)),,-xy450)$(if $(filter 0,$(MB_ETHER)),,-mbether)$(if $(filter 0,$(MB_3C400)),,-3c400)$(if $(filter 0,$(FB)),,-fb)
+QDIR = $(abspath $(SYNDIR))/quartus/$(BOARD)-$(MACHINE)-$(CPU)$(if $(MEM_PAGES),-p$(MEM_PAGES),)-cpu$(CPU_MHZ_TAG)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)$(if $(filter 0,$(QSEED)),,-seed$(QSEED))$(if $(filter 50,$(CPU_DUTY)),,-duty$(CPU_DUTY))$(if $(filter 0,$(TRACE)),,-trace$(TRACE_PAGE)fc$(TRACE_FC))$(if $(filter 0,$(XY450)),,-xy450)$(if $(filter 0,$(MB_ETHER)),,-mbether)$(if $(filter 0,$(MB_3C400)),,-3c400)$(if $(filter 0,$(FB)),,-fb)
 
 quartus-run: rom inputs
 	@# A port left off an instantiation is an undriven wire, not an error --
@@ -256,7 +259,7 @@ quartus-run: rom inputs
 	cd $(QDIR) && $(QUARTUS) quartus_sh -t $(HERE)/quartus.tcl \
 		-root $(abspath $(TOP)) -board $(BOARD) -machine $(MACHINE) \
 		-cpu $(CPU) -topent $(QTOPENT) -stage $(QSTAGE) \
-		-mem_pages $(MEM_PAGES) -cpu_hz $(CPU_HZ) \
+		$(if $(MEM_PAGES),-mem_pages $(MEM_PAGES),) -cpu_hz $(CPU_HZ) \
 		-cpu_div $(if $(CPU_DIV),$(CPU_DIV),0) -eth5 $(ETH5_D) \
 		-eram $(ERAM) -jobs $(AJOBS) -seed $(QSEED) -cpu_duty $(CPU_DUTY) -trace $(TRACE) -trace_page $(TRACE_PAGE) -trace_fc $(TRACE_FC) \
 		-xy450 $(XY450) -mb_ether $(MB_ETHER) -mb_3c400 $(MB_3C400) -fb $(FB) > $(QDIR)/quartus.log 2>&1 || \

@@ -342,8 +342,14 @@
 // what answers on the bus, so the PROM's sizing still works by reading back
 // wrong values rather than by taking a bus error.
 //
+// The default is MEM_SPACE_PAGES -- as much memory as the machine's memory
+// space can hold -- rather than a number, so each machine gets its own maximum
+// rather than the smaller of the two.  A 2/50 has the whole 8 MiB; a 2/120 has
+// 7, because its video board decodes from page 0xE00 up and memory may not
+// reach it.  Writing 3584 here gave the VME machine a megabyte less than it can
+// address, for no reason beyond the constant having been chosen on a MultiBus.
 `ifndef MEM_PAGES
- `define MEM_PAGES 3584
+ `define MEM_PAGES `MEM_SPACE_PAGES
 `endif
 
 `endif // SUN2_CONFIG_VH
