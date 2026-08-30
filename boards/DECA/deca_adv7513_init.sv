@@ -85,6 +85,11 @@ module deca_adv7513_init #(
     // times.  A replay counter that climbs on its own is a bouncing cable or a
     // sink that keeps re-asserting, and neither is visible any other way.
     output wire        cfg_done,
+    // Sticky: at least one byte of the last pass went unacknowledged.  Worth a
+    // pin of its own because "the part is not there at all" and "the part is
+    // there and the picture is still black" are different problems and look
+    // identical from outside.
+    output reg         cfg_nak,
     output reg  [7:0]  cfg_passes
 );
 
@@ -156,7 +161,6 @@ module deca_adv7513_init #(
      else if (tick) phase <= phase + 2'd1;
 
    wire ph_setup = (phase == 2'd0);
-   wire ph_high  = (phase == 2'd2);   // safe point to sample SDA
 
    // ------------------------------------------------------------------
    // Sequencer
@@ -205,6 +209,7 @@ module deca_adv7513_init #(
          scl_lo     <= 1'b1;      // hold the bus down until we are ready
          sda_lo     <= 1'b0;
          ack_bad    <= 1'b0;
+         cfg_nak    <= 1'b0;
          cfg_passes <= 8'd0;
       end else begin
          case (st)
@@ -284,6 +289,7 @@ module deca_adv7513_init #(
              if (tick && ph_setup) begin
                 if (idx == N_REGS[4:0] - 1'b1) begin
                    cfg_passes <= cfg_passes + 8'd1;
+                   cfg_nak    <= ack_bad;
                    st         <= S_DONE;
                 end else begin
                    idx <= idx + 5'd1;

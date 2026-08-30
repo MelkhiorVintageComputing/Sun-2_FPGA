@@ -30,14 +30,15 @@ module tb_adv7513_init;
    wire sda = (m_sda_oe || s_sda_oe) ? 1'b0 : 1'b1;
 
    logic int_n = 1'b1;
-   wire  cfg_done;
+   wire  cfg_done, cfg_nak;
    wire [7:0] cfg_passes;
 
    deca_adv7513_init #(.CLK_HZ(CLK_HZ), .SCL_HZ(SCL_HZ),
                        .STARTUP_CLKS(64), .SLAVE_ADDR(SLAVE)) dut (
        .clk(clk), .rst(rst),
        .scl_oe(m_scl_oe), .sda_oe(m_sda_oe), .sda_i(sda),
-       .int_n(int_n), .cfg_done(cfg_done), .cfg_passes(cfg_passes));
+       .int_n(int_n), .cfg_done(cfg_done), .cfg_nak(cfg_nak),
+       .cfg_passes(cfg_passes));
 
    i2c_slave_model #(.SLAVE_ADDR(SLAVE)) target (
        .scl(scl), .sda(sda), .sda_oe(s_sda_oe));
@@ -98,6 +99,7 @@ module tb_adv7513_init;
       want(target.bad_addr == 0,
            $sformatf("every transfer addressed 0x72 (got %0d that did not)",
                      target.bad_addr));
+      want(!cfg_nak, "every byte was acknowledged, so cfg_nak stays clear");
       want(target.n_starts == N && target.n_stops == N,
            $sformatf("one START and one STOP per register (got %0d / %0d)",
                      target.n_starts, target.n_stops));

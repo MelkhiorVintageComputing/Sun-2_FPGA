@@ -1,0 +1,87 @@
+# Pins for the standalone DECA HDMI test.
+#
+# The clock, the buttons and the LEDs are a strict subset of syn/deca_pins.qsf,
+# for the reason test/deca_console gives: this design exists to vouch for the
+# real build, so a disagreement about a pin would mean it vouched for something
+# else.
+#
+# The HDMI block is new to this project.  Every location is transcribed from
+# Inputs/doc/DECA_board/Templates/deca-template-full/deca_top.qsf, which agrees
+# byte for byte with the BrianHG DECA demos and with Table 3-14 of the board
+# manual.
+#
+# **All thirty-one are 1.8 V and all thirty-one land in bank 7**, which is
+# otherwise completely empty on this board -- so the bank takes its VCCIO from
+# these and conflicts with nothing.  An omitted IO_STANDARD would default to
+# 2.5 V and stop the fitter with a bank conflict, which is the good failure;
+# the bad one is a location typo, because syn/deca_ddr3_pins.qsf already shows
+# that an assignment to a port that does not exist passes silently in this flow.
+
+set_location_assignment PIN_M8 -to MAX10_CLK1_50
+set_instance_assignment -name IO_STANDARD "2.5 V" -to MAX10_CLK1_50
+
+set_location_assignment PIN_H21 -to KEY[0]
+set_location_assignment PIN_H22 -to KEY[1]
+set_location_assignment PIN_J21 -to SW[0]
+set_location_assignment PIN_J22 -to SW[1]
+foreach p {KEY[0] KEY[1] SW[0] SW[1]} {
+    set_instance_assignment -name IO_STANDARD "1.5 V SCHMITT TRIGGER" -to $p
+}
+
+set_location_assignment PIN_C7 -to LED[0]
+set_location_assignment PIN_C8 -to LED[1]
+set_location_assignment PIN_A6 -to LED[2]
+set_location_assignment PIN_B7 -to LED[3]
+set_location_assignment PIN_C4 -to LED[4]
+set_location_assignment PIN_A5 -to LED[5]
+set_location_assignment PIN_B4 -to LED[6]
+set_location_assignment PIN_C5 -to LED[7]
+foreach i {0 1 2 3 4 5 6 7} {
+    set_instance_assignment -name IO_STANDARD "1.2 V" -to LED[$i]
+}
+
+# ------------------------------------------------------------------ HDMI TX
+set_location_assignment PIN_C18 -to HDMI_TX_D[0]
+set_location_assignment PIN_D17 -to HDMI_TX_D[1]
+set_location_assignment PIN_C17 -to HDMI_TX_D[2]
+set_location_assignment PIN_C19 -to HDMI_TX_D[3]
+set_location_assignment PIN_D14 -to HDMI_TX_D[4]
+set_location_assignment PIN_B19 -to HDMI_TX_D[5]
+set_location_assignment PIN_D13 -to HDMI_TX_D[6]
+set_location_assignment PIN_A19 -to HDMI_TX_D[7]
+set_location_assignment PIN_C14 -to HDMI_TX_D[8]
+set_location_assignment PIN_A17 -to HDMI_TX_D[9]
+set_location_assignment PIN_B16 -to HDMI_TX_D[10]
+set_location_assignment PIN_C15 -to HDMI_TX_D[11]
+set_location_assignment PIN_A14 -to HDMI_TX_D[12]
+set_location_assignment PIN_A15 -to HDMI_TX_D[13]
+set_location_assignment PIN_A12 -to HDMI_TX_D[14]
+set_location_assignment PIN_A16 -to HDMI_TX_D[15]
+set_location_assignment PIN_A13 -to HDMI_TX_D[16]
+set_location_assignment PIN_C16 -to HDMI_TX_D[17]
+set_location_assignment PIN_C12 -to HDMI_TX_D[18]
+set_location_assignment PIN_B17 -to HDMI_TX_D[19]
+set_location_assignment PIN_B12 -to HDMI_TX_D[20]
+set_location_assignment PIN_B14 -to HDMI_TX_D[21]
+set_location_assignment PIN_A18 -to HDMI_TX_D[22]
+set_location_assignment PIN_C13 -to HDMI_TX_D[23]
+
+set_location_assignment PIN_A20 -to HDMI_TX_CLK
+set_location_assignment PIN_C9  -to HDMI_TX_DE
+set_location_assignment PIN_B11 -to HDMI_TX_HS
+set_location_assignment PIN_C11 -to HDMI_TX_VS
+set_location_assignment PIN_B10 -to HDMI_TX_INT
+set_location_assignment PIN_C10 -to HDMI_I2C_SCL
+set_location_assignment PIN_B15 -to HDMI_I2C_SDA
+
+foreach i {0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23} {
+    set_instance_assignment -name IO_STANDARD "1.8 V" -to HDMI_TX_D[$i]
+}
+foreach p {HDMI_TX_CLK HDMI_TX_DE HDMI_TX_HS HDMI_TX_VS HDMI_TX_INT
+           HDMI_I2C_SCL HDMI_I2C_SDA} {
+    set_instance_assignment -name IO_STANDARD "1.8 V" -to $p
+}
+
+# The board carries 2K pull-ups to VCC1P8_AVDD on both I2C lines (schematic
+# sheet 16, R160 and its twin), so no internal one -- an internal weak pull-up
+# fighting a 2K external is a slow rising edge, not a stronger one.
