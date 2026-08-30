@@ -10,6 +10,7 @@
 #   make xsim MB_3C400=1   fit a 3Com 3C400 instead (MultiBus only, exclusive)
 #   make xsim FB=1         fit the frame buffer (either machine)
 #   make xsim XY450=1      fit the Xylogics 450 disk controller (MultiBus only)
+#   make xsim VME_SCSI=1   fit the Sun VME SCSI/RTC board (VME only)
 #   make xsim CPU=rd68011  build with the RD68011 core instead of Suska
 #   make iverilog          the open-source flow (GHDL-converted CPU), best effort
 #   make check             assert the console reached the monitor prompt
@@ -102,6 +103,13 @@ endif
 # VME bus, which is a different card in a different space.
 ifeq ($(XY450),1)
 DEFINES += SUN2_XY450
+endif
+
+# The Sun VME SCSI/RTC board, which is how a 2/50 gets a local disk.  VME only,
+# and it brings the machine's time-of-day clock with it -- on a 2/50 that chip
+# is on this card and nowhere else.
+ifeq ($(VME_SCSI),1)
+DEFINES += SUN2_VME_SCSI
 endif
 
 # Power the segment and page map RAMs up as zeros, the way a 7-series block RAM
@@ -219,7 +227,7 @@ board-phy:
 	$(MAKE) board-check MACHINE=vme
 
 # --- unit tests for the board layer ---------------------------------------
-clkgen adapter migddr3 dvma bridge phy mbether mb3c400 xy450 scc mm58167 scanout vtiming adv7513 vmescsi decauart decaconsole decaddr3 decaphy trace: rom
+clkgen adapter migddr3 dvma bridge phy mbether mb3c400 xy450 scc mm58167 scanout vtiming adv7513 vmescsi decauart decaconsole decaddr3 decaphy trace busarb: rom
 	BOARD=$(BOARD) XSIMARGS="$(XSIMARGS)" ./run_unit.sh $@
 
 # --- a picture of what the machine drew -----------------------------------
@@ -278,7 +286,7 @@ iverilog: rom
 # CPU=rd68011' reads the Suska run's log and passes on it.  Note this still
 # does not carry CPU_HZ or BAUD, which also tag a run directory -- pass
 # FBIMAGE= or the log path by hand for those.
-RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)$(CPUTAG)
+RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)$(if $(filter 1,$(VME_SCSI)),-vmescsi,)$(CPUTAG)
 # What check_console.sh should expect, in order of what wins.  A display wins
 # outright: with one fitted the console moves to the screen and there is no
 # serial output left to check, whatever else is in the cage.  A disk beats an
@@ -296,4 +304,4 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: all rom xsim board board-check board-phy iverilog check clean
-.PHONY: clkgen adapter migddr3 dvma bridge phy mbether mb3c400 xy450 xychain vtiming adv7513 vmescsi mm58167 scanout decauart decaconsole decaddr3 decaphy screenshot
+.PHONY: clkgen adapter migddr3 dvma bridge phy mbether mb3c400 xy450 xychain vtiming adv7513 vmescsi mm58167 scanout decauart decaconsole decaddr3 decaphy busarb screenshot

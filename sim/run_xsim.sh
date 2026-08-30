@@ -22,6 +22,7 @@ top=$(cd "$here/.." && pwd)
 : "${XILINX_VIVADO:=/opt/Xilinx/2025.2/Vivado}"
 "$top/tools/patch_inputs.sh" Wish82586
 "$top/tools/patch_inputs.sh" z8530_scc
+"$top/tools/patch_inputs.sh" Wish5380
 
 if [ ! -x "$XILINX_VIVADO/bin/xvlog" ]; then
 	echo "xsim not found under $XILINX_VIVADO -- set XILINX_VIVADO" >&2
@@ -52,6 +53,7 @@ case " $SUN2_DEFINES " in *" SUN2_MB_ETHER "*) rundir_tag="$rundir_tag-mbether" 
 case " $SUN2_DEFINES " in *" SUN2_MB_3C400 "*) rundir_tag="$rundir_tag-3c400" ;; esac
 case " $SUN2_DEFINES " in *" SUN2_FB "*)       rundir_tag="$rundir_tag-fb" ;; esac
 case " $SUN2_DEFINES " in *" SUN2_XY450 "*)    rundir_tag="$rundir_tag-xy450" ;; esac
+case " $SUN2_DEFINES " in *" SUN2_VME_SCSI "*) rundir_tag="$rundir_tag-vmescsi" ;; esac
 # ... and the experiment that powers the maps up as zeros rather than X, which
 # is a different machine at time zero and must not write over a reference run.
 case " $SUN2_DEFINES " in *" SRAM_POWERUP_ZERO "*) rundir_tag="$rundir_tag-mapszero" ;; esac
@@ -132,6 +134,7 @@ xvlog --work sun2 \
 	"$top/rtl/sun2-vme/sun2_phy_status.v" \
 	"$top/rtl/sun2-common/sun2_fb_ctl.v" \
 	"$top/rtl/sun2-vme/sun2_dvma.v" \
+	"$top/rtl/sun2-vme/sun2_bus_arb.v" \
 	"$top/rtl/sun2-common/ttl_am9513.v" \
 	"$top/rtl/sun2-common/mm58167.v" \
 	"$top/rtl/sun2-common/ttl_74F151.v" \
@@ -159,6 +162,10 @@ xvlog --sv --work sun2 \
 	"$top/rtl/sun2-vme/sun2_ethernet.sv" \
 	"$top/rtl/sun2-multibus/sun2_mb_ether.sv" \
 	"$top/rtl/sun2-multibus/sun2_mb_3c400.sv" \
+	"$top/build/inputs/Wish5380/src/wish5380_pkg.sv" \
+	"$top/build/inputs/Wish5380/src/scsi_fabric.sv" \
+	"$top/build/inputs/Wish5380/src/scsi_targ.sv" \
+	"$top/rtl/sun2-vme/sun2_vme_scsi.sv" \
 	"$top/rtl/sun2-multibus/sun2_xy450.sv" \
 	"$top/build/inputs/z8530_scc/z8530_scc.sv" \
 	"$top/tb/wb_ram_model.sv" \

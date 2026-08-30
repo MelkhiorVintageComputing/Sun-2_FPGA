@@ -62,6 +62,8 @@ end_insystem_source_probe
 #   47:40 todebug  39:32 diag_leds  31:24 wr  23:16 rd  15:8 rx  7:0 tx
 # then, appended below those (so nothing above moves):
 #   blk_ready  blk_err  blk_count[31:0]   -- string indices 64, 65, 66..97
+#   n_blk_start[7:0] n_blk_done[7:0] n_blk_wr[15:0] -- 98..105, 106..113, 114..129
+#   n_blk_nz[15:0] -- 130..145
 set rdcal   [b2i [string range $raw  0  7]]
 set calpass [string index $raw  8]
 set ready   [string index $raw  9]
@@ -106,6 +108,18 @@ if {[string length $raw] >= 98} {
     set gib     [expr {$d_count * 512.0 / 1073741824.0}]
     puts [format "disk   : ready=%s err=%s blocks=%d (%.1f GiB)" \
             $d_ready $d_err $d_count $gib]
+    if {[string length $raw] >= 146} {
+        set b_start [b2i [string range $raw  98 105]]
+        set b_done  [b2i [string range $raw 106 113]]
+        set b_wr    [b2i [string range $raw 114 129]]
+        set b_nz    [b2i [string range $raw 130 145]]
+        puts [format "         blk: start=%d done=%d buffer-writes=%d non-zero=%d" \
+                $b_start $b_done $b_wr $b_nz]
+        puts "         ^ start/done mod 256, writes mod 65536.  A read of one"
+        puts "           512-byte block is one start, one done and 512 writes;"
+        puts "           start>0 with writes=0 is a back end that answers"
+        puts "           without delivering, which reads as an empty sector."
+    }
     if {$d_ready eq "0" && $d_count == 0} {
         puts "         ^ no media: either no card, a card that never finished"
         puts "           its SPI init, or a build without SUN2_XY450."

@@ -28,9 +28,17 @@ module tb_sun2_trace;
    wire [DL2-1:0]   wr_ptr;
    wire             triggered, done;
 
+   // The DVMA qualifier, off for the cases below and exercised on its own
+   // at the end: with it set, a cycle on the right page and function code
+   // must still be ignored unless an alternate master is driving.
+   logic trig_dvma_en = 1'b0;
+   logic trig_phys_en = 1'b0;
+
    sun2_trace #(.WIDTH(WIDTH), .DEPTH_LOG2(DL2), .POST(POST))
    dut (.clk(clk), .rst(rst), .dbg_bus(bus),
 	.trig_page(PAGE), .trig_fc(TRIG_FC), .trig_fc_en(1'b1),
+       .trig_dvma_en(trig_dvma_en),
+       .trig_phys_en(trig_phys_en),
 	.arm(1'b1), .rd_addr(rd_addr),
 	.rd_data(rd_data), .wr_ptr(wr_ptr), .triggered(triggered), .done(done));
 
@@ -56,6 +64,25 @@ module tb_sun2_trace;
 	 mkfc[73:61] = page;
 	 mkfc[50:48] = fc;
 	 mkfc[15:0]  = serial;
+      end
+   endfunction
+
+   // The same, with the page map's output set explicitly.  Note this lands on
+   // top of the serial number's upper bits, which only matters here: nothing
+   // else in this test uses the physical trigger.
+   function [WIDTH-1:0] mkpp(input as_n, input [12:0] vpage, input [11:0] pp);
+      begin
+	 mkpp = mkfc(as_n, vpage, TRIG_FC, 16'd0);
+	 mkpp[17:6] = pp;
+      end
+   endfunction
+
+   // The same, plus dbg_dvma_active -- bit 101, which is the one thing
+   // sun2_fpga cannot reconstruct from the bus and therefore packs explicitly.
+   function [WIDTH-1:0] mkdv(input as_n, input [12:0] page, input [15:0] serial);
+      begin
+	 mkdv = mkfc(as_n, page, TRIG_FC, serial);
+	 mkdv[101] = 1'b1;
       end
    endfunction
 
@@ -147,6 +174,48 @@ module tb_sun2_trace;
 	   $display("     sample %0d: got %0d want %0d", i, got, want);
 	 ck(got === want, "sample in order");
 	 if (i == PRE) ck(got == trig_at, "the trigger sample sits at DEPTH-POST-1");
+      end
+
+      // ---- the DVMA qualifier ------------------------------------------
+      // With it set, the right page and the right function code are not
+      // enough: the cycle has to be an alternate master's.  This is the only
+      // way to catch a card's transfer into a page software also touches,
+      // which is every DVMA buffer there is.
+      begin
+         rst = 1'b1; trig_dvma_en = 1'b1;
+         @(posedge clk); @(negedge clk); rst = 1'b0;
+         repeat (2) @(posedge clk);
+
+         // A CPU cycle on the trigger page: matches page and FC, no master.
+         @(negedge clk); bus = mk(1'b0, PAGE, 16'd200);
+         repeat (4) @(posedge clk);
+         ck(!triggered, "dvma qualifier: a CPU cycle on the page does not trigger");
+
+         // ...and the same cycle with a master driving does.
+         @(negedge clk); bus = mkdv(1'b0, PAGE, 16'd201);
+         repeat (4) @(posedge clk);
+         ck(triggered, "dvma qualifier: a master's cycle on the page does");
+      end
+
+      // ---- the physical-page trigger ------------------------------------
+      // Software maps a device where it likes, so a virtual trigger can watch
+      // only the mapping it was told about.  The page map's output is the same
+      // whoever set it up.
+      begin
+         rst = 1'b1; trig_dvma_en = 1'b0; trig_phys_en = 1'b1;
+         @(posedge clk); @(negedge clk); rst = 1'b0;
+         repeat (2) @(posedge clk);
+
+         // The right virtual page, translated somewhere else: must be ignored.
+         @(negedge clk); bus = mkpp(1'b0, PAGE, 12'h123);
+         repeat (4) @(posedge clk);
+         ck(!triggered, "physical trigger: the virtual page alone does not fire it");
+
+         // A different virtual page that translates to the one asked for.
+         @(negedge clk); bus = mkpp(1'b0, 13'h0555, PAGE[11:0]);
+         repeat (4) @(posedge clk);
+         ck(triggered, "physical trigger: the translation is what matches");
+         trig_phys_en = 1'b0;
       end
 
       $display("=== %0d checks, %0d failed ===", checks, fails);

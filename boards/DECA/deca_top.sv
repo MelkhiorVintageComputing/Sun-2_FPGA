@@ -243,9 +243,11 @@ module deca_top #(
    wire [31:0] wb_dat_w, wb_dat_r;
    wire [3:0]  wb_sel;
 
-   // Block back end.  Under SUN2_XY450 this is a real SD card; otherwise the
-   // outputs go nowhere and the inputs are tied, because a VME machine has no
-   // Xylogics.  Named rather than omitted either way -- a port left off an
+   // Block back end.  Under SUN2_HAS_DISK this is a real SD card; otherwise the
+   // outputs go nowhere and the inputs are tied.  Two controllers reach this
+   // slot -- the Xylogics 450 on a 2/120 and the SCSI board on a 2/50 -- and
+   // guarding it on either one alone gives the other a card that probes, says
+   // it is there, and then reports no medium.  Named rather than omitted either way -- a port left off an
    // instantiation becomes an undriven wire and reaches the board dead, which
    // is exactly how fb_video_en spent the life of the frame buffer at zero.
    //
@@ -588,6 +590,25 @@ module deca_top #(
    // ddr3_cal_pass and ddr3_ready are here too, because "the memory never came
    // up" and "the memory came up and then misbehaved" are different faults that
    // look identical from a machine that will not boot.
+   // Block-interface activity, for the ISSP probe below.  buf_we is counted in
+   // sixteen bits because one 512-byte read is 512 writes and an eight-bit
+   // counter would report that as zero -- which is the very reading this is
+   // meant to distinguish from.
+   reg [7:0]  n_blk_start = 8'h0, n_blk_done = 8'h0;
+   reg [15:0] n_blk_wr    = 16'h0;
+   // ...and how many of those writes carried a byte that was not zero.  A back
+   // end that reads the wrong block, or a card that answers a read it did not
+   // perform, delivers a full sector of zeros and is indistinguishable from a
+   // working one by the counters above alone.
+   reg [15:0] n_blk_nz    = 16'h0;
+   always @(posedge cpu_clk) begin
+      if (blk_req.start)  n_blk_start <= n_blk_start + 8'd1;
+      if (blk_rsp.done)   n_blk_done  <= n_blk_done  + 8'd1;
+      if (blk_rsp.buf_we) n_blk_wr    <= n_blk_wr    + 16'd1;
+      if (blk_rsp.buf_we && (blk_rsp.buf_wdata != 8'h00))
+                          n_blk_nz    <= n_blk_nz    + 16'd1;
+   end
+
    altsource_probe #(
        .sld_auto_instance_index ("YES"),
        .instance_id             ("SUN2"),
@@ -595,7 +616,7 @@ module deca_top #(
        // at the top would shift every existing field's offset and silently
        // invalidate tools/deca_reset.tcl's decode, which indexes the returned
        // bit string MSB-first from zero.
-       .probe_width             (98),
+       .probe_width             (146),
        .source_width            (1),
        .source_initial_value    ("0"),
        // source_clk is what clocks the hardening registers this asks for.  It
@@ -623,7 +644,15 @@ module deca_top #(
                  // can fail -- no controller, a controller with a card that
                  // never initialises, and a card that initialises and reports
                  // nonsense -- which the console alone cannot do.
-                 blk_rsp.ready, blk_rsp.err, blk_rsp.count}),
+                 blk_rsp.ready, blk_rsp.err, blk_rsp.count,
+                 // ...and, appended below those so nothing above moves, three
+                 // counters on the block interface itself.  ready and count say
+                 // the card initialised; they say nothing about whether it is
+                 // ever asked for a block or ever answers with one, and telling
+                 // "never asked" from "asked and never answered" from "answered
+                 // with nothing" is exactly what a controller reading all zeros
+                 // needs.
+                 n_blk_start, n_blk_done, n_blk_wr, n_blk_nz}),
        .source (jtag_reset)
    );
 
@@ -654,7 +683,7 @@ module deca_top #(
    wire [117:0] trc_rd_data;
    wire [TRC_DEPTH_LOG2-1:0] trc_wr_ptr;
    wire         trc_triggered, trc_done;
-   wire [29:0]  trc_src;
+   wire [31:0]  trc_src;
 
    // The source carries the whole instrument's controls, not just a read
    // address:
@@ -662,6 +691,8 @@ module deca_top #(
    //   [9:0]   sample index          [11:10] which word: 0 low, 1 high, 2 status
    //   [24:12] trigger page          [25]    hold (clears and holds the capture)
    //   [28:26] trigger function code [29]    qualify on it
+   //   [30]    require a DVMA cycle -- an alternate master's, not the CPU's
+   //   [31]    trigger page is physical (ma_pmap) rather than virtual
    //
    // The status word carries DEPTH_LOG2 and POST as well as the pointer, so the
    // reader never has to be told the buffer's shape.  The first version had
@@ -689,6 +720,8 @@ module deca_top #(
        // non-power-up path skips the device probes entirely.
        .trig_fc   (trc_src[29] ? trc_src[28:26] : TRACE_FC[2:0]),
        .trig_fc_en(trc_src[29] | (TRACE_FC_EN != 0)),
+       .trig_dvma_en(trc_src[30]),
+       .trig_phys_en(trc_src[31]),
        .arm       (~trc_src[25]),
        .rd_addr   (trc_src[9:0]),
        .rd_data   (trc_rd_data),
@@ -704,7 +737,7 @@ module deca_top #(
        .sld_auto_instance_index ("YES"),
        .instance_id             ("TRAC"),
        .probe_width             (64),
-       .source_width            (30),
+       .source_width            (32),
        .source_initial_value    ("0"),
        .enable_metastability    ("YES")
    ) u_trace_issp (
@@ -749,7 +782,7 @@ module deca_top #(
    assign SD_DAT1     = 1'b1;
    assign SD_DAT2     = 1'b1;
 
-`ifdef SUN2_XY450
+`ifdef SUN2_HAS_DISK
    // In picoseconds, computed in two steps rather than from a 1e12 literal --
    // some Verilog front ends reject a decimal constant that large and
    // substitute a negative number without saying so.

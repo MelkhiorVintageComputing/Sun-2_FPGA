@@ -25,6 +25,7 @@
 #
 #     quartus_stp -t tools/deca_trace.tcl 0x1DC5 5   the SCSI registers, FC 5
 #     quartus_stp -t tools/deca_trace.tcl 0x1DC5     ... at any function code
+#     quartus_stp -t tools/deca_trace.tcl 0x1E04 5 dvma   ... a master's only
 #
 # Give the function code.  Without it the trigger fires on the boot PROM's
 # page-map *write* for that page, which is a control-space (FC 3) access
@@ -80,19 +81,37 @@ start_insystem_source_probe -device_name $dv -hardware_name $hw
 # a fresh one on the new page.
 set page 0
 set fcbits 0
+set dvbit 0
 if {[llength $argv] > 1} {
     set fcbits [expr {(1 << 29) | ([lindex $argv 1] << 26)}]
 }
+# A third argument of `dvma' requires the cycle to be an alternate master's.
+# Without it a page a card DMAs into cannot be caught at all when software sets
+# the transfer up through that same page: the CPU gets there first, the trigger
+# fires on its access, and the window closes long before the master starts.
+# top_fpga muxes both onto the same wires deliberately, so no combination of
+# address and function code separates them -- only this bit does.
+if {[llength $argv] > 2 && [string match -nocase "dvma*" [lindex $argv 2]]} {
+    set dvbit [expr {1 << 30}]
+}
+# `phys' makes the page a physical one -- ma_pmap, the page map's own output --
+# instead of a virtual address.  Software maps a device where it likes: the
+# PROM puts the SCSI board at 0xEE2800 and SunOS somewhere else, so a virtual
+# trigger can watch only one of them and cannot see the kernel at all.
+set physbit 0
+foreach a $argv {
+    if {[string match -nocase "phys*" $a]} { set physbit [expr {1 << 31}] }
+}
 if {[llength $argv] > 0} {
     set page [expr {[lindex $argv 0]}]
-    wsrc $idx [expr {(1 << 25) | ($page << 12) | $fcbits}]
+    wsrc $idx [expr {(1 << 25) | ($page << 12) | $fcbits | $dvbit | $physbit}]
     after 100
-    wsrc $idx [expr {($page << 12) | $fcbits}]
+    wsrc $idx [expr {($page << 12) | $fcbits | $dvbit | $physbit}]
     puts [format "# re-armed on page A\[23:11\]=0x%04X (addresses 0x%06X..0x%06X)" \
             $page [expr {$page << 11}] [expr {($page << 11) + 0x7FF}]]
     puts "# the buffer is now empty; the machine must reach that page again."
 }
-set base [expr {($page << 12) | $fcbits}]
+set base [expr {($page << 12) | $fcbits | $dvbit | $physbit}]
 
 # Status word (word 2), which also tells us the buffer's shape.
 wsrc $idx [expr {$base | (2 << 10)}]

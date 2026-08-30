@@ -10,6 +10,7 @@
 #   make bitstream BOARD=v3       for a Wukong V3 instead of a V1
 #   make bitstream FB=1           with the frame buffer on HDMI
 #   make bitstream XY450=1        with the Xylogics 450 disk controller
+#   make quartus VME_SCSI=1       with the Sun VME SCSI/RTC board (VME only)
 #   make bitstream CPU=rd68011    with the RD68011 core instead of Suska
 #   make bitstream ILA=1          with the ILA on the MMU debug bus
 #   make program                  put the built bitstream on the board
@@ -46,6 +47,7 @@ FB ?= 0
 
 # Fit the Xylogics 450 disk controller.  MultiBus only.
 XY450 ?= 0
+VME_SCSI ?= 0
 
 # Which QMTech Wukong revision: v1 or v3.  They share all their RTL and differ
 # in the FPGA speed grade and four pins -- see syn/boards.tcl.  The default
@@ -140,7 +142,7 @@ ETH5_D  = $(shell printf '%d' 0x$(ETH5))
 # altogether.
 SYNDIR  = $(TOP)/build/syn
 
-TAG     = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)
+TAG     = $(if $(filter 1,$(VME_SCSI)),-vmescsi,)$(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)
 OUTDIR  = $(SYNDIR)/vivado/$(BOARD)-$(MACHINE)$(TAG)-cpu$(CPU_MHZ_TAG)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(ILA)),-ila,)$(if $(filter 1,$(FB)),-$(HDMI_MODE),)$(if $(filter 1,$(FBDEBUG)),-fbdbg,)$(if $(filter 1,$(FBPROBE)),-fbprobe,)$(if $(filter 1,$(FBFORCE)),-fbforce,)$(if $(filter-out e0,$(ETH5)),-eth$(ETH5),)$(if $(CPU_DIV),-div$(CPU_DIV),)
 # Absolute, because the recipes below run Vivado from $(WORKDIR) and $(OUTDIR)
 # is relative to here: a relative path resolves against the wrong directory and
@@ -183,7 +185,7 @@ inputs:
 
 bitstream: ip rom inputs $(if $(filter 1,$(ILA)),ip-ila,) | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
-		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB) $(XY450) $(CPU) $(ILA) $(HDMI_MODE) $(FBDEBUG) $(ALLOW_PW) $(FBPROBE) $(FBFORCE) $(ETH5_D) $(if $(CPU_DIV),$(CPU_DIV),0) $(MB_3C400)
+		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB) $(XY450) $(CPU) $(ILA) $(HDMI_MODE) $(FBDEBUG) $(ALLOW_PW) $(FBPROBE) $(FBFORCE) $(ETH5_D) $(if $(CPU_DIV),$(CPU_DIV),0) $(MB_3C400) $(VME_SCSI)
 	@echo "bitstream: $(BIT)"
 
 # Programming.  Same knobs as bitstream, so `make program ILA=1 CPU=rd68011
@@ -246,7 +248,7 @@ TRACE_FC   ?= 5
 # should have been: two builds that differ only in a knob absent from the name
 # share a directory and clobber each other, which is exactly the comparison the
 # knob was added to make.
-QDIR = $(abspath $(SYNDIR))/quartus/$(BOARD)-$(MACHINE)-$(CPU)$(if $(MEM_PAGES),-p$(MEM_PAGES),)-cpu$(CPU_MHZ_TAG)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)$(if $(filter 0,$(QSEED)),,-seed$(QSEED))$(if $(filter 50,$(CPU_DUTY)),,-duty$(CPU_DUTY))$(if $(filter 0,$(TRACE)),,-trace$(TRACE_PAGE)fc$(TRACE_FC))$(if $(filter 0,$(XY450)),,-xy450)$(if $(filter 0,$(MB_ETHER)),,-mbether)$(if $(filter 0,$(MB_3C400)),,-3c400)$(if $(filter 0,$(FB)),,-fb)
+QDIR = $(abspath $(SYNDIR))/quartus/$(BOARD)-$(MACHINE)-$(CPU)$(if $(MEM_PAGES),-p$(MEM_PAGES),)-cpu$(CPU_MHZ_TAG)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)$(if $(filter 0,$(QSEED)),,-seed$(QSEED))$(if $(filter 50,$(CPU_DUTY)),,-duty$(CPU_DUTY))$(if $(filter 0,$(TRACE)),,-trace$(TRACE_PAGE)fc$(TRACE_FC))$(if $(filter 0,$(XY450)),,-xy450)$(if $(filter 0,$(VME_SCSI)),,-vmescsi)$(if $(filter 0,$(MB_ETHER)),,-mbether)$(if $(filter 0,$(MB_3C400)),,-3c400)$(if $(filter 0,$(FB)),,-fb)
 
 quartus-run: rom inputs
 	@# A port left off an instantiation is an undriven wire, not an error --
@@ -262,7 +264,7 @@ quartus-run: rom inputs
 		$(if $(MEM_PAGES),-mem_pages $(MEM_PAGES),) -cpu_hz $(CPU_HZ) \
 		-cpu_div $(if $(CPU_DIV),$(CPU_DIV),0) -eth5 $(ETH5_D) \
 		-eram $(ERAM) -jobs $(AJOBS) -seed $(QSEED) -cpu_duty $(CPU_DUTY) -trace $(TRACE) -trace_page $(TRACE_PAGE) -trace_fc $(TRACE_FC) \
-		-xy450 $(XY450) -mb_ether $(MB_ETHER) -mb_3c400 $(MB_3C400) -fb $(FB) > $(QDIR)/quartus.log 2>&1 || \
+		-xy450 $(XY450) -vme_scsi $(VME_SCSI) -mb_ether $(MB_ETHER) -mb_3c400 $(MB_3C400) -fb $(FB) > $(QDIR)/quartus.log 2>&1 || \
 		{ echo "== FAILED, tail of $(QDIR)/quartus.log =="; tail -40 $(QDIR)/quartus.log; exit 1; }
 	@grep -E '^== ' $(QDIR)/quartus.log
 	@# An implicit net is a mis-parse, not a style point.  Vivado's equivalent

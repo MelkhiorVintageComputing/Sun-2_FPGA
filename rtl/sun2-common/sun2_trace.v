@@ -75,6 +75,20 @@ module sun2_trace
     // healthy two-clock DTACK. A device probe is FC 5.
     input  wire [2:0]            trig_fc,
     input  wire                  trig_fc_en,
+    // ...and whether to require the cycle to be an alternate master's.  A
+    // device page is touched by the CPU as well as by a card that masters, and
+    // the CPU almost always gets there first -- so a page-and-function-code
+    // trigger cannot catch a DVMA cycle at all when software has set the
+    // transfer up through the same page.  This is the only qualifier that
+    // separates them: top_fpga muxes both masters onto the same wires on
+    // purpose, so no combination of address and function code can.
+    input  wire                  trig_dvma_en,
+    // ...and whether trig_page names a *physical* page rather than a virtual
+    // one.  Software maps a device wherever it likes -- the PROM puts this
+    // board at 0xEE2800 and SunOS somewhere else entirely -- so a virtual
+    // trigger can only watch one of them, and which one is not knowable from
+    // outside.  The page map's output is the same either way.
+    input  wire                  trig_phys_en,
     input  wire                  arm,
 
     input  wire [DEPTH_LOG2-1:0] rd_addr,
@@ -98,8 +112,13 @@ module sun2_trace
    wire        as_low = ~dbg_bus[47];
    wire [12:0] page   =  dbg_bus[73:61];
    wire [2:0]  fc     =  dbg_bus[50:48];
-   wire        hit    = as_low && (page == trig_page)
-                        && (!trig_fc_en || (fc == trig_fc));
+   wire        dvma   =  dbg_bus[101];
+   wire [11:0] ppage  =  dbg_bus[17:6];    // ma_pmap2devices, the translation
+   wire        hit    = as_low
+                        && (trig_phys_en ? (ppage == trig_page[11:0])
+                                         : (page  == trig_page))
+                        && (!trig_fc_en || (fc == trig_fc))
+                        && (!trig_dvma_en || dvma);
 
    assign wr_ptr    = wp;
    assign triggered = trig_q;

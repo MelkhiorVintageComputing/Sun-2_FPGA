@@ -199,6 +199,10 @@ module top(input         cpu_clk,
    wire [15:0] cpu_dout;
 
    // The alternate master's, and the Ethernet control register's signals.
+   wire        por_reset;
+   wire        vec_int;
+   wire [2:0]  vec_level;
+   wire [7:0]  vec_num;
    wire        EN_DVMA, dvma_active, dvma_as_n, dvma_rw_n, dvma_uds_n, dvma_lds_n;
    wire [23:1] dvma_a;
    wire [2:0]  dvma_fc;
@@ -208,7 +212,7 @@ module top(input         cpu_clk,
 
    // The MultiBus system bus, and whatever is plugged into it.
    wire        mb_sel, mb_we, mb_uds_n, mb_lds_n, mb_hit, mb_ack;
-   wire [19:0] mb_addr;
+   wire [22:0] mb_addr;   // VME A24; a MultiBus card takes the bottom 20
    wire [15:0] mb_cpu_dout;    // CPU -> card
    wire [15:0] mb_card_dout;   // card -> CPU
    wire        mb_ether_int;
@@ -226,6 +230,10 @@ module top(input         cpu_clk,
 		  .clk40(clk40),
 		  .C100(C100),
 		  .clk4m9152(clk4m9152),
+		  .por_reset_o(por_reset),
+		  .vec_int(vec_int),
+		  .vec_level(vec_level),
+		  .vec_num(vec_num),
 		  .sys_reset(machine_reset),
 		  .P_VPA_n(P_VPA_n),
 		  .P_BERR_n(P_BERR_n),
@@ -498,6 +506,16 @@ module top(input         cpu_clk,
    // before the mux above existed.
    //
 `ifdef SUN2_VME
+   // The 82586's own DVMA path.  Named apart from the muxed wires because a
+   // 2/50 with a SCSI board has a second master, and the two share only the
+   // CPU's single bus-request handshake.
+   wire        eth_br_n, eth_bg_n;
+   wire        eth_dvma_active, eth_dvma_as_n, eth_dvma_rw_n;
+   wire        eth_dvma_uds_n, eth_dvma_lds_n;
+   wire [23:1] eth_dvma_a;
+   wire [2:0]  eth_dvma_fc;
+   wire [15:0] eth_dvma_dout;
+
    sun2_ethernet ethernet(.CLK(C100),
 			  .RESET(~P_RESET_n),   // P.RESET-: the peripheral net
 
@@ -510,19 +528,19 @@ module top(input         cpu_clk,
 			  .crs_stuck_o(eth_crs_stuck),
 
 			  .EN_DVMA(EN_DVMA),
-			  .P_BR_n(P_BR_n),
-			  .P_BG_n(P_BG_n),
+			  .P_BR_n(eth_br_n),
+			  .P_BG_n(eth_bg_n),
 			  .BUS_EN(BUS_EN),
 			  .cpu_as_n(cpu_as_n),
 
-			  .dvma_active(dvma_active),
-			  .dvma_a(dvma_a),
-			  .dvma_fc(dvma_fc),
-			  .dvma_as_n(dvma_as_n),
-			  .dvma_rw_n(dvma_rw_n),
-			  .dvma_uds_n(dvma_uds_n),
-			  .dvma_lds_n(dvma_lds_n),
-			  .dvma_dout(dvma_dout),
+			  .dvma_active(eth_dvma_active),
+			  .dvma_a(eth_dvma_a),
+			  .dvma_fc(eth_dvma_fc),
+			  .dvma_as_n(eth_dvma_as_n),
+			  .dvma_rw_n(eth_dvma_rw_n),
+			  .dvma_uds_n(eth_dvma_uds_n),
+			  .dvma_lds_n(eth_dvma_lds_n),
+			  .dvma_dout(eth_dvma_dout),
 			  .dvma_din(P_DOUT),
 			  .P_DTACK_n(P_DTACK_n),
 			  .P_BERR_n(P_BERR_n),
@@ -539,12 +557,155 @@ module top(input         cpu_clk,
 			  .mii_col(mii_col)
 			  );
 
+`ifdef SUN2_VME_SCSI
+   //
+   // The Sun VME SCSI/RTC board, and the second bus master that comes with it.
+   //
+   // Each master gets its own sun2_dvma.  That is not economy foregone: on a
+   // real 2/50 the 82586's DVMA path is on the motherboard and the card is a
+   // VME master with its own, so they have separate address latches and --
+   // the part that matters -- separate bus-error latches.  One shared instance
+   // would let the disk clear an error the Ethernet had not yet noticed.
+   //
+   // What they genuinely share is the CPU's single BR/BG handshake, and
+   // sun2_bus_arb is the whole of that sharing.
+   //
+   wire        scsi_br_n, scsi_bg_n;
+   wire        scsi_dvma_active, scsi_dvma_as_n, scsi_dvma_rw_n;
+   wire        scsi_dvma_uds_n, scsi_dvma_lds_n;
+   wire [23:1] scsi_dvma_a;
+   wire [2:0]  scsi_dvma_fc;
+   wire [15:0] scsi_dvma_dout;
+
+   wire        scsi_wb_cyc, scsi_wb_stb, scsi_wb_we, scsi_wb_ack, scsi_wb_err;
+   wire        scsi_wb_clr;
+   wire [3:0]  scsi_wb_sel;
+   wire [21:0] scsi_wb_adr;
+   wire [31:0] scsi_wb_dat_w, scsi_wb_dat_r;
+
+   sun2_bus_arb dvma_arb(.CLK(C100),
+			 .RESET(~P_RESET_n),
+			 .a_br_n(eth_br_n),  .a_bg_n(eth_bg_n),
+			 .b_br_n(scsi_br_n), .b_bg_n(scsi_bg_n),
+			 .P_BR_n(P_BR_n),    .P_BG_n(P_BG_n));
+
+   // Only one of the two is ever active -- the arbiter guarantees it and
+   // tb_bus_arb checks it on every clock edge -- so this is a mux rather than
+   // a wired-OR, and a fault in the arbiter shows up as the wrong address
+   // rather than as a quietly ANDed one.
+   assign dvma_active = eth_dvma_active | scsi_dvma_active;
+   assign dvma_a      = scsi_dvma_active ? scsi_dvma_a     : eth_dvma_a;
+   assign dvma_fc     = scsi_dvma_active ? scsi_dvma_fc    : eth_dvma_fc;
+   assign dvma_as_n   = scsi_dvma_active ? scsi_dvma_as_n  : eth_dvma_as_n;
+   assign dvma_rw_n   = scsi_dvma_active ? scsi_dvma_rw_n  : eth_dvma_rw_n;
+   assign dvma_uds_n  = scsi_dvma_active ? scsi_dvma_uds_n : eth_dvma_uds_n;
+   assign dvma_lds_n  = scsi_dvma_active ? scsi_dvma_lds_n : eth_dvma_lds_n;
+   assign dvma_dout   = scsi_dvma_active ? scsi_dvma_dout  : eth_dvma_dout;
+
+   sun2_dvma scsi_dvma(.CLK(C100),
+		       .RESET(~P_RESET_n),
+
+		       .wb_cyc_i(scsi_wb_cyc),
+		       .wb_stb_i(scsi_wb_stb),
+		       .wb_we_i(scsi_wb_we),
+		       .wb_sel_i(scsi_wb_sel),
+		       .wb_adr_i(scsi_wb_adr),
+		       .wb_dat_i(scsi_wb_dat_w),
+		       .wb_dat_o(scsi_wb_dat_r),
+		       .wb_ack_o(scsi_wb_ack),
+		       .wb_err_o(scsi_wb_err),
+
+		       .EN_DVMA(EN_DVMA),
+		       .P_BR_n(scsi_br_n),
+		       .P_BG_n(scsi_bg_n),
+		       .BUS_EN(BUS_EN),
+		       .cpu_as_n(cpu_as_n),
+
+		       .dvma_active(scsi_dvma_active),
+		       .dvma_a(scsi_dvma_a),
+		       .dvma_fc(scsi_dvma_fc),
+		       .dvma_as_n(scsi_dvma_as_n),
+		       .dvma_rw_n(scsi_dvma_rw_n),
+		       .dvma_uds_n(scsi_dvma_uds_n),
+		       .dvma_lds_n(scsi_dvma_lds_n),
+		       .dvma_dout(scsi_dvma_dout),
+		       .dvma_din(P_DOUT),
+		       .P_DTACK_n(P_DTACK_n),
+		       .P_BERR_n(P_BERR_n),
+
+		       // The card's RST bit is the only thing that clears its
+		       // latched bus error, so it is what forgets this one too.
+		       .ether_reset(scsi_wb_clr),
+		       .dvma_err());
+
+   sun2_vme_scsi #(.SCSI_BASE(`VME_SCSI_BASE),
+		   .INIT_MON (`SUN2_RTC_MON),
+		   .INIT_DAY (`SUN2_RTC_DAY),
+		   .INIT_WDAY(`SUN2_RTC_WDAY),
+		   .INIT_HOUR(`SUN2_RTC_HOUR),
+		   .INIT_MIN (`SUN2_RTC_MIN),
+		   .INIT_SEC (`SUN2_RTC_SEC)) vmescsi
+     (.CLK(C100),
+      .RESET(~P_RESET_n),          // P.RESET-: a card on the bus
+      .por_reset(por_reset),       // the clock is battery backed
+      .clk4m9152(clk4m9152),
+
+      .mb_sel(mb_sel),
+      .mb_addr(mb_addr),
+      .mb_we(mb_we),
+      .mb_uds_n(mb_uds_n),
+      .mb_lds_n(mb_lds_n),
+      .mb_din(mb_cpu_dout),
+      .mb_dout(mb_card_dout),
+      .mb_hit(mb_hit),
+      .mb_ack(mb_ack),
+
+      // Level 2, and vectored -- sun2_fpga answers the acknowledge for this
+      // level with intvec and a DTACK rather than with VPA.  The boot PROM
+      // needs none of it, because it polls IntReq and never enables the
+      // interrupt; SunOS needs all of it, because scattach() writes a vector
+      // into the board and installs its handler there.
+      .int_o(vec_int),
+      .intvec_o(vec_num),
+
+      .wb_cyc_o(scsi_wb_cyc), .wb_stb_o(scsi_wb_stb), .wb_we_o(scsi_wb_we),
+      .wb_sel_o(scsi_wb_sel), .wb_adr_o(scsi_wb_adr), .wb_dat_o(scsi_wb_dat_w),
+      .wb_dat_i(scsi_wb_dat_r), .wb_ack_i(scsi_wb_ack), .wb_err_i(scsi_wb_err),
+      .wb_clr_o(scsi_wb_clr),
+
+      .blk_start(blk_start), .blk_we(blk_we), .blk_lba(blk_lba),
+      .blk_buf_rdata(blk_buf_rdata),
+      .blk_done(blk_done), .blk_err(blk_err), .blk_ready(blk_ready),
+      .blk_count(blk_count), .blk_buf_we(blk_buf_we),
+      .blk_buf_addr(blk_buf_addr), .blk_buf_wdata(blk_buf_wdata));
+
+   assign mb_ether_int  = 1'b0;
+   assign vec_level     = 3'd2;   // conf.sun2/GENERIC: `sc0 ... priority 2'
+`else
+   // No vectored interrupter, so every acknowledge autovectors as before.
+   assign vec_int       = 1'b0;
+   assign vec_level     = 3'd0;
+   assign vec_num       = 8'h00;
+
    // A 2/50 has no card cage: nothing is plugged into the system bus, so a
    // TYPE 2 cycle takes the timeout it always did.
    assign mb_card_dout  = 16'h0;
    assign mb_hit        = 1'b0;
    assign mb_ack        = 1'b0;
    assign mb_ether_int  = 1'b0;
+
+   // One master, so the muxed wires are simply its own.
+   assign P_BR_n      = eth_br_n;
+   assign eth_bg_n    = P_BG_n;
+   assign dvma_active = eth_dvma_active;
+   assign dvma_a      = eth_dvma_a;
+   assign dvma_fc     = eth_dvma_fc;
+   assign dvma_as_n   = eth_dvma_as_n;
+   assign dvma_rw_n   = eth_dvma_rw_n;
+   assign dvma_uds_n  = eth_dvma_uds_n;
+   assign dvma_lds_n  = eth_dvma_lds_n;
+   assign dvma_dout   = eth_dvma_dout;
+`endif
 
    // ... and no MultiBus I/O space either.  A 2/50 has TYPE 3 for the top half
    // of the VME bus instead, which is not implemented.
@@ -553,12 +714,15 @@ module top(input         cpu_clk,
    assign mbio_ack       = 1'b0;
    assign mbio_int       = 1'b0;
 
-   // No disk on this machine either: the 2/50's Xylogics is a 451 on the VME
-   // bus, which is a different card in a different space.
+`ifndef SUN2_VME_SCSI
+   // No disk on this machine: the 2/50's Xylogics is a 451 on the VME bus,
+   // which is a different card in a different space, and its SCSI board is
+   // behind SUN2_VME_SCSI.
    assign blk_start      = 1'b0;
    assign blk_we         = 1'b0;
    assign blk_lba        = 32'h0;
    assign blk_buf_rdata  = 8'h0;
+`endif
 `else
    //
    // MultiBus: nothing on board.  The 2/120's device page 1 is an 80287
@@ -573,6 +737,13 @@ module top(input         cpu_clk,
    // The boot PROM polls throughout and never enables it.
    assign ether_int     = mb_ether_int;
    assign ether_bus_err = 1'b0;
+
+   // Nothing on a 2/120's MultiBus is a vectored interrupter -- the Xylogics
+   // is `pri 2' with no vector clause, and autovectors like everything else --
+   // so the acknowledge path stays exactly as it was.
+   assign vec_int       = 1'b0;
+   assign vec_level     = 3'd0;
+   assign vec_num       = 8'h00;
 
  `ifndef SUN2_XY450
    assign dvma_active   = 1'b0;
@@ -600,7 +771,7 @@ module top(input         cpu_clk,
       .RESET(~P_RESET_n),   // P.RESET-: a card on the bus
 
       .mb_sel(mb_sel),
-      .mb_addr(mb_addr),
+      .mb_addr(mb_addr[19:0]),
       .mb_we(mb_we),
       .mb_uds_n(mb_uds_n),
       .mb_lds_n(mb_lds_n),
@@ -645,7 +816,7 @@ module top(input         cpu_clk,
       .RESET(~P_RESET_n),   // P.RESET-: a card on the bus
 
       .mb_sel(mb_sel),
-      .mb_addr(mb_addr),
+      .mb_addr(mb_addr[19:0]),
       .mb_we(mb_we),
       .mb_uds_n(mb_uds_n),
       .mb_lds_n(mb_lds_n),

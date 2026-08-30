@@ -93,7 +93,7 @@ module wukong_top #(
     output wire        tmds_clk_p,       // D4
     output wire        tmds_clk_n,       // C4
 
-`ifdef SUN2_XY450
+`ifdef SUN2_HAS_DISK
     // The micro-SD slot the Xylogics 450's platters became: J9 on a Wukong V3,
     // and a PMOD on a V1, which has no card slot at all.  SPI mode uses four
     // of the six lines; the pins are in syn/wukong_sd_v1.xdc and
@@ -445,7 +445,7 @@ module wukong_top #(
    blk_req_t blk_req;
    blk_rsp_t blk_rsp;
 
-`ifdef SUN2_XY450
+`ifdef SUN2_HAS_DISK
    // In picoseconds, computed in two steps: Vivado's Verilog parser rejects a
    // decimal constant of 1e12 outright -- "should be smaller than 2147483648"
    // -- and silently substitutes a negative number.  xsim takes it without a

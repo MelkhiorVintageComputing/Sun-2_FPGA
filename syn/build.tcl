@@ -29,6 +29,7 @@ set mb_ether 0
 set board    v1
 set fb       0
 set xy450    0
+set vme_scsi 0
 set cpu      suska
 set ila      0
 set hdmimode 1280x1024
@@ -55,6 +56,7 @@ if {[llength $argv] > 12} { set fbforce [lindex $argv 12] }
 if {[llength $argv] > 13} { set eth5    [lindex $argv 13] }
 if {[llength $argv] > 14} { set cpu_div [lindex $argv 14] }
 if {[llength $argv] > 15} { set mb_3c400 [lindex $argv 15] }
+if {[llength $argv] > 16} { set vme_scsi [lindex $argv 16] }
 
 # CPU_DIV names the MMCM divider directly and wins over CPU_HZ in
 # wukong_clkgen.sv:63, so from here on cpu_hz has to mean the clock that will
@@ -257,6 +259,16 @@ if {$xy450 == 1} {
     lappend defines SUN2_XY450
 }
 
+# ...and the Sun VME SCSI/RTC board is the other way round: a 2/50's local disk,
+# which a 2/120 has no place for.
+if {$vme_scsi == 1} {
+    if {$machine ne "vme"} {
+        puts "ERROR: VME_SCSI is VME only: a 2/120 takes its disk on the MultiBus"
+        exit 1
+    }
+    lappend defines SUN2_VME_SCSI
+}
+
 # Which MC68010 to build.  top_fpga.v instantiates both cores and this define
 # picks; the file list further down supplies the sources for the one chosen.
 if {$cpu eq "rd68011"} {
@@ -365,6 +377,7 @@ read_verilog [list \
     $top/rtl/sun2-vme/sun2_phy_status.v \
     $top/rtl/sun2-common/sun2_fb_ctl.v \
     $top/rtl/sun2-vme/sun2_dvma.v \
+    $top/rtl/sun2-vme/sun2_bus_arb.v \
     $top/rtl/sun2-common/ttl_am9513.v \
     $top/rtl/sun2-common/mm58167.v \
     $top/rtl/sun2-common/ttl_74F151.v \
@@ -395,6 +408,9 @@ read_verilog -sv [list \
     $top/build/inputs/Wish5380/src/wish5380_pkg.sv \
     $top/build/inputs/Wish5380/src/sd_spi.sv \
     $top/build/inputs/Wish5380/src/blk_sd.sv \
+    $top/build/inputs/Wish5380/src/scsi_fabric.sv \
+    $top/build/inputs/Wish5380/src/scsi_targ.sv \
+    $top/rtl/sun2-vme/sun2_vme_scsi.sv \
     $top/boards/Wukong/phy_rtl8211_init.sv \
     $top/build/inputs/z8530_scc/z8530_scc.sv \
     $top/boards/Wukong/wukong_clkgen.sv \

@@ -262,6 +262,72 @@
 //
 //`define SUN2_XY450
 
+//---------------------------------------------------------------------
+// The Sun VME SCSI/RTC board
+//---------------------------------------------------------------------
+// A dual-height VME board carrying SCSI and a battery-backed clock, which is
+// how a 2/50 gets a local disk -- its Xylogics equivalent is a 451, a
+// different card in a different space.  There is no SCSI protocol chip on it
+// at all: the whole interface is discrete TTL and seven PALs, so what software
+// sees is a sixteen-byte register file and that is the entire specification.
+//
+// One 4 KiB decode at VME A24 0x200000, split by A11: SCSI below, the MM58167
+// above.  The board does that deliberately so the MMU can protect the two
+// separately.
+//
+// VME only, and off by default like every other card.
+//
+//`define SUN2_VME_SCSI
+
+//---------------------------------------------------------------------
+// Does this build have block media?
+//---------------------------------------------------------------------
+// Two different controllers reach the same micro-SD slot -- the Xylogics 450
+// on a 2/120 and the SCSI board on a 2/50 -- and a board top cares only that
+// *something* wants a disk, not which card it is.  Without this the SD back
+// end is instantiated under SUN2_XY450 alone, so a SCSI build gets the tie-off
+// arm: the card probes correctly, reports itself present, and then finds no
+// medium, which reads on a bench as a broken drive rather than as a missing
+// wire.
+`ifdef SUN2_XY450
+ `define SUN2_HAS_DISK
+`endif
+`ifdef SUN2_VME_SCSI
+ `define SUN2_HAS_DISK
+`endif
+
+//---------------------------------------------------------------------
+// The time-of-day clock's power-up reading
+//---------------------------------------------------------------------
+// Baked in at build time so a machine with no battery still comes up with a
+// plausible date.  Here rather than beside either instantiation because there
+// are two: on a 2/120 the MM58167 is soldered to the board and lives in
+// sun2_fpga.v, and on a 2/50 it is on the SCSI card and so is instantiated
+// from top_fpga.v.  A default that only one of them can see is a clock that
+// silently reads January in half the builds.
+`ifndef SUN2_RTC_MON
+ `define SUN2_RTC_MON  1
+`endif
+`ifndef SUN2_RTC_DAY
+ `define SUN2_RTC_DAY  1
+`endif
+`ifndef SUN2_RTC_WDAY
+ `define SUN2_RTC_WDAY 1
+`endif
+`ifndef SUN2_RTC_HOUR
+ `define SUN2_RTC_HOUR 0
+`endif
+`ifndef SUN2_RTC_MIN
+ `define SUN2_RTC_MIN  0
+`endif
+`ifndef SUN2_RTC_SEC
+ `define SUN2_RTC_SEC  0
+`endif
+
+`ifndef VME_SCSI_BASE
+ `define VME_SCSI_BASE 24'h200000
+`endif
+
 `ifndef XY450_IO_BASE
  `define XY450_IO_BASE 16'hEE40
 `endif

@@ -50,6 +50,7 @@ array set opt {
     -trace_page 0
     -trace_fc  5
     -xy450     0
+    -vme_scsi  0
     -mb_ether  0
     -mb_3c400  0
     -fb        0
@@ -182,6 +183,17 @@ if {$opt(-xy450) != 0} {
     }
     lappend defines SUN2_XY450
     puts "== Xylogics 450 fitted, media on the micro-SD slot =="
+}
+# The Sun VME SCSI/RTC board.  Same shape as the guard above, and for the same
+# reason: sun2_fpga.v states it in an initial block that Quartus discards.
+if {$opt(-vme_scsi) != 0} {
+    if {$opt(-machine) ne "vme"} {
+        puts "ERROR: VME_SCSI is VME only: a 2/120 takes its disk on the"
+        puts "       MultiBus, as a Xylogics 450"
+        exit 1
+    }
+    lappend defines SUN2_VME_SCSI
+    puts "== Sun VME SCSI/RTC board fitted, media on the micro-SD slot =="
 }
 # Only when given.  Empty means "let sun2_config.vh choose", which it does per
 # machine, and both of its answers are inside this range by construction.
@@ -360,6 +372,7 @@ set v2001 [list \
     $top/rtl/sun2-vme/sun2_phy_status.v \
     $top/rtl/sun2-common/sun2_fb_ctl.v \
     $top/rtl/sun2-vme/sun2_dvma.v \
+    $top/rtl/sun2-vme/sun2_bus_arb.v \
     $top/rtl/sun2-common/ttl_am9513.v \
     $top/rtl/sun2-common/mm58167.v \
     $top/rtl/sun2-common/ttl_74F151.v \
@@ -407,6 +420,14 @@ if {$opt(-machine) eq "multibus"} {
 if {$opt(-topent) ne "top"} {
     set w5 $top/build/inputs/Wish5380/src
     lappend sv $w5/wish5380_pkg.sv $w5/sd_spi.sv $w5/blk_sd.sv
+}
+
+# The SCSI target and its wired-OR fabric, which are the drive on the card's
+# bus.  After the package above, which declares the types they use.
+if {$opt(-vme_scsi) != 0} {
+    set w5 $top/build/inputs/Wish5380/src
+    lappend sv $w5/scsi_fabric.sv $w5/scsi_targ.sv \
+               $top/rtl/sun2-vme/sun2_vme_scsi.sv
 }
 
 # The CPU core.

@@ -66,7 +66,10 @@ module sun2_fpga(input         cpu_clk,
 		  timeout, which is how every one of the PROM's probes
 		  discovers there is no card. */
 		 output        mb_sel,
-		 output [19:0] mb_addr,
+		 // The power-on reset, for a card carrying something battery backed.
+		 output 	       por_reset_o,
+
+		 output [22:0] mb_addr,
 		 output        mb_we,
 		 output        mb_uds_n,
 		 output        mb_lds_n,
@@ -95,6 +98,18 @@ module sun2_fpga(input         cpu_clk,
 		  where conf.sun2/XY100 puts the Xylogics 450.  Autovectored:
 		  the Sun-2 does not take a vector from the bus. */
 		 input 	       mbio_int,
+
+		 // A *vectored* interrupter on the system bus.  Everything else in
+		 // this machine autovectors -- P_VPA_n below is asserted for every
+		 // FC 7 cycle -- because everything else in a Sun-2 is autovectored.
+		 // The VME SCSI board is not: conf.sun2/GENERIC gives it a vector,
+		 // scattach() writes that vector into the board's own latch, and the
+		 // kernel installs its handler there rather than at the level-2
+		 // autovector.  So the acknowledge for its level has to be answered
+		 // with the number and a DTACK instead of VPA.
+		 input 	       vec_int,      // the card is requesting
+		 input [2:0]   vec_level,    // at this level
+		 input [7:0]   vec_num,      // and will supply this vector
 		 /* debug */
 		 output [7:0]  diag_leds,
 		 output        en_boot,
@@ -154,6 +169,15 @@ module sun2_fpga(input         cpu_clk,
  `ifdef SUN2_MB_3C400
       $fatal(1, "SUN2_MB_3C400 is MultiBus only: a 2/50 has its Ethernet on board, in device page 1");
  `endif
+`endif
+`ifndef SUN2_VME
+ `ifdef SUN2_VME_SCSI
+      $fatal(1, "SUN2_VME_SCSI is VME only: a 2/120 takes its disk on the MultiBus, as a Xylogics 450");
+ `endif
+`endif
+`ifdef SUN2_VME_SCSI
+      $display("   Sun VME SCSI/RTC board: 4 KiB at VME A24 0x%06x, SCSI low, clock high",
+               `VME_SCSI_BASE);
 `endif
 `ifdef SUN2_MB_ETHER
  `ifdef SUN2_MB_3C400
@@ -234,6 +258,7 @@ module sun2_fpga(input         cpu_clk,
    always @(posedge cpu_clk)
      if (~sys_reset) por_done <= 1'b1;
    wire por_reset = sys_reset & ~por_done;
+   assign por_reset_o = por_reset;
 
    // layers shortcuts
    wire FC_CTRLLAYER;
@@ -246,7 +271,13 @@ module sun2_fpga(input         cpu_clk,
    assign FC_SPROG     = (P_FC == 3'h6);
    assign FC_GENERAL   = ~FC_CTRLLAYER & ~FC_CPUCYCLE;
 
-   assign P_VPA_n = ~(FC_CPUCYCLE);
+   // Interrupt acknowledge: FC 7 with the level on A3..A1.  VPA makes the
+   // 68010 autovector, which is right for every device this machine has
+   // except a vectored VME interrupter -- and asserting VPA *and* letting the
+   // card answer would be two terminations for one cycle, so this is an
+   // either/or and not an addition.
+   wire IACK_VEC  = FC_CPUCYCLE & vec_int & (P_A[3:1] == vec_level);
+   assign P_VPA_n = ~(FC_CPUCYCLE & ~IACK_VEC);
 
    // Declared here rather than with the other match wires below because the
    // bus timeout logic just underneath uses MATCH_MEM, and xvlog rejects
@@ -938,10 +969,21 @@ module sun2_fpga(input         cpu_clk,
    // would make ecprobe() -- which is nothing but "did it answer?" -- report a
    // 3Com card that is not there.
    wire 			 MATCH_MBMEM;
+`ifdef SUN2_VME_SCSI
+   // VME A24 is twenty-four address lines, so there is no bottom-1-MiB
+   // restriction of the kind MultiBus's twenty impose.  Nothing is decoded
+   // blindly even so: mb_ack comes from a card, so an address with no card
+   // behind it still takes the timeout the PROM's probes are built on.
+   assign MATCH_MBMEM    = (FC_GENERAL) & MMU_OK & (TYPE == 3'h2) & C_S6;
+`else
    assign MATCH_MBMEM    = (FC_GENERAL) & MMU_OK & (TYPE == 3'h2) & C_S6 &
                            (ma_pmap2devices[11:9] == 3'h0);
+`endif
    assign mb_sel         = MATCH_MBMEM;
-   assign mb_addr        = {ma_pmap2devices[8:0], P_A[10:1], 1'b0};
+   // Twenty-three bits, of which a MultiBus card takes the bottom twenty --
+   // and with the restriction above in force the top three are zero anyway, so
+   // a 2/120 sees exactly the address it always did.
+   assign mb_addr        = {ma_pmap2devices[11:0], P_A[10:1], 1'b0};
    assign mb_we          = ~P_RW_n;
    assign mb_uds_n       = P_UDS_n;
    assign mb_lds_n       = P_LDS_n;
@@ -1422,24 +1464,10 @@ module sun2_fpga(input         cpu_clk,
    // a simulated machine always starts at the same instant and a run stays
    // reproducible.  Plain decimals, converted to BCD inside the module: 8'hXX
    // does not survive -verilog_define, as the ETH5 knob already found out.
-`ifndef SUN2_RTC_MON
- `define SUN2_RTC_MON  1
-`endif
-`ifndef SUN2_RTC_DAY
- `define SUN2_RTC_DAY  1
-`endif
-`ifndef SUN2_RTC_WDAY
- `define SUN2_RTC_WDAY 1
-`endif
-`ifndef SUN2_RTC_HOUR
- `define SUN2_RTC_HOUR 0
-`endif
-`ifndef SUN2_RTC_MIN
- `define SUN2_RTC_MIN  0
-`endif
-`ifndef SUN2_RTC_SEC
- `define SUN2_RTC_SEC  0
-`endif
+   // The defaults now live in sun2_config.vh, because a 2/50's clock is on
+   // the SCSI card and therefore instantiated from top_fpga.v, which does not
+   // read this file.  A define reaching one of two instantiations is exactly
+   // the trap that has cost this project three builds.
 
    mm58167 #(.INIT_MON (`SUN2_RTC_MON),
 	     .INIT_DAY (`SUN2_RTC_DAY),
@@ -1471,6 +1499,7 @@ module sun2_fpga(input         cpu_clk,
 		   MATCH_SYSEN     ? {8'h0, sys_out} :
 		   MATCH_BERR      ? {8'h0, berr_out} :
 		   MATCH_IDPROM    ? {idprom_out, 8'h0} :
+		   IACK_VEC        ? {8'h00, vec_num} :   // the vector, on D7:0
 		   MATCH_PROM_BOOT ? prom_out :
 		   MATCH_PROM      ? prom_out :
 		   MATCH_TIMER     ? timer_out :
@@ -1528,6 +1557,10 @@ module sun2_fpga(input         cpu_clk,
 			(mb_hit & mb_ack) |
 			/* and the same again for MultiBus I/O space */
 			(mbio_hit & mbio_ack) |
+			/* a vectored interrupt acknowledge, which terminates itself:
+			 the vector is a register on the card and needs no lookup, so
+			 this answers as fast as the quick devices do. */
+			(IACK_VEC & C_S4) |
 
 			1'b0);
    
@@ -1604,7 +1637,11 @@ module sun2_fpga(input         cpu_clk,
    // Sun rejumpers it to INT2/ -- "priority 2" in conf.sun2/XY100 -- so this
    // is the disk.  With no card mbio_int is tied low and this reduces to what
    // it always was.
-   assign INT2_n = ~(EN_INT2 | mbio_int);
+   // Both level-2 card interrupts land here: a Xylogics 450 on a 2/120 and
+   // the SCSI board on a 2/50 are both `pri 2'.  They differ only in how the
+   // acknowledge is answered, which is below and not here.
+   wire vec_req = vec_int & (vec_level == 3'd2);
+   assign INT2_n = ~(EN_INT2 | mbio_int | vec_req);
    // Level 3 carries both the software-settable interrupt and the on-board
    // Ethernet (Architecture Manual 6.13, "Interrupts: Level 3"); the control
    // register's INTEN gates the latter, and sun2_ether_ctl has already applied
