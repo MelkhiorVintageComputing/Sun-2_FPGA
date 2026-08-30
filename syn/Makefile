@@ -16,7 +16,10 @@
 #   make hw                       ... and leave the Hardware Manager open on it
 #   make both               both CPU clocks
 #
-# Nothing here is committed; everything lands in ../build.  Vivado is run from
+#   make clean              drop the Vivado output; clean-quartus for the other
+#
+# Nothing here is committed; everything lands in ../build/syn, one directory
+# per vendor -- vivado/ for the Wukong, quartus/ for the DECA.  Vivado is run from
 # a scratch directory rather than from here, because it drops .Xil/ and
 # clockInfo.txt wherever it is invoked and those do not belong in the source
 # tree.
@@ -131,14 +134,20 @@ CPU_MHZ_TAG = $(shell h=$(CPU_HZ_EFF); i=$$(( $$h / 1000000 )); \
 ETH5   ?= e0
 ETH5_D  = $(shell printf '%d' 0x$(ETH5))
 
+# Where every synthesis artefact lands.  One directory per vendor beneath it,
+# because the two flows produce entirely different trees and a shared parent
+# made `build/syn' mean Vivado's output while Quartus went somewhere else
+# altogether.
+SYNDIR  = $(TOP)/build/syn
+
 TAG     = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)
-OUTDIR  = $(TOP)/build/syn/$(BOARD)-$(MACHINE)$(TAG)-cpu$(CPU_MHZ_TAG)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(ILA)),-ila,)$(if $(filter 1,$(FB)),-$(HDMI_MODE),)$(if $(filter 1,$(FBDEBUG)),-fbdbg,)$(if $(filter 1,$(FBPROBE)),-fbprobe,)$(if $(filter 1,$(FBFORCE)),-fbforce,)$(if $(filter-out e0,$(ETH5)),-eth$(ETH5),)$(if $(CPU_DIV),-div$(CPU_DIV),)
+OUTDIR  = $(SYNDIR)/vivado/$(BOARD)-$(MACHINE)$(TAG)-cpu$(CPU_MHZ_TAG)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(ILA)),-ila,)$(if $(filter 1,$(FB)),-$(HDMI_MODE),)$(if $(filter 1,$(FBDEBUG)),-fbdbg,)$(if $(filter 1,$(FBPROBE)),-fbprobe,)$(if $(filter 1,$(FBFORCE)),-fbforce,)$(if $(filter-out e0,$(ETH5)),-eth$(ETH5),)$(if $(CPU_DIV),-div$(CPU_DIV),)
 # Absolute, because the recipes below run Vivado from $(WORKDIR) and $(OUTDIR)
 # is relative to here: a relative path resolves against the wrong directory and
 # program.tcl reports a bitstream that was never at that address.
 BIT     = $(abspath $(OUTDIR))/sun2_wukong_$(BOARD).bit
 LTX     = $(if $(filter 1,$(ILA)),$(abspath $(OUTDIR))/sun2_wukong_$(BOARD).ltx,)
-WORKDIR = $(TOP)/build/syn/work-$(BOARD)
+WORKDIR = $(SYNDIR)/vivado/work-$(BOARD)
 
 all: bitstream
 
@@ -234,7 +243,7 @@ TRACE_FC   ?= 5
 # should have been: two builds that differ only in a knob absent from the name
 # share a directory and clobber each other, which is exactly the comparison the
 # knob was added to make.
-QDIR = $(abspath $(TOP))/build/quartus/$(BOARD)-$(MACHINE)-$(CPU)-p$(MEM_PAGES)-cpu$(CPU_MHZ_TAG)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)$(if $(filter 0,$(QSEED)),,-seed$(QSEED))$(if $(filter 50,$(CPU_DUTY)),,-duty$(CPU_DUTY))$(if $(filter 0,$(TRACE)),,-trace$(TRACE_PAGE)fc$(TRACE_FC))$(if $(filter 0,$(XY450)),,-xy450)$(if $(filter 0,$(MB_ETHER)),,-mbether)$(if $(filter 0,$(MB_3C400)),,-3c400)
+QDIR = $(abspath $(SYNDIR))/quartus/$(BOARD)-$(MACHINE)-$(CPU)-p$(MEM_PAGES)-cpu$(CPU_MHZ_TAG)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)$(if $(filter 0,$(QSEED)),,-seed$(QSEED))$(if $(filter 50,$(CPU_DUTY)),,-duty$(CPU_DUTY))$(if $(filter 0,$(TRACE)),,-trace$(TRACE_PAGE)fc$(TRACE_FC))$(if $(filter 0,$(XY450)),,-xy450)$(if $(filter 0,$(MB_ETHER)),,-mbether)$(if $(filter 0,$(MB_3C400)),,-3c400)
 
 quartus-run: rom inputs
 	@# A port left off an instantiation is an undriven wire, not an error --
@@ -286,11 +295,19 @@ both:
 	$(MAKE) bitstream CPU_HZ=12500000
 	$(MAKE) bitstream CPU_HZ=40000000
 
+# Deliberately per-vendor rather than `rm -rf $(SYNDIR)'.  A Quartus build is
+# twenty minutes and there are usually several kept for comparison; `clean'
+# meant Vivado before the two moved under one root and it would be a poor
+# surprise for it to start taking them too.
 clean:
-	rm -rf $(TOP)/build/syn
+	rm -rf $(SYNDIR)/vivado
+
+clean-quartus:
+	rm -rf $(SYNDIR)/quartus
 
 clean-ip:
 	rm -rf $(TOP)/build/ip
 
 .PHONY: all ip ip-ila rom inputs bitstream both program hw clean clean-ip \
+	clean-quartus \
 	quartus-run lint-quartus quartus quartus-eram-delta

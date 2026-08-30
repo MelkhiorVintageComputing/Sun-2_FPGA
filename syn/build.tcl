@@ -277,7 +277,7 @@ set ipdir   $top/build/ip/$board
 # -- make reported one path while Vivado wrote to another, quietly overwriting
 # the bitstream the new knob existed to leave alone.  Add to both, or to
 # neither.
-set outdir  $top/build/syn/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$mb_3c400 == 1 ? "-3c400" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu$cputag[expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$fbdebug == 1 ? "-fbdbg" : ""}][expr {$fbprobe == 1 ? "-fbprobe" : ""}][expr {$fbforce == 1 ? "-fbforce" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}]
+set outdir  $top/build/syn/vivado/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$mb_3c400 == 1 ? "-3c400" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu$cputag[expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$fbdebug == 1 ? "-fbdbg" : ""}][expr {$fbprobe == 1 ? "-fbprobe" : ""}][expr {$fbforce == 1 ? "-fbforce" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir

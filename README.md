@@ -820,7 +820,9 @@ each failure looks like given that almost all of them are silent at the
 console. It is also where the deferred debugging tooling lives, the ILA
 included.
 
-Each combination gets its own output directory, `build/syn/<machine>-cpu<MHz>/`.
+Each combination gets its own output directory,
+`build/syn/vivado/<machine>-cpu<MHz>/`; the DECA's Quartus builds land beside
+it in `build/syn/quartus/`.
 Nothing generated is committed. `syn/mig/sun2_mig.prj` is the source of truth
 for the memory controller (see `syn/mig/README.md` for its provenance and the
 four fields we changed); everything MIG emits lands in `build/ip/`. The build

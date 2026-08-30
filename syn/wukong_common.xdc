@@ -141,7 +141,7 @@ set_max_delay -datapath_only \
     -to   [get_cells adapter/ack_tgl_s1_reg] $cpu_period
 
 # clk_pll_i is MIG's ui_clk (83.33 MHz); the name is MIG's own and appears in
-# build/syn/*/clocks.rpt if it ever changes.
+# build/syn/vivado/*/clocks.rpt if it ever changes.
 set_max_delay -datapath_only \
     -from [get_cells {adapter/req_adr_reg[*] adapter/req_dat_reg[*] \
                       adapter/req_sel_reg[*] adapter/req_we_reg}] \

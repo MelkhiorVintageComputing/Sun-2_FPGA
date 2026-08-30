@@ -16,7 +16,7 @@ that "seems to work" is not a pass.
 
 ```sh
 make -C syn ip       BOARD=v3                    # once per board
-make -C syn bitstream BOARD=v3 MACHINE=vme       # -> build/syn/v3-vme-cpu12/sun2_wukong_v3.bit
+make -C syn bitstream BOARD=v3 MACHINE=vme       # -> build/syn/vivado/v3-vme-cpu12/sun2_wukong_v3.bit
 ```
 
 Console is 9600 8N1 on `serial_tx` **E3** / `serial_rx` **F3** on either board.

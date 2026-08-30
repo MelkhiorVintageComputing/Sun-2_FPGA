@@ -2154,4 +2154,5 @@ counter reads 0 because that is correct.
 * **Simulation until recently used a zero-latency memory.** `make -C sim migddr3`
   measures the real path: a Wishbone read is 7 CPU clocks through MIG.
 * Vivado litters whatever directory it runs in, so `syn/` runs it from
-  `build/syn/work`.
+  `build/syn/vivado/work-<board>`.  Both flows land under `build/syn/`, one
+  directory per vendor: `vivado/` for the Wukong, `quartus/` for the DECA.
