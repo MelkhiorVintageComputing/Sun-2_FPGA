@@ -9,6 +9,8 @@
 #   ./run_unit.sh phy       phy_rtl8211_init + wb_mdio against a PHY model
 #   ./run_unit.sh mbether   sun2_mb_ether against the boot PROM's own sequences
 #   ./run_unit.sh mb3c400  sun2_mb_3c400, the other MultiBus Ethernet
+#   ./run_unit.sh vtiming  video_timing against the published VESA numbers
+#   ./run_unit.sh adv7513  the DECA's ADV7513 setup, against an I2C target
 #   ./run_unit.sh xy450     sun2_xy450's registers, as the PROM and SunOS probe them
 #   ./run_unit.sh scc       the Z8530's interrupts, driven as SunOS drives them
 #   ./run_unit.sh trace     sun2_trace: the DECA's JTAG-readable capture buffer
@@ -84,6 +86,28 @@ mbether)
 	if xelab -debug off --timescale 1ns/1ps work.tb_mb_ether -s mbether_sim \
 		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	xsim mbether_sim -R | grep -E '===|PASS|FAIL|checks|ISCP'
+	;;
+
+adv7513)
+	if xvlog --sv \
+		-i "$top/rtl/sun2-common" \
+		"$top/boards/DECA/deca_adv7513_init.sv" \
+		"$top/tb/i2c_slave_model.sv" "$top/tb/tb_adv7513_init.sv" \
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug off --timescale 1ns/1ps work.tb_adv7513_init -s adv7513_sim \
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	xsim adv7513_sim -R | grep -E '===|PASS|FAIL|first mismatch|never written'
+	;;
+
+vtiming)
+	# No dependencies at all -- the raster and nothing else.
+	if xvlog --sv \
+		"$top/rtl/sun2-common/video_timing.sv" \
+		"$top/tb/tb_video_timing.sv" \
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug off --timescale 1ns/1ps work.tb_video_timing -s vtiming_sim \
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	xsim vtiming_sim -R | grep -E '===|PASS|FAIL|raster'
 	;;
 
 mb3c400)

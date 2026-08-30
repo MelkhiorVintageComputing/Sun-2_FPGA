@@ -30,6 +30,8 @@
 #   make phy                       check the RTL8211EG bring-up sequence
 #   make mbether                   check the Sun MultiBus Ethernet board
 #   make mb3c400                   check the 3Com 3C400 MultiBus Ethernet board
+#   make vtiming                   check the video raster against VESA DMT
+#   make adv7513                   check the DECA's HDMI transmitter setup
 #   make xy450                     check the Xylogics 450's registers
 #   make xychain                   boot a 68010 program that drives real chains
 #   make scanout                   check the frame buffer scan-out
@@ -217,7 +219,7 @@ board-phy:
 	$(MAKE) board-check MACHINE=vme
 
 # --- unit tests for the board layer ---------------------------------------
-clkgen adapter migddr3 dvma bridge phy mbether mb3c400 xy450 scc mm58167 scanout decauart decaconsole decaddr3 decaphy trace: rom
+clkgen adapter migddr3 dvma bridge phy mbether mb3c400 xy450 scc mm58167 scanout vtiming adv7513 decauart decaconsole decaddr3 decaphy trace: rom
 	BOARD=$(BOARD) XSIMARGS="$(XSIMARGS)" ./run_unit.sh $@
 
 # --- a picture of what the machine drew -----------------------------------
@@ -294,4 +296,4 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: all rom xsim board board-check board-phy iverilog check clean
-.PHONY: clkgen adapter migddr3 dvma bridge phy mbether mb3c400 xy450 xychain mm58167 scanout decauart decaconsole decaddr3 decaphy screenshot
+.PHONY: clkgen adapter migddr3 dvma bridge phy mbether mb3c400 xy450 xychain vtiming adv7513 mm58167 scanout decauart decaconsole decaddr3 decaphy screenshot
