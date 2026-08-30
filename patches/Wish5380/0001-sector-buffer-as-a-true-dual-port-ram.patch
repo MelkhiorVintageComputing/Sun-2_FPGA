@@ -1,0 +1,57 @@
+The sector buffer is a true dual-port RAM, and must be written as one
+
+scsi_targ's 512-byte sector buffer has two ports -- the SCSI side and the
+block back end -- and puts all four accesses in a single always_ff block.
+That is not the shape either vendor's inference engine recognises for a true
+dual-port RAM, and Quartus quietly builds the whole thing out of flip-flops
+instead.  Measured on a MAX 10 10M50, in a Sun-2/50 with the VME SCSI board
+fitted:
+
+    scsi_targ:drive     11,471 logic elements    4,352 registers    0 memory bits
+
+4,352 registers is the 512 x 8 array plus its state; 11,471 logic elements is
+most of a fifth of the device, spent on a buffer that fits in one M9K with
+4,096 of its 8,192 bits left over.  It is not reported as an uninferred RAM,
+so nothing in the log points at it -- the only symptom is a build that is
+suddenly 12,000 elements larger, and on this device that is the difference
+between 58% and 83% full.
+
+Splitting it into one block per port is the documented template for both
+Quartus and Vivado.  Nothing observable changes: the two ports never address
+the same byte at the same time, because the target either fills the buffer
+from the media or drains it to the SCSI bus and never does both at once, so
+the simultaneous-write case that a single block resolves by assignment order
+cannot arise here.
+
+Worth sending upstream: the model is otherwise entirely synthesisable, and
+this is the only thing in it that costs a device more than it should.
+
+--- a/src/scsi_targ.sv
++++ b/src/scsi_targ.sv
+@@ -138,10 +138,25 @@
+     blk_o.buf_rdata = sbuf_rdata;
+   end
+ 
++  // One always block per port, which is the shape a synthesiser looks for in a
++  // true dual-port RAM.  With all four accesses in a single block Quartus
++  // declines to infer one and builds the whole 512 bytes out of flip-flops --
++  // measured at 11,471 logic elements and 4,352 registers on a MAX 10, against
++  // 4,096 bits of an M9K that is otherwise idle, which is most of a fifth of
++  // the device for a sector buffer.
++  //
++  // The two ports never address the same byte at once: the target either fills
++  // the buffer from the media or drains it to the SCSI bus, never both.  So
++  // splitting the block changes nothing that can be observed, and the
++  // simultaneous-write case a single block resolves by assignment order does
++  // not arise.
+   always_ff @(posedge clk_i) begin
+     if (a_we) mem[a_addr] <= a_wdata;
++    a_rdata <= mem[a_addr];
++  end
++
++  always_ff @(posedge clk_i) begin
+     if (blk_i.buf_we) mem[blk_i.buf_addr] <= blk_i.buf_wdata;
+-    a_rdata    <= mem[a_addr];
+     sbuf_rdata <= mem[blk_i.buf_addr];
+   end
+ 
