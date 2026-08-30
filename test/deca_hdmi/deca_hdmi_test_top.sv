@@ -119,11 +119,28 @@ module deca_hdmi_test_top #(
    assign HDMI_I2C_SCL = scl_oe ? 1'b0 : 1'bz;
    assign HDMI_I2C_SDA = sda_oe ? 1'b0 : 1'bz;
 
-   assign LED[0]   = cfg_done;
-   assign LED[1]   = pll_locked;
-   assign LED[2]   = vsync;          // visibly flickering = the raster is running
-   assign LED[3]   = cfg_nak;        // the transmitter never acknowledged
-   assign LED[7:4] = cfg_passes[3:0];
+   // A heartbeat, not vsync itself.  VSYNC is three lines in 1066 -- a 0.28%
+   // duty cycle at 60 Hz -- so wiring it to an LED gives a steady dim glow that
+   // says nothing.  Dividing it by 32 gives a ~1 Hz square wave, which is
+   // unmistakably a running raster and unmistakably different from a stopped
+   // one.
+   reg [4:0] vs_div;
+   reg       vs_d, heartbeat;
+   always @(posedge clk_pixel) begin
+      vs_d <= vsync;
+      if (vsync & ~vs_d) begin
+         vs_div <= vs_div + 5'd1;
+         if (vs_div == 5'd0) heartbeat <= ~heartbeat;
+      end
+   end
+
+   // **The DECA's LEDs are active low.**  boards/DECA/deca_top.sv:754 is
+   // `assign LED = SW[0] ? ~todebug : ~diag_leds' and that inversion is the
+   // whole reason it is there.  Driving them the other way up produces a panel
+   // that is readable, plausible and exactly wrong -- which is what this file
+   // did on its first build.
+   wire [7:0] led_on = {cfg_passes[3:0], cfg_nak, heartbeat, pll_locked, cfg_done};
+   assign LED = ~led_on;
 
    wire _unused = &{1'b0, KEY[1], SW, cx[11:10], cy[10], 1'b0};
 

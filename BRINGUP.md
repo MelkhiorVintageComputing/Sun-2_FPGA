@@ -313,6 +313,13 @@ this file used to say about that are wrong**, and both cost time:
 MultiBus 2/120 with the Xylogics on the board's micro-SD slot. It boots SunOS
 4.0.3 to a root shell with no network involved.
 
+**The eight LEDs are active low, and `LED[7]` is the leftmost.** Both are easy
+to get backwards and neither is visible from the RTL: `deca_top.sv` carries the
+inversion as a bare `~` on one line, and nothing anywhere records which end of
+the row is bit zero. A panel driven the wrong way up is readable, plausible and
+exactly wrong, which is how `test/deca_hdmi` first reported a healthy board as a
+broken one. A correct `test/deca_hdmi` reads `0 0 0 1 0 B 1 1`.
+
 **Halt the machine before you reprogram it.** Configuring the FPGA is a
 power-cut: no `sync`, no unmount, and every buffered inode and bitmap block the
 kernel was holding is gone. With `/` mounted read-write that reliably corrupts

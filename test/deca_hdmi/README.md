@@ -32,9 +32,19 @@ of them. A test that reads its own copy vouches for the copy.
   exactly 1280x1024 and not merely nearly,
 * `LED[0]` on — the register table has been sent,
 * `LED[1]` on — the pixel PLL is locked,
-* `LED[2]` flickering — that is VSYNC at 60 Hz, so the raster is running,
+* `LED[2]` blinking at about 1 Hz — the raster is running,
 * `LED[3]` **off** — no byte went unacknowledged,
 * `LED[7:4]` — configuration passes, and it should read 1 and stay there.
+
+**Read the panel with `LED[7]` on the left**, `LED[0]` on the right —
+confirmed on hardware, and not guessable from the pin assignments. A working
+board therefore shows `0 0 0 1 0 B 1 1`, where B is the blinking one.
+
+**The LEDs are active low on this board**, which `deca_top.sv:754` records with
+a `~` and this design got wrong on its first build: the panel was readable,
+plausible and inverted. `LED[2]` is a divided heartbeat rather than VSYNC
+itself, because VSYNC is three lines in 1066 — a 0.28% duty cycle — and wired
+straight to an LED it is a dim steady glow that says nothing.
 
 The LEDs separate the failures that otherwise look identical. A black screen
 with `LED[3]` lit is a part that is not answering at all — the wrong I2C pins,
@@ -62,7 +72,13 @@ STA report rather than recomputed:
 reduce it or reject it, and a comment is not a measurement. This is the cheapest
 place in the project to check, because the design is 1% of the device.
 
-## Measured
+## Measured, on a board
+
+A DECA drives a monitor at 1280x1024 60 Hz with the colour bars, the ramp and
+the one-pixel border all correct, and the panel reads `0 0 0 1 0 B 1 1` — the
+table sent, the PLL locked, the raster running, **no unacknowledged byte**, and
+exactly one configuration pass with no hot-plug re-interrupt. `CLK_INVERT=1`,
+the default, is right; the alternative was never needed.
 
 310 logic elements (<1%), 136 registers, 44 pins, one PLL. Timing met with
 4.921 ns of setup slack and 0.315 ns of hold; **Fmax 230.5 MHz on the pixel
