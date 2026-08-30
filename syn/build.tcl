@@ -402,7 +402,7 @@ read_verilog -sv [list \
     $top/rtl/sun2-common/reset_sync.sv \
     $top/boards/Wukong/wb_to_mig_ui.sv \
     $top/boards/Wukong/mig_arb.sv \
-    $top/boards/Wukong/fb_scanout.sv \
+    $top/rtl/sun2-common/fb_scanout.sv \
     $top/build/inputs/hdmi/src/tmds_channel.sv \
     $top/build/inputs/hdmi/src/serializer.sv \
     $top/build/inputs/hdmi/src/packet_assembler.sv \

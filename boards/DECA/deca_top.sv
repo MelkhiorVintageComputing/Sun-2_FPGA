@@ -118,7 +118,22 @@ module deca_top #(
     output wire        SD_SEL,        // P13, card VCCIO select
     output wire        SD_CMD_DIR,    // U22
     output wire        SD_D0_DIR,     // T22
-    output wire        SD_D123_DIR    // U21
+    output wire        SD_D123_DIR,   // U21
+
+    // ---- HDMI, an ADV7513 in bank 7 ---------------------------------
+    // Declared unconditionally, the way the Wukong declares its TMDS pins, so
+    // that syn/deca_pins.qsf can constrain them without a conditional source.
+    // With SUN2_FB off they are driven to a defined idle rather than left
+    // floating.  Locations are Table 3-14 of the board manual; every one is
+    // 1.8 V and bank 7 is otherwise empty.
+    output wire [23:0] HDMI_TX_D,
+    output wire        HDMI_TX_CLK,
+    output wire        HDMI_TX_DE,
+    output wire        HDMI_TX_HS,
+    output wire        HDMI_TX_VS,
+    input  wire        HDMI_TX_INT,
+    inout  wire        HDMI_I2C_SCL,
+    inout  wire        HDMI_I2C_SDA
 );
 
    // ------------------------------------------------------------------
@@ -327,18 +342,35 @@ module deca_top #(
    localparam int PORT_ADDR_SIZE  = 29;
    localparam int PORT_CACHE_BITS = 128;
 
+   // One port for the CPU, and a second, read-only, for the display.
+   //
+   // Cheaper here than on the Wukong, where mig_arb has to multiplex two
+   // clients onto MIG's single user port with one transaction in flight.
+   // BrianHG's controller arbitrates internally and takes up to 16 ports;
+   // his own DECA GFX demo runs three, with video on port 1, on this board.
+   //
+   // The cost is not area but Fmax: another port adds a mux layer in front of
+   // the sequencer, which is where PORT_MLAYER_WIDTH's own comment says the
+   // clock rate goes.  cpu_clk has about 1.25 MHz of margin at 16.667, so read
+   // the fit's Fmax rather than its utilisation.
+`ifdef SUN2_FB
+   localparam int N_DDR3 = 2;
+`else
+   localparam int N_DDR3 = 1;
+`endif
+
    wire                         cmd_clk, ddr3_ready, ddr3_cal_pass, ddr3_rst_out;
    wire [7:0]                   ddr3_rdcal;
 
-   wire                         cmd_busy_a       [0:0];
-   wire                         cmd_ena_a        [0:0];
-   wire                         cmd_write_ena_a  [0:0];
-   wire [PORT_ADDR_SIZE-1:0]    cmd_addr_a       [0:0];
-   wire [PORT_CACHE_BITS-1:0]   cmd_wdata_a      [0:0];
-   wire [PORT_CACHE_BITS/8-1:0] cmd_wmask_a      [0:0];
-   wire                         cmd_rready_a     [0:0];
-   wire [PORT_CACHE_BITS-1:0]   cmd_rdata_a      [0:0];
-   wire [7:0]                   cmd_rvec_out_a   [0:0];
+   wire                         cmd_busy_a       [0:N_DDR3-1];
+   wire                         cmd_ena_a        [0:N_DDR3-1];
+   wire                         cmd_write_ena_a  [0:N_DDR3-1];
+   wire [PORT_ADDR_SIZE-1:0]    cmd_addr_a       [0:N_DDR3-1];
+   wire [PORT_CACHE_BITS-1:0]   cmd_wdata_a      [0:N_DDR3-1];
+   wire [PORT_CACHE_BITS/8-1:0] cmd_wmask_a      [0:N_DDR3-1];
+   wire                         cmd_rready_a     [0:N_DDR3-1];
+   wire [PORT_CACHE_BITS-1:0]   cmd_rdata_a      [0:N_DDR3-1];
+   wire [7:0]                   cmd_rvec_out_a   [0:N_DDR3-1];
 
    wire                         w_cmd_ena, w_cmd_we;
    wire [PORT_ADDR_SIZE-1:0]    w_cmd_addr;
@@ -390,7 +422,7 @@ module deca_top #(
        .DDR3_SIZE_GB    (4),          // MT41K256M16, the DECA's part
        .DDR3_WIDTH_DQ   (16),
        .DDR3_NUM_CHIPS  (1),
-       .PORT_TOTAL      (1),
+       .PORT_TOTAL      (N_DDR3),
 
        // **No caching.**  The controller's defaults hold a write in a write
        // cache for up to 256 CMD_CLK and treat a read cache line as fresh for
@@ -434,11 +466,11 @@ module deca_top #(
        .CMD_addr            (cmd_addr_a),
        .CMD_wdata           (cmd_wdata_a),
        .CMD_wmask           (cmd_wmask_a),
-       .CMD_read_vector_in  ('{8'h00}),
+       .CMD_read_vector_in  ('{N_DDR3{8'h00}}),
        .CMD_read_ready      (cmd_rready_a),
        .CMD_read_data       (cmd_rdata_a),
        .CMD_read_vector_out (cmd_rvec_out_a),
-       .CMD_priority_boost  ('{1'b0}),
+       .CMD_priority_boost  ('{N_DDR3{1'b0}}),
        .SEQ_refresh_hold    (1'b0),
 
        .DDR3_RESET_n (DDR3_RESET_n), .DDR3_CK_p (DDR3_CK_p), .DDR3_CK_n (DDR3_CK_n),
@@ -766,6 +798,144 @@ module deca_top #(
    assign GPIO1_D = todebug;
 
    // ------------------------------------------------------------------
+   // The display
+   // ------------------------------------------------------------------
+   // The Sun's 1152x900 screen, centred in a 1280x1024 raster and handed to the
+   // board's ADV7513.  Everything above the pixel bus is shared with the
+   // Wukong: fb_scanout, the frame buffer decode, sun2_fb_ctl and the
+   // keyboard/mouse SCC are all in rtl/sun2-common and none of them changed.
+   // What is board-specific is only how pixels leave -- TMDS out of the fabric
+   // there, a transmitter chip and an I2C sequence here.
+   //
+   // See test/deca_hdmi for the same output path with nothing else in it.  That
+   // design exists because fitting a display takes the JTAG console away: the
+   // boot PROM moves the console to the screen the moment it finds one, so a
+   // machine with a picture is one that cannot be asked what it thinks.
+`ifdef SUN2_FB
+   wire        clk_pixel, vid_locked;
+   deca_vidclk vidclk (.clk50(MAX10_CLK1_50), .reset(board_reset_raw),
+                       .clk_pixel(clk_pixel), .locked(vid_locked));
+
+   wire pix_rst;
+   reset_sync rst_pix (.clk(clk_pixel),
+                       .rst_async_in(board_reset_raw | ~vid_locked),
+                       .rst_sync_out(pix_rst));
+
+   wire [11:0] fb_cx;
+   wire [10:0] fb_cy;
+   wire        fb_de, fb_hs, fb_vs;
+
+   video_timing vtim (.clk(clk_pixel), .rst(pix_rst),
+                      .cx(fb_cx), .cy(fb_cy),
+                      .de(fb_de), .hsync(fb_hs), .vsync(fb_vs));
+
+   // fb_scanout counts in MIG's units -- two bytes -- because that is the
+   // interface it was written against, and keeping it that way means the two
+   // boards share one file rather than one file and a fork.  BrianHG's port is
+   // byte addressed, so the shift below is the whole of the conversion.
+   //
+   // FB_WB_BASE is a 32-bit-word address, so the byte address is four times it
+   // and MIG units are twice it.  The Wishbone side lands at the same place by
+   // a different route: deca_wb_to_ddr3 forms {req_adr[..:2], 4'b0} from the
+   // same word address, which is also times four.  If those two ever disagree
+   // the display shows a picture from the wrong part of memory, which looks
+   // like corruption rather than like an address error.
+   localparam logic [27:0] FB_APP_BASE = 28'(`FB_WB_BASE * 2);
+
+   wire [27:0] fb_c_addr;
+   wire        fb_c_req;
+   wire [23:0] fb_rgb;
+
+   fb_scanout #(.FB_APP_BASE(FB_APP_BASE),
+                .FB_W(1152), .FB_H(900),
+                .SCREEN_W(1280), .SCREEN_H(1024)) scanout (
+       .ui_clk   (cmd_clk),
+       .ui_rst   (ddr3_rst_out),
+       .c_addr   (fb_c_addr),
+       .c_req    (fb_c_req),
+       .c_done   (cmd_rready_a[1]),
+       .c_rdata  (cmd_rdata_a[1]),
+
+       .clk_pixel(clk_pixel),
+       .pix_rst  (pix_rst),
+       .cx       (fb_cx),
+       .cy       (fb_cy),
+       .video_en (fb_video_en),
+       .rgb      (fb_rgb));
+
+   // Port 1: read only, and **the two sides speak different protocols**.
+   //
+   // fb_scanout was written against MIG through mig_arb, where c_req is a level
+   // meaning "this client wants a transaction" -- held up for the whole line
+   // and advanced one beat per c_done.  BrianHG's CMD_ena is not that: it is a
+   // single-clock command strobe, which is why deca_wb_to_ddr3 describes its
+   // own as "a single-clock strobe, and only while the controller can take it".
+   //
+   // Wiring the level straight to the strobe issues a fresh command every clock
+   // at 125 MHz, all of them for the address of the beat that has not completed
+   // yet.  The returns then fill every slot of the line buffer with beat 0's
+   // data, and the screen shows nine copies of the leftmost 128 pixels --
+   // BEATS_PER_LINE is 9 and a beat is 128 bits.  It looks like a line-buffer
+   // fault and is a handshake one.
+   //
+   // So: one strobe per request, never while the port is busy, never before
+   // calibration, and not another until the read has come back.
+   reg fb_outstanding;
+   always @(posedge cmd_clk) begin
+      if (ddr3_rst_out)              fb_outstanding <= 1'b0;
+      else if (cmd_ena_a[1])         fb_outstanding <= 1'b1;
+      else if (cmd_rready_a[1])      fb_outstanding <= 1'b0;
+   end
+
+   assign cmd_ena_a[1]       = fb_c_req & ~fb_outstanding
+                             & ~cmd_busy_a[1] & ddr3_ready;
+   assign cmd_write_ena_a[1] = 1'b0;
+   assign cmd_addr_a[1]      = {fb_c_addr, 1'b0};   // MIG units -> bytes
+   assign cmd_wdata_a[1]     = '0;
+   assign cmd_wmask_a[1]     = '0;
+
+   deca_hdmi_out hdmiout (
+       .clk_pixel(clk_pixel), .rst(pix_rst),
+       .rgb(fb_rgb), .de(fb_de), .hsync(fb_hs), .vsync(fb_vs),
+       .hdmi_d(HDMI_TX_D), .hdmi_de(HDMI_TX_DE),
+       .hdmi_hs(HDMI_TX_HS), .hdmi_vs(HDMI_TX_VS), .hdmi_clk(HDMI_TX_CLK));
+
+   // The transmitter's own setup runs from the raw 50 MHz oscillator, not the
+   // pixel PLL: it has to be able to report that the PLL never locked.
+   wire cfg_rst;
+   reset_sync rst_cfg (.clk(MAX10_CLK1_50), .rst_async_in(board_reset_raw),
+                       .rst_sync_out(cfg_rst));
+
+   wire hdmi_scl_oe, hdmi_sda_oe;
+   wire hdmi_cfg_done, hdmi_cfg_nak;
+   wire [7:0] hdmi_cfg_passes;
+
+   deca_adv7513_init hdmicfg (
+       .clk(MAX10_CLK1_50), .rst(cfg_rst),
+       .scl_oe(hdmi_scl_oe), .sda_oe(hdmi_sda_oe), .sda_i(HDMI_I2C_SDA),
+       .int_n(HDMI_TX_INT),
+       .cfg_done(hdmi_cfg_done), .cfg_nak(hdmi_cfg_nak),
+       .cfg_passes(hdmi_cfg_passes));
+
+   assign HDMI_I2C_SCL = hdmi_scl_oe ? 1'b0 : 1'bz;
+   assign HDMI_I2C_SDA = hdmi_sda_oe ? 1'b0 : 1'bz;
+
+   wire _unused_fb = &{1'b0, hdmi_cfg_done, hdmi_cfg_nak, hdmi_cfg_passes,
+                       vid_locked, 1'b0};
+`else
+   // No display fitted.  Driven to a defined idle rather than left floating:
+   // the pins are constrained either way, and a transmitter staring at
+   // undriven 1.8 V inputs is not a thing to leave to chance.
+   assign HDMI_TX_D    = 24'h0;
+   assign HDMI_TX_CLK  = 1'b0;
+   assign HDMI_TX_DE   = 1'b0;
+   assign HDMI_TX_HS   = 1'b0;
+   assign HDMI_TX_VS   = 1'b0;
+   assign HDMI_I2C_SCL = 1'bz;
+   assign HDMI_I2C_SDA = 1'bz;
+`endif
+
+   // ------------------------------------------------------------------
    // PHY management
    //
    // MDC well under the 2.5 MHz the standard allows, and deliberately slower
@@ -833,7 +1003,11 @@ module deca_top #(
    // reports an assigned-but-never-read object, which is the warning we want:
    // it names a signal that is deliberately unused rather than one that got
    // lost.
-   wire _unused = &{1'b0, en_boot, eth_crs_stuck, fb_video_en,
-                    KEY[1], SW[1], ddr3_cal_pass, ddr3_rdcal, 1'b0};
+   // fb_video_en is no longer here: with SUN2_FB it drives the scan-out's
+   // DISPEN, and without it sun2_fpga ties it low at source.  It stayed in this
+   // list for the life of the frame buffer, which is the Wukong bug this file's
+   // comment at the `top' instantiation warns about, seen from the other side.
+   wire _unused = &{1'b0, en_boot, eth_crs_stuck,
+                    KEY[1], SW[1], ddr3_cal_pass, ddr3_rdcal, HDMI_TX_INT, 1'b0};
 
 endmodule

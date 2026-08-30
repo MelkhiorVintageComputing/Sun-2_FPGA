@@ -187,7 +187,20 @@ module deca_wb_to_ddr3 #(
    // see them.  Registering them again would add a cycle to every CPU memory
    // access, and on the Wukong that measurably cost one of the seven clocks the
    // 68010 waits.
-   assign CMD_addr      = {req_adr[PORT_ADDR_SIZE-5:2], 4'b0000};
+   // PORT_ADDR_SIZE-3, not -5.  A byte address of PORT_ADDR_SIZE bits needs
+   // PORT_ADDR_SIZE-4 word-address bits above the four zeros, which is
+   // req_adr[26:2] for the 29 bits this controller has -- exactly what the
+   // comment at the head of this file already said.  The code said [24:2],
+   // silently capping the reachable range at 128 MiB and dropping bit 25 of
+   // anything above it.
+   //
+   // Nothing noticed for the life of the port because main memory is 7 MiB.
+   // The frame buffer is the first thing this project has ever placed high --
+   // FB_WB_BASE is 0x03E00000 words, 248 MiB -- and the effect was that the
+   // CPU's pixel writes landed at 120 MiB with bit 25 lost while the scan-out
+   // read 248 MiB, which is uninitialised DDR3.  On a monitor that is noise,
+   // and it looks like a frame buffer fault rather than an address one.
+   assign CMD_addr      = {req_adr[PORT_ADDR_SIZE-3:2], 4'b0000};
    assign CMD_wdata     = {LANES{req_dat}};   // same word in every lane; the
                                               // mask picks which copy lands
    assign CMD_wmask     = mask_for(req_adr[1:0], req_sel);

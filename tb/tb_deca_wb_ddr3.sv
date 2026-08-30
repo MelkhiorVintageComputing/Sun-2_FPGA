@@ -157,6 +157,26 @@ module tb_deca_wb_ddr3;
       end
       check("32 word round trips across lanes and lines", errs == 0);
 
+      // 1b. A high address, above 128 MiB.
+      //
+      // This is the check that was missing, and its absence let a real bug
+      // sit: CMD_addr took req_adr[PORT_ADDR_SIZE-5:2] where the file's own
+      // comment said [26:2], which silently dropped bit 25 and capped the
+      // adapter at 128 MiB.  Main memory is 7 MiB so nothing noticed for the
+      // life of the port.  The frame buffer is the first thing placed high --
+      // FB_WB_BASE is 0x03E00000 words, 248 MiB -- and the effect on a monitor
+      // was noise, because the CPU wrote one place and the scan-out read
+      // another.
+      //
+      // Two addresses that differ only in bit 25 must not alias.  That is the
+      // whole failure, expressed in three lines.
+      errs = 0;
+      wb_write(30'h03E00000, 32'hFB000001, 4'hF);   // the frame buffer base
+      wb_write(30'h01E00000, 32'hFB000002, 4'hF);   // ...without bit 25
+      wb_read (30'h03E00000, got); if (got !== 32'hFB000001) errs++;
+      wb_read (30'h01E00000, got); if (got !== 32'hFB000002) errs++;
+      check("addresses above 128 MiB do not alias onto lower ones", errs == 0);
+
       // 2. The lane really is wb_adr[1:0] -- four consecutive words share one
       //    128-bit line, and writing one must not disturb its neighbours.
       wb_write(4, 32'h11111111, 4'hF);

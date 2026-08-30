@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+`include "sun2_attr.vh"
+
 //
 // The 2/50's frame buffer, on an HDMI screen.
 //
@@ -68,7 +70,7 @@ module fb_scanout #(
 
    // Two buffers of BEATS_PER_LINE, indexed buf*16 + beat.  16 rather than 9
    // so the index is a plain concatenation instead of a multiply.
-   (* ram_style = "block" *) reg [127:0] linebuf [0:31];
+   `SUN2_RAM_BLOCK reg [127:0] linebuf [0:31];
 
    // ------------------------------------------------------------------
    // Pixel side
@@ -79,7 +81,7 @@ module fb_scanout #(
 
    // DISPEN is written in the CPU clock domain and read here.  It is one bit
    // and quasi-static, so two flops are the whole story.
-   (* ASYNC_REG = "TRUE" *) reg ven_s1, ven_s2;
+   `SUN2_ASYNC_REG reg ven_s1, ven_s2;
    always @(posedge clk_pixel) begin
       ven_s1 <= video_en;
       ven_s2 <= ven_s1;
@@ -151,8 +153,8 @@ module fb_scanout #(
    // ui_clk side
    // ------------------------------------------------------------------
    // Cross the two toggles and turn them back into pulses.
-   (* ASYNC_REG = "TRUE" *) reg vs_s1, vs_s2;
-   (* ASYNC_REG = "TRUE" *) reg ls_s1, ls_s2;
+   `SUN2_ASYNC_REG reg vs_s1, vs_s2;
+   `SUN2_ASYNC_REG reg ls_s1, ls_s2;
    reg vs_s3, ls_s3;
    always @(posedge ui_clk) begin
       vs_s1 <= vs_tgl; vs_s2 <= vs_s1; vs_s3 <= vs_s2;
@@ -171,6 +173,17 @@ module fb_scanout #(
    wire [27:0] row_base = FB_APP_BASE + 28'(fetch_row) * 28'(BEATS_PER_LINE * 8);
 
    assign c_addr = row_base + {24'h0, fetch_beat} * 28'd8;
+   // **c_req is a level, not a strobe**, and that is MIG's contract rather
+   // than a universal one.  It stays up for the whole line and advances one
+   // beat per c_done; boards/Wukong/mig_arb.sv consumes it that way.
+   //
+   // A controller whose command input is a single-clock strobe -- BrianHG's
+   // CMD_ena, for one -- needs an adapter between it and this, or it takes a
+   // fresh command every clock for an address that has not completed.  The
+   // returns then fill every slot of the line buffer with the first beat's
+   // data, and the screen shows FB_W/128 copies of the leftmost 128 pixels.
+   // That is a handshake fault that looks exactly like a line-buffer fault;
+   // boards/DECA/deca_top.sv carries the adapter and the story.
    assign c_req  = fetching;
 
    always @(posedge ui_clk) begin

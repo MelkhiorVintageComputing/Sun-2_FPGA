@@ -52,6 +52,7 @@ array set opt {
     -xy450     0
     -mb_ether  0
     -mb_3c400  0
+    -fb        0
     -eth5      224
     -eram      1
     -jobs      8
@@ -98,6 +99,31 @@ switch -- $opt(-machine) {
 # Adding both knobs together is the point -- one alone is exactly the drift
 # build.tcl:264 warns about.
 #
+#
+# The frame buffer.  FB has existed in syn/Makefile since the Wukong got a
+# display, but it only ever reached build.tcl -- there was no way to ask for one
+# on this board at all.
+#
+# Note what it drags in beyond pixels: on MultiBus SUN2_FB is also what builds
+# the keyboard/mouse SCC, because on a real 2/120 that SCC is on the video
+# board.  And it changes what the machine looks like from outside -- the PROM
+# moves the console to the screen the moment it finds a display, so an FB build
+# has no console.  That is not a bug and it is worth knowing before wondering
+# where the boot messages went.
+#
+if {$opt(-fb) != 0} {
+    lappend defines SUN2_FB
+    # sun2_fpga.v:188-199 $fatals on this and Quartus discards system tasks, so
+    # it is enforced here or nowhere: on MultiBus the video board owns page
+    # 0xE00 upward, so memory may not reach it.  The default 3584 is exactly at
+    # the limit, so only an override trips this.
+    if {$opt(-machine) eq "multibus" && $opt(-mem_pages) > 3584} {
+        puts "ERROR: with a frame buffer a MultiBus machine may have at most 3584"
+        puts "       pages of memory: the video board decodes from page 0xE00 up."
+        exit 1
+    }
+}
+
 if {$opt(-mb_ether) != 0} { lappend defines SUN2_MB_ETHER }
 if {$opt(-mb_3c400) != 0} { lappend defines SUN2_MB_3C400 }
 
@@ -329,6 +355,8 @@ set sv [list \
     $top/build/inputs/Wish82586/src/ie_ru.sv \
     $top/build/inputs/Wish82586/src/wish82586.sv \
     $top/build/inputs/Wish82586/src/wb_mdio.sv \
+    $top/rtl/sun2-common/video_timing.sv \
+    $top/rtl/sun2-common/fb_scanout.sv \
     $top/rtl/sun2-vme/sun2_ethernet.sv \
     $top/build/inputs/z8530_scc/z8530_scc.sv \
 ]

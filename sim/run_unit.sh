@@ -258,7 +258,8 @@ scc)
 	;;
 
 scanout)
-	if xvlog --sv "$top/boards/Wukong/fb_scanout.sv" "$top/tb/tb_fb_scanout.sv" \
+	if xvlog --sv -i "$top/rtl/sun2-common" \
+		"$top/rtl/sun2-common/fb_scanout.sv" "$top/tb/tb_fb_scanout.sv" \
 		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	if xelab -debug off --timescale 1ns/1ps work.tb_fb_scanout -s scanout_sim \
 		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi

@@ -180,3 +180,59 @@ set_instance_assignment -name WEAK_PULL_UP_RESISTOR ON -to SD_MISO
 # 2.5 V, which is the failure this file's header warns about.
 set_location_assignment PIN_P13 -to SD_SEL
 set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to SD_SEL
+
+# ------------------------------------------------------------------- HDMI TX
+#
+# An ADV7513: parallel 24-bit RGB with CLK, DE, HS and VS, configured over I2C.
+# Not TMDS -- the transmitter does that itself, which is why none of the
+# Wukong's video output layer ports to this board.
+#
+# **All thirty-one are 1.8 V and all thirty-one are in bank 7**, which is
+# otherwise completely empty, so the bank takes its VCCIO from these and
+# conflicts with nothing.  Locations are Table 3-14 of DECA_User_manual.pdf,
+# which agrees byte for byte with the board template and the BrianHG demos.
+#
+# Assigned unconditionally, as the Wukong assigns its TMDS pins: with no frame
+# buffer fitted deca_top drives them to a defined idle.  One pin file, no
+# conditional source, and the constraint story is the same either way.
+set_location_assignment PIN_C18 -to HDMI_TX_D[0]
+set_location_assignment PIN_D17 -to HDMI_TX_D[1]
+set_location_assignment PIN_C17 -to HDMI_TX_D[2]
+set_location_assignment PIN_C19 -to HDMI_TX_D[3]
+set_location_assignment PIN_D14 -to HDMI_TX_D[4]
+set_location_assignment PIN_B19 -to HDMI_TX_D[5]
+set_location_assignment PIN_D13 -to HDMI_TX_D[6]
+set_location_assignment PIN_A19 -to HDMI_TX_D[7]
+set_location_assignment PIN_C14 -to HDMI_TX_D[8]
+set_location_assignment PIN_A17 -to HDMI_TX_D[9]
+set_location_assignment PIN_B16 -to HDMI_TX_D[10]
+set_location_assignment PIN_C15 -to HDMI_TX_D[11]
+set_location_assignment PIN_A14 -to HDMI_TX_D[12]
+set_location_assignment PIN_A15 -to HDMI_TX_D[13]
+set_location_assignment PIN_A12 -to HDMI_TX_D[14]
+set_location_assignment PIN_A16 -to HDMI_TX_D[15]
+set_location_assignment PIN_A13 -to HDMI_TX_D[16]
+set_location_assignment PIN_C16 -to HDMI_TX_D[17]
+set_location_assignment PIN_C12 -to HDMI_TX_D[18]
+set_location_assignment PIN_B17 -to HDMI_TX_D[19]
+set_location_assignment PIN_B12 -to HDMI_TX_D[20]
+set_location_assignment PIN_B14 -to HDMI_TX_D[21]
+set_location_assignment PIN_A18 -to HDMI_TX_D[22]
+set_location_assignment PIN_C13 -to HDMI_TX_D[23]
+set_location_assignment PIN_A20 -to HDMI_TX_CLK
+set_location_assignment PIN_C9  -to HDMI_TX_DE
+set_location_assignment PIN_B11 -to HDMI_TX_HS
+set_location_assignment PIN_C11 -to HDMI_TX_VS
+set_location_assignment PIN_B10 -to HDMI_TX_INT
+set_location_assignment PIN_C10 -to HDMI_I2C_SCL
+set_location_assignment PIN_B15 -to HDMI_I2C_SDA
+foreach i {0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23} {
+    set_instance_assignment -name IO_STANDARD "1.8 V" -to HDMI_TX_D[$i]
+}
+foreach p {HDMI_TX_CLK HDMI_TX_DE HDMI_TX_HS HDMI_TX_VS HDMI_TX_INT
+           HDMI_I2C_SCL HDMI_I2C_SDA} {
+    set_instance_assignment -name IO_STANDARD "1.8 V" -to $p
+}
+# The board carries 2K pull-ups to VCC1P8_AVDD on both I2C lines (schematic
+# sheet 16), so no internal one -- a weak internal pull-up fighting a 2K
+# external gives a slower rising edge, not a stronger one.
