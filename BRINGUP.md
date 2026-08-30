@@ -340,20 +340,28 @@ what a machine that dropped to single-user after a failed `fsck` is, so a
 corrupted card protects itself from further corruption and hides how it got
 that way.
 
-**The one exception is straight after `fsck` repairs a mounted filesystem.**
-Then the kernel's in-core superblock and inodes are *stale*, and syncing writes
-them back over the repairs -- which is why fsck itself prints `***** REBOOT THE
-SYSTEM *****` and why `reboot -n` exists. There, and only there, a hard reset by
-reprogramming is the correct thing. Recovering a card is therefore:
+**Repairing a card does not need one, and this was got wrong here first.** The
+worry is that after `fsck` modifies a *mounted* filesystem the kernel's in-core
+superblock is stale and a `sync` writes it back over the repairs -- which is
+real, and is why fsck prints `***** REBOOT THE SYSTEM *****` and why `reboot -n`
+exists. But it applies to a filesystem mounted **read-write**, and that is not
+the state anyone actually repairs in: a boot whose `fsck` failed leaves root
+**read-only**, so there are no dirty buffers for it and `sync` writes nothing.
+
+Measured, on this board: repair in single user, then a plain `/etc/reboot`, and
+the next boot's `fsck` passes clean and goes multi-user.
 
 ```
 # /usr/etc/fsck -y /dev/rxy0a
   ***** FILE SYSTEM WAS MODIFIED *****
-  ***** REBOOT THE SYSTEM *****
-$ quartus_pgm ...    deliberately without halting
+# /etc/reboot
+  syncing file systems... done
 ```
 
-Do not generalise that exception into a habit; it is one command in one state.
+A warm reset works because `por_reset` is asserted only at configuration and
+deliberately not re-armed by a RESET instruction -- see the reset note in
+CLAUDE.md. Reach for a hard reset only if root is genuinely mounted read-write
+when fsck modifies it, which takes deliberate effort to arrange.
 
 **Read the JTAG panel before the console.** `tools/deca_reset.tcl` prints
 
