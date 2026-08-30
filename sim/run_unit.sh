@@ -10,6 +10,7 @@
 #   ./run_unit.sh mbether   sun2_mb_ether against the boot PROM's own sequences
 #   ./run_unit.sh mb3c400  sun2_mb_3c400, the other MultiBus Ethernet
 #   ./run_unit.sh vtiming  video_timing against the published VESA numbers
+#   ./run_unit.sh vmescsi  the Sun VME SCSI/RTC board's register file
 #   ./run_unit.sh adv7513  the DECA's ADV7513 setup, against an I2C target
 #   ./run_unit.sh xy450     sun2_xy450's registers, as the PROM and SunOS probe them
 #   ./run_unit.sh scc       the Z8530's interrupts, driven as SunOS drives them
@@ -97,6 +98,17 @@ adv7513)
 	if xelab -debug off --timescale 1ns/1ps work.tb_adv7513_init -s adv7513_sim \
 		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
 	xsim adv7513_sim -R | grep -E '===|PASS|FAIL|first mismatch|never written'
+	;;
+
+vmescsi)
+	if xvlog --sv -i "$top/rtl/sun2-common" -d SUN2_SIM \
+		"$top/rtl/sun2-common/mm58167.v" \
+		"$top/rtl/sun2-vme/sun2_vme_scsi.sv" \
+		"$top/tb/tb_vme_scsi.sv" \
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	if xelab -debug typical --timescale 1ns/1ps work.tb_vme_scsi -s vmescsi_sim \
+		2>&1 | grep -E '^(ERROR|CRITICAL)'; then exit 1; fi
+	xsim vmescsi_sim -R | grep -E '===|PASS|FAIL|checks|acknowledge'
 	;;
 
 vtiming)
