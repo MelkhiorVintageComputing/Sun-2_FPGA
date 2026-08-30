@@ -888,12 +888,28 @@ threshold that looks exactly like a fragment threshold. Driving the sweep from
 another host is what separated them: 2000 *and* 2900 bytes pass, 3000 fails, so
 it tracks fragment count and not size.
 
-**Whether that is inherent to a two-buffer card is not settled.** The driver
-has ~1.2 ms at 10 Mb/s to return a buffer before the third frame starts, and a
-real 2/120 ran `ecread`'s 1500-byte copy out of static RAM where this one goes
-through the MMU to DDR3. The measurement that would settle it is a drop counter
-in the card -- frames rejected for want of a free buffer -- which does not exist
-yet.
+**It is inherent to the card, and Sun documented it.** *Installing the SunOS
+4.0.3 Release* says outright that "diskless Sun-2 machines and Sun 100U machines
+with 3Com Ethernet interface (ec0) will have trouble booting from fast servers
+such as a Sun-3 or Sun-4", and offers two remedies: patch the kernel and mount
+with smaller `rsize`/`wsize`, or replace the board with the Sun MultiBus
+Ethernet. Both are exactly what the measurements above arrived at
+independently, before the document was found -- which is the strongest evidence
+available that this replica is faithful rather than defective, and it is
+evidence of a kind no simulation could have produced.
+
+Note what "fast server" means here: a server that emits the fragments of a reply
+back to back with minimal spacing. A modern Linux box is far faster than the
+Sun-3 the manual warns about, so this bench sits well inside the documented
+failure regime and would be expected to fail even with a period-correct card.
+
+**So the remaining question is a narrower one than it looks.** The behaviour is
+reproduced; what is still unmeasured is whether *this* card's buffer turnaround
+matches a real 2/120's, since ours runs `ecread`'s 1500-byte copy through the
+MMU to DDR3 where the original had static RAM. A drop counter in the card --
+frames rejected for want of a free buffer -- would say, and it is worth having
+if the card is ever pushed further. It is no longer needed to decide whether the
+card is right.
 
 **The root mount's transfer size is a compile-time constant**, so there is no
 knob: `nfs_mountroot`/`nfsrootvp` build the mount themselves, no fstab, no

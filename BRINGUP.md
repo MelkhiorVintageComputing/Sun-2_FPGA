@@ -443,6 +443,17 @@ that misbehaves, that is the moment to write one.
 * **Link-change interrupts** are unavailable: INTB is not routed. The status
   register polls, and the boot PROM polls anyway.
 * **Actually net-booting** needs an ND server, not more hardware.
+* **A 3C400 cannot netboot a diskless Sun-2 from a modern server, and could not
+  in 1989 either.** Its two receive buffers cannot hold a three-fragment
+  datagram, so a 4096-byte NFS read never reassembles and the kernel retries
+  `READ init 0+4096` for ever. *Installing the SunOS 4.0.3 Release* documents
+  this for the real board -- "diskless Sun-2 machines ... with 3Com Ethernet
+  interface (ec0) will have trouble booting from fast servers such as a Sun-3 or
+  Sun-4" -- and gives the same two workarounds the bench arrived at
+  independently: cap `rsize`/`wsize` in the kernel, or fit the Sun MultiBus
+  Ethernet card instead. Measured here: rsize 1024 and 2048 both check out on
+  the same file, rsize 4096 gives `RPC: Timed out`. Booting `ec` from a *disk*
+  is unaffected, and so is everything else the card does.
 * **The disk cannot be formatted from the machine.** Write Format, the
   track-header commands and the defect map all need real per-sector headers,
   which an SD card has no room for; `/stand/diag` will get an error. Images are
