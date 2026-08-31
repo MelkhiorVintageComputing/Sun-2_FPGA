@@ -276,7 +276,35 @@ module sun2_fpga(input         cpu_clk,
    // except a vectored VME interrupter -- and asserting VPA *and* letting the
    // card answer would be two terminations for one cycle, so this is an
    // either/or and not an addition.
-   wire IACK_VEC  = FC_CPUCYCLE & vec_int & (P_A[3:1] == vec_level);
+   // ...and the decision is taken once, when the cycle starts, not
+   // continuously.  The real board clocks VME.INTREQ into U600 on the rising
+   // edge of (AS & IACK) and compares *that* against the jumpered level
+   // (Theory of Operation section 4), so a request withdrawn between the CPU
+   // deciding to acknowledge and the cycle completing still gets its vector.
+   //
+   // Sampling it combinationally instead is a live race, and a bad one.
+   // IntReq is a level that goes away as soon as the request is served or the
+   // SCSI bus goes free, so it can and does drop mid-acknowledge -- at which
+   // point this machine switches from "the card answers" to "autovector"
+   // while the cycle is running: VPA appears after a DTACK was promised, and
+   // the CPU latches whatever is on the bus as a vector and jumps through it.
+   // That is an intermittent wild PC in supervisor mode.
+   //
+   // It is not known to cause any failure observed on hardware.  This was
+   // found by reading the board's Theory of Operation against the RTL, not
+   // from a symptom, and the `panic: Bus error' this machine takes when
+   // SunOS configures ie0 at boot still reproduces with this fix in the
+   // bitstream.  It is fixed because the combinational sample disagrees with
+   // the documented U600 behaviour, which is reason enough on its own.
+   //
+   // Address and function code are driven in S1, before AS falls in S2, so
+   // tracking while AS is high samples the right cycle's.
+   reg  iack_lat;
+   wire iack_now  = FC_CPUCYCLE & vec_int & (P_A[3:1] == vec_level);
+   always @(posedge CLK)
+     if (P_AS_n) iack_lat <= iack_now;
+
+   wire IACK_VEC  = FC_CPUCYCLE & (P_AS_n ? iack_now : iack_lat);
    assign P_VPA_n = ~(FC_CPUCYCLE & ~IACK_VEC);
 
    // Declared here rather than with the other match wires below because the
