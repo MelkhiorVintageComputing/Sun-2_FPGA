@@ -56,7 +56,18 @@ module deca_top #(
     // supervisor data, which is what a device probe is -- the untypical case
     // is wanting *any* function code, not wanting one.
     parameter int TRACE_FC    = 5,
-    parameter int TRACE_FC_EN = 1
+    parameter int TRACE_FC_EN = 1,
+    // Where the emulated disk starts on the micro-SD card, in 512-byte
+    // sectors.  Zero puts block 0 of the Sun's disk at sector 0 of the card,
+    // which is what every build before this one did.
+    //
+    // It exists to tell a failing card from failing gateware.  Both present as
+    // corruption that survives a rewrite, and nothing in the machine can tell
+    // them apart: the same LBA reaches the same flash every time, so a bad
+    // erase block is indistinguishable from a bad transfer.  Move the whole
+    // disk somewhere else on the card, copy the filesystem there, and the
+    // media is the only thing that changed.
+    parameter int DISK_LBA_OFFSET = 0
 ) (
     input  wire        MAX10_CLK1_50,   // PIN_M8,  2.5 V
     input  wire [1:0]  KEY,             // H21 H22, 1.5 V Schmitt, active low
@@ -788,10 +799,20 @@ module deca_top #(
    // substitute a negative number without saying so.
    localparam int SD_CLK_PERIOD_PS = 1_000_000_000 / (CPU_CLK_HZ / 1000);
 
+   // The disk's block 0 is DISK_LBA_OFFSET sectors into the card.  Applied
+   // here, at the media, rather than in a controller: it is a property of
+   // where the image was written, so it belongs to the board and covers the
+   // Xylogics and the VME SCSI card alike without either knowing.
+   blk_req_t blk_req_media;
+   always_comb begin
+      blk_req_media     = blk_req;
+      blk_req_media.lba = blk_req.lba + DISK_LBA_OFFSET[31:0];
+   end
+
    blk_sd #(.CLK_PERIOD_PS(SD_CLK_PERIOD_PS)) sdcard (
        .clk_i     (cpu_clk),
        .rst_i     (sys_reset),
-       .blk_i     (blk_req),
+       .blk_i     (blk_req_media),
        .blk_o     (blk_rsp),
        .sd_clk_o  (SD_CLK),
        .sd_cs_n_o (SD_CS_N),

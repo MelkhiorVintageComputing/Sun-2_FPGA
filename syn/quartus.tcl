@@ -49,6 +49,7 @@ array set opt {
     -trace     0
     -trace_page 0
     -trace_fc  5
+    -disk_off_mib 0
     -xy450     0
     -vme_scsi  0
     -mb_ether  0
@@ -257,6 +258,9 @@ if {$opt(-mem_pages) eq ""} {
 } else {
     puts "== memory $opt(-mem_pages) pages = [expr {$opt(-mem_pages) * 2}] KiB =="
 }
+if {$opt(-disk_off_mib) != 0} {
+    puts "== disk starts [expr {$opt(-disk_off_mib) * 2048}] sectors ($opt(-disk_off_mib) MiB) into the micro-SD card =="
+}
 if {$opt(-cpu_div) != 0} {
     puts "== CPU clock $opt(-cpu_hz) Hz (VCO/$opt(-cpu_div)) =="
 } else {
@@ -293,6 +297,11 @@ if {$opt(-topent) ne "top"} {
     set_parameter -name CPU_CLK_HZ $opt(-cpu_hz)
     set_parameter -name CPU_DIV    $opt(-cpu_div)
     set_parameter -name CPU_DUTY   $opt(-cpu_duty)
+    # 1 MiB is 2048 sectors of 512 bytes.  Computed here rather than in the
+    # Makefile so the number the banner prints and the number the logic gets
+    # are the same expression -- this project has shipped three builds whose
+    # banner disagreed with their logic.
+    set_parameter -name DISK_LBA_OFFSET [expr {$opt(-disk_off_mib) * 2048}]
     if {$opt(-trace_page) != 0} {
         # Decimal, not "0x1DC5".  Tcl is happy to compare and print a 0x
         # string, and set_parameter is happy to store one, and Verilog then

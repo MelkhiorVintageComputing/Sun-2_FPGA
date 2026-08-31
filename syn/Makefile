@@ -48,6 +48,9 @@ FB ?= 0
 # Fit the Xylogics 450 disk controller.  MultiBus only.
 XY450 ?= 0
 VME_SCSI ?= 0
+# Where the disk image starts on the micro-SD card, in MiB.  0 is the card's
+# beginning, which is where every build before this knob put it.
+DISK_OFF_MIB ?= 0
 
 # Which QMTech Wukong revision: v1 or v3.  They share all their RTL and differ
 # in the FPGA speed grade and four pins -- see syn/boards.tcl.  The default
@@ -248,7 +251,7 @@ TRACE_FC   ?= 5
 # should have been: two builds that differ only in a knob absent from the name
 # share a directory and clobber each other, which is exactly the comparison the
 # knob was added to make.
-QDIR = $(abspath $(SYNDIR))/quartus/$(BOARD)-$(MACHINE)-$(CPU)$(if $(MEM_PAGES),-p$(MEM_PAGES),)-cpu$(CPU_MHZ_TAG)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)$(if $(filter 0,$(QSEED)),,-seed$(QSEED))$(if $(filter 50,$(CPU_DUTY)),,-duty$(CPU_DUTY))$(if $(filter 0,$(TRACE)),,-trace$(TRACE_PAGE)fc$(TRACE_FC))$(if $(filter 0,$(XY450)),,-xy450)$(if $(filter 0,$(VME_SCSI)),,-vmescsi)$(if $(filter 0,$(MB_ETHER)),,-mbether)$(if $(filter 0,$(MB_3C400)),,-3c400)$(if $(filter 0,$(FB)),,-fb)
+QDIR = $(abspath $(SYNDIR))/quartus/$(BOARD)-$(MACHINE)-$(CPU)$(if $(MEM_PAGES),-p$(MEM_PAGES),)-cpu$(CPU_MHZ_TAG)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)$(if $(filter 0,$(QSEED)),,-seed$(QSEED))$(if $(filter 50,$(CPU_DUTY)),,-duty$(CPU_DUTY))$(if $(filter 0,$(TRACE)),,-trace$(TRACE_PAGE)fc$(TRACE_FC))$(if $(filter 0,$(XY450)),,-xy450)$(if $(filter 0,$(VME_SCSI)),,-vmescsi)$(if $(filter 0,$(DISK_OFF_MIB)),,-off$(DISK_OFF_MIB)m)$(if $(filter 0,$(MB_ETHER)),,-mbether)$(if $(filter 0,$(MB_3C400)),,-3c400)$(if $(filter 0,$(FB)),,-fb)
 
 quartus-run: rom inputs
 	@# A port left off an instantiation is an undriven wire, not an error --
@@ -264,7 +267,7 @@ quartus-run: rom inputs
 		$(if $(MEM_PAGES),-mem_pages $(MEM_PAGES),) -cpu_hz $(CPU_HZ) \
 		-cpu_div $(if $(CPU_DIV),$(CPU_DIV),0) -eth5 $(ETH5_D) \
 		-eram $(ERAM) -jobs $(AJOBS) -seed $(QSEED) -cpu_duty $(CPU_DUTY) -trace $(TRACE) -trace_page $(TRACE_PAGE) -trace_fc $(TRACE_FC) \
-		-xy450 $(XY450) -vme_scsi $(VME_SCSI) -mb_ether $(MB_ETHER) -mb_3c400 $(MB_3C400) -fb $(FB) > $(QDIR)/quartus.log 2>&1 || \
+		-xy450 $(XY450) -vme_scsi $(VME_SCSI) -disk_off_mib $(DISK_OFF_MIB) -mb_ether $(MB_ETHER) -mb_3c400 $(MB_3C400) -fb $(FB) > $(QDIR)/quartus.log 2>&1 || \
 		{ echo "== FAILED, tail of $(QDIR)/quartus.log =="; tail -40 $(QDIR)/quartus.log; exit 1; }
 	@grep -E '^== ' $(QDIR)/quartus.log
 	@# An implicit net is a mis-parse, not a style point.  Vivado's equivalent
