@@ -30,6 +30,7 @@ set board    v1
 set fb       0
 set xy450    0
 set vme_scsi 0
+set mb_scsi 0
 set cpu      suska
 set ila      0
 set hdmimode 1280x1024
@@ -57,6 +58,7 @@ if {[llength $argv] > 13} { set eth5    [lindex $argv 13] }
 if {[llength $argv] > 14} { set cpu_div [lindex $argv 14] }
 if {[llength $argv] > 15} { set mb_3c400 [lindex $argv 15] }
 if {[llength $argv] > 16} { set vme_scsi [lindex $argv 16] }
+if {[llength $argv] > 17} { set mb_scsi  [lindex $argv 17] }
 
 # CPU_DIV names the MMCM divider directly and wins over CPU_HZ in
 # wukong_clkgen.sv:63, so from here on cpu_hz has to mean the clock that will
@@ -269,6 +271,19 @@ if {$vme_scsi == 1} {
     lappend defines SUN2_VME_SCSI
 }
 
+# ...and the MultiBus packaging of the same interface.
+if {$mb_scsi == 1} {
+    if {$machine ne "multibus"} {
+        puts "ERROR: MB_SCSI is MultiBus only: a 2/50 takes the VME SCSI/RTC board"
+        exit 1
+    }
+    if {$xy450 == 1} {
+        puts "ERROR: MB_SCSI and XY450 are mutually exclusive: one micro-SD slot"
+        exit 1
+    }
+    lappend defines SUN2_MB_SCSI
+}
+
 # Which MC68010 to build.  top_fpga.v instantiates both cores and this define
 # picks; the file list further down supplies the sources for the one chosen.
 if {$cpu eq "rd68011"} {
@@ -410,7 +425,9 @@ read_verilog -sv [list \
     $top/build/inputs/Wish5380/src/blk_sd.sv \
     $top/build/inputs/Wish5380/src/scsi_fabric.sv \
     $top/build/inputs/Wish5380/src/scsi_targ.sv \
+    $top/rtl/sun2-common/sun2_scsi_core.sv \
     $top/rtl/sun2-vme/sun2_vme_scsi.sv \
+    $top/rtl/sun2-multibus/sun2_mb_scsi.sv \
     $top/boards/Wukong/phy_rtl8211_init.sv \
     $top/build/inputs/z8530_scc/z8530_scc.sv \
     $top/boards/Wukong/wukong_clkgen.sv \
@@ -474,7 +491,7 @@ if {$fb == 1} {
 # Only when there is a disk: the sd_* ports on wukong_top exist only then, and
 # where they go differs by board -- J9 on a V3, a PMOD on a V1, which has no
 # card slot of its own.
-if {$xy450 == 1} {
+if {$xy450 == 1 || $vme_scsi == 1 || $mb_scsi == 1} {
     read_xdc $here/wukong_sd_$board.xdc
     puts "== read wukong_sd_$board.xdc =="
 }

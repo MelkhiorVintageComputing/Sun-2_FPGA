@@ -54,6 +54,7 @@ case " $SUN2_DEFINES " in *" SUN2_MB_3C400 "*) rundir_tag="$rundir_tag-3c400" ;;
 case " $SUN2_DEFINES " in *" SUN2_FB "*)       rundir_tag="$rundir_tag-fb" ;; esac
 case " $SUN2_DEFINES " in *" SUN2_XY450 "*)    rundir_tag="$rundir_tag-xy450" ;; esac
 case " $SUN2_DEFINES " in *" SUN2_VME_SCSI "*) rundir_tag="$rundir_tag-vmescsi" ;; esac
+case " $SUN2_DEFINES " in *" SUN2_MB_SCSI "*) rundir_tag="$rundir_tag-mbscsi" ;; esac
 # ... and the experiment that powers the maps up as zeros rather than X, which
 # is a different machine at time zero and must not write over a reference run.
 case " $SUN2_DEFINES " in *" SRAM_POWERUP_ZERO "*) rundir_tag="$rundir_tag-mapszero" ;; esac
@@ -178,7 +179,9 @@ xvlog --sv --work sun2 \
 	"$top/build/inputs/Wish5380/src/wish5380_pkg.sv" \
 	"$top/build/inputs/Wish5380/src/scsi_fabric.sv" \
 	"$top/build/inputs/Wish5380/src/scsi_targ.sv" \
+	"$top/rtl/sun2-common/sun2_scsi_core.sv" \
 	"$top/rtl/sun2-vme/sun2_vme_scsi.sv" \
+	"$top/rtl/sun2-multibus/sun2_mb_scsi.sv" \
 	"$top/rtl/sun2-multibus/sun2_xy450.sv" \
 	"$top/build/inputs/z8530_scc/z8530_scc.sv" \
 	"$top/tb/wb_ram_model.sv" \

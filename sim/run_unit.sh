@@ -141,11 +141,32 @@ f.close()'
 	step xvlog --sv -i "$top/rtl/sun2-common" -d SUN2_SIM \
 		"$W5/wish5380_pkg.sv" "$W5/scsi_fabric.sv" "$W5/scsi_targ.sv" \
 		"$top/rtl/sun2-common/mm58167.v" \
+		"$top/rtl/sun2-common/sun2_scsi_core.sv" \
 		"$top/rtl/sun2-vme/sun2_vme_scsi.sv" \
 		"$top/tb/blk_file.sv" "$top/tb/tb_vme_scsi.sv"
 	step xelab -debug typical --timescale 1ns/1ps work.tb_vme_scsi -s vmescsi_sim
 	xsim vmescsi_sim -R -testplusarg blk_image=sd0.img \
 		| grep -E '===|PASS|FAIL|checks|acknowledge|blk\]|DVMA|odd:'
+	;;
+
+mbscsi)
+	"$top/tools/patch_inputs.sh" Wish5380 2>/dev/null || true
+	"$top/tools/patch_inputs.sh" Wish5380
+	W5=$top/build/inputs/Wish5380/src
+	# The same LBA-derived image as vmescsi: a block whose contents come from
+	# its own number catches a read that lands on the wrong one.
+	python3 -c 'import sys
+f=open("sd0.img","wb")
+for lba in range(64): f.write(bytes(((lba*7+i)&0xFF) for i in range(512)))
+f.close()'
+	step xvlog --sv -i "$top/rtl/sun2-common" -d SUN2_SIM \
+		"$W5/wish5380_pkg.sv" "$W5/scsi_fabric.sv" "$W5/scsi_targ.sv" \
+		"$top/rtl/sun2-common/sun2_scsi_core.sv" \
+		"$top/rtl/sun2-multibus/sun2_mb_scsi.sv" \
+		"$top/tb/blk_file.sv" "$top/tb/tb_mb_scsi.sv"
+	step xelab --timescale 1ns/1ps work.tb_mb_scsi -s mbscsi_sim
+	xsim mbscsi_sim -R -testplusarg blk_image=sd0.img \
+		| grep -E '===|PASS|FAIL|checks|acknowledge|wrap:|READ'
 	;;
 
 vtiming)

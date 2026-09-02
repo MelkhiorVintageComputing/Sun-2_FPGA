@@ -103,7 +103,7 @@ if [ "$fitted" = fb ]; then
 	fi
 elif grep -q '>' "$log"; then
 	echo "PASS: monitor prompt seen"
-elif [ "$fitted" = xy450 ] || [ "$fitted" = xychain ]; then
+elif [ "$fitted" = xy450 ] || [ "$fitted" = xychain ] || [ "$fitted" = mbscsi ]; then
 	# A machine that boots does not stop at a prompt, which is the point.
 	echo "note: no monitor prompt, because the disk booted"
 elif [ "$fitted" = mbether ]; then
@@ -186,6 +186,31 @@ fi
 # the boot map put on physical 0xC0000, the IOPB byte inversion, the sector
 # byte order (a label read with the sector bytes swapped still checksums and
 # fails only on the magic), and the CHS-to-block map for fifteen more sectors.
+# The MultiBus SCSI adapter.  `sd' rather than `xy', and the controller number
+# matters: sdprobe() walks sdstd[] = { 0xEE2800, MBMEM_BASE+0x84000, 0 } and
+# returns the *index* it found, so a card at 0x80000 -- which the monitor
+# reaches through its 0xEE2800 alias page -- is sd(0,...) and one at 0x84000 is
+# sd(1,...).  A window decoded one bit too wide covers both and answers 0, which
+# still boots and is still wrong; that is what this string is for.
+if [ "$fitted" = mbscsi ]; then
+	if grep -q 'Probing Multibus: *sd' "$log"; then
+		echo "PASS: the MultiBus SCSI adapter answered sdprobe()"
+	else
+		echo "FAIL: sdprobe() did not find the SCSI adapter"
+		rc=1
+	fi
+
+	if grep -q 'Boot: sd(0,' "$log"; then
+		echo "PASS: auto-boot selected the disk, as controller 0"
+	elif grep -q 'Boot: sd(' "$log"; then
+		echo "FAIL: auto-boot found a SCSI disk, but not at controller 0"
+		rc=1
+	else
+		echo "FAIL: auto-boot did not reach the disk"
+		rc=1
+	fi
+fi
+
 if [ "$fitted" = xy450 ]; then
 	if grep -q 'Probing Multibus: *xy' "$log"; then
 		echo "PASS: the Xylogics 450 answered xyprobe()"

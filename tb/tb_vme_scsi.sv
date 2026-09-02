@@ -316,13 +316,13 @@ module tb_vme_scsi;
       want(q == 16'h0012, $sformatf("dma_addr: high byte at 0x09 (got %04x)", q));
       rd16(BASE + 23'h00A);
       want(q == 16'h3456, $sformatf("dma_addr: low word at 0x0A (got %04x)", q));
-      want(dut.dma_addr == 24'h123456, "dma_addr: the three bytes assemble in order");
+      want(dut.scsi.dma_addr == 24'h123456, "dma_addr: the three bytes assemble in order");
 
       // intvec is at an ODD address, so it is the low byte, D7:0.
       wr16(BASE + 23'h00E, 16'h0040);
       rd16(BASE + 23'h00E);
       want(q == 16'h0040, $sformatf("intvec: odd byte, D7:0 (got %04x)", q));
-      want(dut.intvec == 8'h40, "intvec: scattach's 0x40 lands in the latch");
+      want(dut.scsi.intvec == 8'h40, "intvec: scattach's 0x40 lands in the latch");
 
       // ---- 4. The ICR --------------------------------------------------
       // Every writable bit is in the low byte, and every one reads back, so
@@ -332,8 +332,8 @@ module tb_vme_scsi;
       want(q[5:0] == 6'h07, $sformatf("icr: the six control bits read back (got %04x)", q));
 
       // Bit 4 is RST, and it is the only thing that clears a latched Bus Error.
-      force dut.st_buserr = 1'b1;
-      #1 release dut.st_buserr;
+      force dut.scsi.st_buserr = 1'b1;
+      #1 release dut.scsi.st_buserr;
       rd16(BASE + 23'h004);
       want(q[14] == 1'b1, "icr: a latched bus error is visible");
       wr16(BASE + 23'h004, 16'h0010);          // RST
@@ -477,12 +477,12 @@ module tb_vme_scsi;
          want(ok, "dma: the transfer finished and posted IntReq");
          rd16(BASE + 23'h004);
          want(!q[14], "dma: and took no bus error");
-         want(dut.dma_count == 16'hFFFF,
+         want(dut.scsi.dma_count == 16'hFFFF,
               $sformatf("dma: the counter ran up to -1, so the residue is zero (got %04x)",
-                        dut.dma_count));
-         want(dut.dma_addr == 24'd512,
+                        dut.scsi.dma_count));
+         want(dut.scsi.dma_addr == 24'd512,
               $sformatf("dma: the address advanced by one whole block (got %06x)",
-                        dut.dma_addr));
+                        dut.scsi.dma_addr));
          want(status_byte == 8'h00,
               $sformatf("dma: GOOD status after the read (got %02x)", status_byte));
 
@@ -560,8 +560,8 @@ module tb_vme_scsi;
          end
          want(ok, "odd: the transfer finished");
          want(q[13], "odd: Odd Length is set");
-         want(dut.dma_count == 16'hFFFF,
-              $sformatf("odd: all five bytes were accounted for (got %04x)", dut.dma_count));
+         want(dut.scsi.dma_count == 16'hFFFF,
+              $sformatf("odd: all five bytes were accounted for (got %04x)", dut.scsi.dma_count));
 
          // The four that fit went to memory: INQUIRY says direct-access,
          // not removable, SCSI-2, standard data format.

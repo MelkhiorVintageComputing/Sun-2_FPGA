@@ -280,6 +280,28 @@
 //`define SUN2_VME_SCSI
 
 //---------------------------------------------------------------------
+// The Sun-2 MultiBus SCSI host adapter
+//---------------------------------------------------------------------
+// The other packaging of the same interface: a MultiBus card carrying the SCSI
+// host adapter and, where the VME board has its clock, **two Z8530s** giving
+// four serial lines.  See rtl/sun2-multibus/sun2_mb_scsi.sv, and
+// rtl/sun2-common/sun2_scsi_core.sv for the engine the two boards share.
+//
+// One 16 KiB decode in MultiBus *memory* space -- TYPE 2, the same space as the
+// Ethernet cards and not the TYPE 3 the Xylogics uses -- of three 2 KiB pages:
+// SCSI at +0x000, a Z8530 at +0x800, a second at +0x1000.  The board splits them
+// on 2 KiB boundaries deliberately, so the MMU can protect them separately.
+//
+// A bus master, through the same DVMA path and the same 0xF00000 window the
+// Xylogics uses, so it carries the same 1 MiB minimum.
+//
+// MultiBus only, mutually exclusive with SUN2_XY450 -- not because the machine
+// could not hold both, but because there is one micro-SD slot -- and off by
+// default like every other card.
+//
+//`define SUN2_MB_SCSI
+
+//---------------------------------------------------------------------
 // RD68011's loop buffer
 //---------------------------------------------------------------------
 // Zero is an MC68010 and the default: the core holds no instructions of its
@@ -345,6 +367,20 @@
 `ifdef SUN2_VME_SCSI
  `define SUN2_HAS_DISK
 `endif
+`ifdef SUN2_MB_SCSI
+ `define SUN2_HAS_DISK
+`endif
+
+// ...and which builds have a MultiBus bus *master*.  Two cards can be one, and
+// top_fpga.v ties the DVMA pins off when neither is fitted -- guarding that
+// tie-off on SUN2_XY450 alone would leave a SCSI build with its master driving
+// nothing.  The same shape as SUN2_HAS_DISK above and for the same reason.
+`ifdef SUN2_XY450
+ `define SUN2_HAS_MB_MASTER
+`endif
+`ifdef SUN2_MB_SCSI
+ `define SUN2_HAS_MB_MASTER
+`endif
 
 //---------------------------------------------------------------------
 // The time-of-day clock's power-up reading
@@ -380,6 +416,14 @@
 
 `ifndef XY450_IO_BASE
  `define XY450_IO_BASE 16'hEE40
+`endif
+
+// The MultiBus SCSI card's 16 KiB window, in MultiBus memory space.  0x80000 is
+// sc0 -- conf.sun2/GENERIC:59, and what the PROM reaches through its 0xEE2800
+// alias page -- so its disks are sd0/sd1 and root is sd0a.  0x84000 is sc1, the
+// second board, whose disks are sd2/sd3.
+`ifndef MB_SCSI_BASE
+ `define MB_SCSI_BASE 20'h80000
 `endif
 
 //---------------------------------------------------------------------

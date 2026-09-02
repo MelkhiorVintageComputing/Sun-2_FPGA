@@ -54,6 +54,7 @@ array set opt {
     -disk_off_mib 0
     -xy450     0
     -vme_scsi  0
+    -mb_scsi   0
     -loopbuf   0
     -rte_loop  0
     -rte_buf   1
@@ -200,6 +201,25 @@ if {$opt(-vme_scsi) != 0} {
     }
     lappend defines SUN2_VME_SCSI
     puts "== Sun VME SCSI/RTC board fitted, media on the micro-SD slot =="
+}
+# ...and the MultiBus packaging of the same interface.  Same shape again.
+if {$opt(-mb_scsi) != 0} {
+    if {$opt(-machine) ne "multibus"} {
+        puts "ERROR: MB_SCSI is MultiBus only: a 2/50 takes the VME SCSI/RTC"
+        puts "       board, which is -vme_scsi"
+        exit 1
+    }
+    if {$opt(-xy450) != 0} {
+        puts "ERROR: MB_SCSI and XY450 are mutually exclusive: one micro-SD slot"
+        exit 1
+    }
+    if {$opt(-mem_pages) ne "" && $opt(-mem_pages) < 512} {
+        puts "ERROR: MB_SCSI needs at least 1 MiB installed (mem_pages >= 512):"
+        puts "       the boot map puts the DVMA window on physical 0xC0000"
+        exit 1
+    }
+    lappend defines SUN2_MB_SCSI
+    puts "== MultiBus SCSI adapter fitted, media on the micro-SD slot =="
 }
 # Only when given.  Empty means "let sun2_config.vh choose", which it does per
 # machine, and both of its answers are inside this range by construction.
@@ -485,10 +505,12 @@ if {$opt(-topent) ne "top"} {
 
 # The SCSI target and its wired-OR fabric, which are the drive on the card's
 # bus.  After the package above, which declares the types they use.
-if {$opt(-vme_scsi) != 0} {
+if {$opt(-vme_scsi) != 0 || $opt(-mb_scsi) != 0} {
     set w5 $top/build/inputs/Wish5380/src
     lappend sv $w5/scsi_fabric.sv $w5/scsi_targ.sv \
-               $top/rtl/sun2-vme/sun2_vme_scsi.sv
+               $top/rtl/sun2-common/sun2_scsi_core.sv
+    if {$opt(-vme_scsi) != 0} { lappend sv $top/rtl/sun2-vme/sun2_vme_scsi.sv }
+    if {$opt(-mb_scsi)  != 0} { lappend sv $top/rtl/sun2-multibus/sun2_mb_scsi.sv }
 }
 
 # The CPU core.

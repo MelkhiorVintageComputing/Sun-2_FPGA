@@ -215,7 +215,9 @@ module top(input         cpu_clk,
    wire [22:0] mb_addr;   // VME A24; a MultiBus card takes the bottom 20
    wire [15:0] mb_cpu_dout;    // CPU -> card
    wire [15:0] mb_card_dout;   // card -> CPU
-   wire        mb_ether_int;
+   wire        mb_ether_int;   // a TYPE 2 card at level 3 (both Ethernets)
+   wire        mb_scsi_int;    // a TYPE 2 card at level 2 (the SCSI adapter,
+                               // `priority 2' with no vector clause)
 
    // MultiBus I/O space, a separate set of wires because it is a separate
    // address space -- see the port comment in sun2_fpga.v.
@@ -288,6 +290,7 @@ module top(input         cpu_clk,
 		  .mb_din(mb_card_dout),
 		  .mb_hit(mb_hit),
 		  .mb_ack(mb_ack),
+		  .mb_int2(mb_scsi_int),
 		  .mbio_sel(mbio_sel),
 		  .mbio_addr(mbio_addr),
 		  .mbio_we(mbio_we),
@@ -525,6 +528,11 @@ module top(input         cpu_clk,
    // before the mux above existed.
    //
 `ifdef SUN2_VME
+   // No TYPE 2 card interrupts at level 2 on a 2/50.  Its SCSI board is a
+   // *vectored* interrupter and reaches the CPU through vec_int/vec_level/
+   // vec_num below; mb_int2 is the MultiBus machine's autovectored path.
+   assign mb_scsi_int = 1'b0;
+
    // The 82586's own DVMA path.  Named apart from the muxed wires because a
    // 2/50 with a SCSI board has a second master, and the two share only the
    // CPU's single bus-request handshake.
@@ -757,6 +765,17 @@ module top(input         cpu_clk,
    assign ether_int     = mb_ether_int;
    assign ether_bus_err = 1'b0;
 
+   // Each TYPE 2 card drives its own three wires and they are combined at the
+   // end of this arm, because a 2/120 can hold an Ethernet card *and* a SCSI
+   // card at once -- different addresses, nothing shared -- and the backplane
+   // they plug into is a wired-OR, not an `elsif'.  The Ethernet pair stays an
+   // `elsif' below for a different reason: those two really are exclusive,
+   // because both drive mii_txd.
+   wire        eth_hit,  eth_ack;
+   wire [15:0] eth_dout;
+   wire        scsi_hit, scsi_ack;
+   wire [15:0] scsi_dout;
+
    // Nothing on a 2/120's MultiBus is a vectored interrupter -- the Xylogics
    // is `pri 2' with no vector clause, and autovectors like everything else --
    // so the acknowledge path stays exactly as it was.
@@ -764,7 +783,7 @@ module top(input         cpu_clk,
    assign vec_level     = 3'd0;
    assign vec_num       = 8'h00;
 
- `ifndef SUN2_XY450
+ `ifndef SUN2_HAS_MB_MASTER
    assign dvma_active   = 1'b0;
    assign dvma_a        = 23'h0;
    assign dvma_fc       = 3'h0;
@@ -795,9 +814,9 @@ module top(input         cpu_clk,
       .mb_uds_n(mb_uds_n),
       .mb_lds_n(mb_lds_n),
       .mb_din(mb_cpu_dout),
-      .mb_dout(mb_card_dout),
-      .mb_hit(mb_hit),
-      .mb_ack(mb_ack),
+      .mb_dout(eth_dout),
+      .mb_hit(eth_hit),
+      .mb_ack(eth_ack),
 
       .int_o(mb_ether_int),
 
@@ -840,9 +859,9 @@ module top(input         cpu_clk,
       .mb_uds_n(mb_uds_n),
       .mb_lds_n(mb_lds_n),
       .mb_din(mb_cpu_dout),
-      .mb_dout(mb_card_dout),
-      .mb_hit(mb_hit),
-      .mb_ack(mb_ack),
+      .mb_dout(eth_dout),
+      .mb_hit(eth_hit),
+      .mb_ack(eth_ack),
 
       .int_o(mb_ether_int),
 
@@ -866,9 +885,9 @@ module top(input         cpu_clk,
    assign mii_txd       = 4'h0;
    assign mii_tx_en     = 1'b0;
    assign mii_tx_er     = 1'b0;
-   assign mb_card_dout  = 16'h0;
-   assign mb_hit        = 1'b0;
-   assign mb_ack        = 1'b0;
+   assign eth_dout      = 16'h0;
+   assign eth_hit       = 1'b0;
+   assign eth_ack       = 1'b0;
    assign mb_ether_int  = 1'b0;
  `endif
 
@@ -968,6 +987,113 @@ module top(input         cpu_clk,
 		     .ether_reset(xy_wb_clr),
 		     .dvma_err()
 		     );
+ `elsif SUN2_MB_SCSI
+   //
+   // The MultiBus SCSI host adapter, in MultiBus *memory* space.  See
+   // rtl/sun2-multibus/sun2_mb_scsi.sv, and rtl/sun2-common/sun2_scsi_core.sv
+   // for the engine it shares with the 2/50's VME board.
+   //
+   // The other MultiBus master, and an `elsif' rather than a second arm only
+   // because there is one micro-SD slot: a real 2/120 could hold this card and
+   // a Xylogics at once, they are in different address spaces, and
+   // sun2_fpga.v's $fatal says which of those two facts is doing the work.
+   // With both fitted this would need sun2_bus_arb in front of P_BR_n/P_BG_n
+   // and the dvma_* mux the VME arm uses above -- both already written, both
+   // already unit-tested by `make -C sim busarb'.
+   //
+   wire        sc_wb_cyc, sc_wb_stb, sc_wb_we, sc_wb_ack, sc_wb_err, sc_wb_clr;
+   wire [3:0]  sc_wb_sel;
+   wire [21:0] sc_wb_adr;
+   wire [31:0] sc_wb_dat_o, sc_wb_dat_i;
+
+   sun2_mb_scsi #(.MB_SCSI_BASE(`MB_SCSI_BASE)) mbscsi
+     (.CLK(C100),
+      .RESET(~P_RESET_n),   // P.RESET-: a card on the bus
+
+      .mb_sel(mb_sel),
+      .mb_addr(mb_addr[19:0]),
+      .mb_we(mb_we),
+      .mb_uds_n(mb_uds_n),
+      .mb_lds_n(mb_lds_n),
+      .mb_din(mb_cpu_dout),
+      .mb_dout(scsi_dout),
+      .mb_hit(scsi_hit),
+      .mb_ack(scsi_ack),
+
+      .int_o(mb_scsi_int),
+      .scc_int_o(),          // the two Z8530s are not fitted yet
+
+      .wb_cyc_o(sc_wb_cyc),
+      .wb_stb_o(sc_wb_stb),
+      .wb_we_o(sc_wb_we),
+      .wb_sel_o(sc_wb_sel),
+      .wb_adr_o(sc_wb_adr),
+      .wb_dat_o(sc_wb_dat_o),
+      .wb_dat_i(sc_wb_dat_i),
+      .wb_ack_i(sc_wb_ack),
+      .wb_err_i(sc_wb_err),
+      .wb_clr_o(sc_wb_clr),
+
+      .blk_start(blk_start),
+      .blk_we(blk_we),
+      .blk_lba(blk_lba),
+      .blk_buf_rdata(blk_buf_rdata),
+      .blk_done(blk_done),
+      .blk_err(blk_err),
+      .blk_ready(blk_ready),
+      .blk_count(blk_count),
+      .blk_buf_we(blk_buf_we),
+      .blk_buf_addr(blk_buf_addr),
+      .blk_buf_wdata(blk_buf_wdata)
+      );
+
+   sun2_dvma sc_dvma(.CLK(C100),
+		     // ~P_RESET_n and not machine_reset, so the bridge and the
+		     // card it serves leave reset together.  A DVMA held in a
+		     // different reset from its client can come back mid
+		     // transaction; the Xylogics above predates this and takes
+		     // machine_reset, which is a difference and not a rule.
+		     .RESET(~P_RESET_n),
+
+		     .wb_cyc_i(sc_wb_cyc),
+		     .wb_stb_i(sc_wb_stb),
+		     .wb_we_i(sc_wb_we),
+		     .wb_sel_i(sc_wb_sel),
+		     .wb_adr_i(sc_wb_adr),
+		     .wb_dat_i(sc_wb_dat_o),
+		     .wb_dat_o(sc_wb_dat_i),
+		     .wb_ack_o(sc_wb_ack),
+		     .wb_err_o(sc_wb_err),
+
+		     .EN_DVMA(EN_DVMA),
+		     .P_BR_n(P_BR_n),
+		     .P_BG_n(P_BG_n),
+		     .BUS_EN(BUS_EN),
+		     .cpu_as_n(cpu_as_n),
+
+		     .dvma_active(dvma_active),
+		     .dvma_a(dvma_a),
+		     .dvma_fc(dvma_fc),
+		     .dvma_as_n(dvma_as_n),
+		     .dvma_rw_n(dvma_rw_n),
+		     .dvma_uds_n(dvma_uds_n),
+		     .dvma_lds_n(dvma_lds_n),
+		     .dvma_dout(dvma_dout),
+		     .dvma_din(P_DOUT),
+		     .P_DTACK_n(P_DTACK_n),
+		     .P_BERR_n(P_BERR_n),
+
+		     // The ICR's RST bit is the only thing that clears the
+		     // card's own latched Bus Error, so it has to clear this
+		     // one too.  A card that does not do this works once.
+		     .ether_reset(sc_wb_clr),
+		     .dvma_err()
+		     );
+
+   assign mbio_card_dout = 16'h0;
+   assign mbio_hit       = 1'b0;
+   assign mbio_ack       = 1'b0;
+   assign mbio_int       = 1'b0;
  `else
    assign mbio_card_dout = 16'h0;
    assign mbio_hit       = 1'b0;
@@ -979,6 +1105,25 @@ module top(input         cpu_clk,
    assign blk_lba        = 32'h0;
    assign blk_buf_rdata  = 8'h0;
  `endif
+
+ `ifndef SUN2_MB_SCSI
+   assign scsi_dout     = 16'h0;
+   assign scsi_hit      = 1'b0;
+   assign scsi_ack      = 1'b0;
+   assign mb_scsi_int   = 1'b0;
+ `endif
+
+   // The TYPE 2 backplane.  mb_ack is qualified by each card's own hit and not
+   // merely ORed: sun2_fpga.v DTACKs on (mb_hit & mb_ack), so an unqualified
+   // ack would let a card that is not being addressed terminate somebody
+   // else's cycle.  Every card already clears its phase counter on ~hit, so
+   // this makes that a property of the wiring rather than of three cards
+   // agreeing.  mb_card_dout is a mux and not an OR for the reason the VME arm
+   // records: a fault then shows up as the wrong data rather than as data
+   // quietly ANDed with somebody else's.
+   assign mb_hit       = eth_hit | scsi_hit;
+   assign mb_ack       = (eth_hit & eth_ack) | (scsi_hit & scsi_ack);
+   assign mb_card_dout = scsi_hit ? scsi_dout : eth_dout;
 `endif
 
    // assign todebug = PC[7:0] ;

@@ -77,6 +77,15 @@ module sun2_fpga(input         cpu_clk,
 		 input [15:0]  mb_din,    // card -> CPU
 		 input 	       mb_hit,
 		 input 	       mb_ack,
+		 /* A TYPE 2 card's interrupt, jumpered to level 2 -- which is
+		  where conf.sun2/GENERIC:59,67 puts both MultiBus SCSI host
+		  adapters, `sc0 at mbmem ? csr 0x80000 priority 2'.
+		  Autovectored, and with no vector clause on those lines: the
+		  Sun-2 does not take a vector from the bus, and screg.h marks
+		  intvec "for VMEbus versions".  Separate from mbio_int below
+		  because TYPE 2 and TYPE 3 are separate address spaces, exactly
+		  as their hit/ack/din wires already are. */
+		 input 	       mb_int2,
 		 /* The MultiBus I/O space, page-map TYPE 3.  The same contract
 		  as mb_* above and a separate set of wires because it is a
 		  separate address space on the real bus: a card decodes one or
@@ -169,6 +178,9 @@ module sun2_fpga(input         cpu_clk,
  `ifdef SUN2_MB_3C400
       $fatal(1, "SUN2_MB_3C400 is MultiBus only: a 2/50 has its Ethernet on board, in device page 1");
  `endif
+ `ifdef SUN2_MB_SCSI
+      $fatal(1, "SUN2_MB_SCSI is MultiBus only: a 2/50 takes the VME SCSI/RTC board, SUN2_VME_SCSI");
+ `endif
 `endif
 `ifndef SUN2_VME
  `ifdef SUN2_VME_SCSI
@@ -209,6 +221,23 @@ module sun2_fpga(input         cpu_clk,
 `ifdef SUN2_MB_ETHER
       $display("   MultiBus Ethernet: registers at 0x%05x, %0d KiB of memory at 0x%05x",
                `MB_ETHER_REG_BASE, `MB_ETHER_MEM_KIB, `MB_ETHER_MEM_BASE);
+`endif
+`ifdef SUN2_MB_SCSI
+ `ifdef SUN2_XY450
+      // One micro-SD slot, one `blk_*' seam, and top_fpga.v's two arms both
+      // drive it.  The machine could hold both cards -- they are in different
+      // address spaces and do not collide on the bus -- so this is a limit of
+      // the replica's media and it says so.
+      $fatal(1, "SUN2_MB_SCSI and SUN2_XY450 are mutually exclusive: one micro-SD slot");
+ `endif
+      $display("   MultiBus SCSI: 16 KiB at MultiBus memory 0x%05x -- SCSI, zs, zs",
+               `MB_SCSI_BASE);
+      // The same DVMA window the Xylogics uses, and the same requirement: every
+      // boot remaps virtual 0xF00000 onto physical 0xC0000, so a machine with
+      // less than a megabyte installed reads zeroes rather than failing.
+      if (`MEM_PAGES < 512)
+        $fatal(1, "SUN2_MB_SCSI needs at least 1 MiB installed (MEM_PAGES >= 512, have %0d): the DVMA window lands on physical 0xC0000",
+               `MEM_PAGES);
 `endif
 `ifdef SUN2_XY450
       $display("   Xylogics 450: registers at MultiBus I/O 0x%04x", `XY450_IO_BASE);
@@ -1683,8 +1712,11 @@ module sun2_fpga(input         cpu_clk,
    // Both level-2 card interrupts land here: a Xylogics 450 on a 2/120 and
    // the SCSI board on a 2/50 are both `pri 2'.  They differ only in how the
    // acknowledge is answered, which is below and not here.
+   // mb_int2 is the same jumper on a TYPE 2 card: the MultiBus SCSI adapter,
+   // which is `priority 2' with no vector clause and so autovectors here.  A
+   // wired-OR is literally what the backplane's INT2/ line is.
    wire vec_req = vec_int & (vec_level == 3'd2);
-   assign INT2_n = ~(EN_INT2 | mbio_int | vec_req);
+   assign INT2_n = ~(EN_INT2 | mbio_int | mb_int2 | vec_req);
    // Level 3 carries both the software-settable interrupt and the on-board
    // Ethernet (Architecture Manual 6.13, "Interrupts: Level 3"); the control
    // register's INTEN gates the latter, and sun2_ether_ctl has already applied
