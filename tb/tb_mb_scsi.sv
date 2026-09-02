@@ -58,7 +58,7 @@ module tb_mb_scsi;
    // The VME card cannot produce this case at any address, so nothing in
    // tb_vme_scsi covers it.
    localparam logic [23:0] DVMA_BASE = 24'hF00000;
-   localparam int MEM_WORDS = 2048;               // 8 KiB at the bottom
+   localparam int MEM_WORDS = 8192;               // 32 KiB at the bottom
    localparam int TOP_WORDS = 512;                // 2 KiB at the very top
 
    wire        wb_cyc, wb_stb, wb_we_o, wb_clr;
@@ -89,13 +89,27 @@ module tb_mb_scsi;
    end
    logic       err_latched = 1'b0;
 
+   // How long memory takes to answer.  The default of one clock is not what the
+   // machine has: `make -C sim migddr3' measures a Wishbone read at 7 CPU
+   // clocks through DDR3, and the frame buffer's timeout race needed 13 before
+   // it would show at all.  A DMA engine that is correct against a one-cycle
+   // memory and wrong against a slow one is a class of bug this tree has been
+   // bitten by before, so the latency is a knob and the write tests use it.
+   int mem_latency = 0;
+   int mem_wait = 0;
+
    always @(posedge clk) begin
       wb_ack <= 1'b0;
       wb_err <= 1'b0;
-      if (rst) err_latched <= 1'b0;
+      if (rst) begin err_latched <= 1'b0; mem_wait <= 0; end
       else begin
          if (wb_clr) err_latched <= 1'b0;
-         if (wb_cyc && wb_stb && !wb_ack && !wb_err) begin
+         if (wb_cyc && wb_stb && !wb_ack && !wb_err && mem_wait < mem_latency) begin
+            mem_wait <= mem_wait + 1;
+         end else if (!(wb_cyc && wb_stb)) begin
+            mem_wait <= 0;
+         end else if (wb_cyc && wb_stb && !wb_ack && !wb_err) begin
+            mem_wait <= 0;
             if (!(mem_in || top_in) || err_latched) begin
                wb_err <= 1'b1; err_latched <= 1'b1;
             end else begin
@@ -231,7 +245,65 @@ module tb_mb_scsi;
       wr16(BASE + 20'h00A, addr[15:0]);
       wr16(BASE + 20'h00C, ~nbytes[15:0]);
 
-      cdb = '{8'h08, 8'h00, lba[15:8], lba[7:0], 8'h01, 8'h00};
+      cdb = '{8'h08, 8'h00, lba[15:8], lba[7:0], 8'((nbytes+511)/512), 8'h00};
+      send_cdb(cdb, ok);
+      if (!ok) return;
+
+      ok = 1'b0;
+      for (guard = 0; guard < 40000; guard++) begin
+         rd16(BASE + 20'h004);
+         if (q[12]) begin ok = 1'b1; break; end
+      end
+
+      for (guard = 0; guard < 4000; guard++) begin
+         rd16(BASE + 20'h004);
+         if (q[11] && (q[10:8] == 3'b011)) begin
+            rd16(BASE + 20'h002); status_byte = q[15:8]; break;
+         end
+      end
+      for (guard = 0; guard < 4000; guard++) begin
+         rd16(BASE + 20'h004);
+         if (q[11] && (q[10:8] == 3'b111)) begin rd16(BASE + 20'h002); break; end
+      end
+      for (guard = 0; guard < 2000; guard++) begin
+         rd16(BASE + 20'h004);
+         if (!q[6]) break;
+      end
+   endtask
+
+   // WRITE(6).  Identical to dma_read but for the opcode -- the board has no
+   // direction bit anywhere, so the engine reads the SCSI I/O line and follows
+   // it, and a driver that set a transfer up the wrong way round would simply
+   // move data the other way.
+   task automatic dma_write(input int lba, input logic [19:0] addr,
+                            input int nbytes, output bit ok,
+                            output logic [7:0] status_byte);
+      logic [7:0] cdb [6];
+      int guard;
+      status_byte = 8'hFF;
+
+      wr16(BASE + 20'h000, 16'h0100);
+      ok = 1'b0;
+      for (guard = 0; guard < 2000; guard++) begin
+         rd16(BASE + 20'h004);
+         if (!q[6]) begin ok = 1'b1; break; end
+      end
+      if (!ok) return;
+
+      wr16(BASE + 20'h004, 16'h0020);
+      ok = 1'b0;
+      for (guard = 0; guard < 4000; guard++) begin
+         rd16(BASE + 20'h004);
+         if (q[6]) begin ok = 1'b1; break; end
+      end
+      if (!ok) return;
+
+      wr16(BASE + 20'h004, 16'h0006);            // word mode + DMA enable
+      wr16(BASE + 20'h008, {12'h000, addr[19:16]});
+      wr16(BASE + 20'h00A, addr[15:0]);
+      wr16(BASE + 20'h00C, ~nbytes[15:0]);
+
+      cdb = '{8'h0A, 8'h00, lba[15:8], lba[7:0], 8'((nbytes+511)/512), 8'h00};
       send_cdb(cdb, ok);
       if (!ok) return;
 
@@ -419,6 +491,131 @@ module tb_mb_scsi;
            if (mem_byte(DVMA_BASE + i) != 8'((5*7 + 4 + i) & 8'hFF)) wrapped = 1'b0;
          want(wrapped, "wrap: the next four wrap to MultiBus address 0");
       end
+
+      // ---------------------------------------------------------------
+      // 10. WRITE(6) -- the memory-to-target direction
+      // ---------------------------------------------------------------
+      // The DMA engine's D_FETCH/D_OUT/D_OUTACK states run only on a write,
+      // and until this test **nothing in the tree exercised them on either
+      // card** -- tb_vme_scsi has no WRITE(6) either, so the whole direction
+      // shipped untested.  A machine that reads its disk perfectly and damages
+      // it whenever it writes is exactly what that gap looks like from outside.
+      wr16(BASE + 20'h004, 16'h0010);   // RST: clear any latched DVMA error
+      wr16(BASE + 20'h004, 16'h0000);
+
+      // A pattern that is not the image's own, so a read-back that silently
+      // returned the old contents cannot pass.
+      for (int i = 0; i < 512; i++)
+        mem[(20'h00800 >> 2) + (i >> 2)][8*(i[1:0]) +: 8] = 8'((i*3 + 8'h5A) & 8'hFF);
+
+      dma_write(20, 20'h00800, 512, gok, status);
+      want(gok, "WRITE(6): the transfer completed");
+      want(status == 8'h00, $sformatf("WRITE(6): status is GOOD (got %02x)", status));
+
+      if (gok) begin
+         bit same = 1'b1;
+         dma_read(20, 20'h00C00, 512, gok, status);
+         want(gok, "WRITE(6): the block reads back");
+         for (int i = 0; i < 512; i++)
+           if (mem_byte(DVMA_BASE + 24'h000C00 + i) != 8'((i*3 + 8'h5A) & 8'hFF))
+             same = 1'b0;
+         want(same, "WRITE(6): every byte read back is the byte written");
+      end
+
+      // ---------------------------------------------------------------
+      // 11. A multi-sector WRITE -- what a filesystem write really is
+      // ---------------------------------------------------------------
+      // Section 10 writes one 512-byte sector, which is the easy case and the
+      // only one that was ever covered.  A SunOS block is 8 KiB, sixteen
+      // sectors in one command, and on hardware *large* writes come back from
+      // the medium wrong while small ones do not: 3- and 10-block files copy
+      // perfectly, 104-block files corrupt three times in four, each
+      // differently.  This is that case.
+      wr16(BASE + 20'h004, 16'h0010);
+      wr16(BASE + 20'h004, 16'h0000);
+
+      for (int i = 0; i < 8192; i++)
+        mem[(20'h02000 >> 2) + (i >> 2)][8*(i[1:0]) +: 8] = 8'((i*7 + 8'hC3) & 8'hFF);
+
+      dma_write(40, 20'h02000, 8192, gok, status);
+      want(gok, "WRITE 8 KiB: the transfer completed");
+      want(status == 8'h00, $sformatf("WRITE 8 KiB: status GOOD (got %02x)", status));
+
+      if (gok) begin
+         bit same = 1'b1;
+         int bad = 0;
+         dma_read(40, 20'h04000, 8192, gok, status);
+         want(gok, "WRITE 8 KiB: it reads back");
+         for (int i = 0; i < 8192; i++)
+           if (mem_byte(DVMA_BASE + 24'h004000 + i) != 8'((i*7 + 8'hC3) & 8'hFF)) begin
+              same = 1'b0;
+              if (bad < 4)
+                $display("   first bad byte %0d: got %02x want %02x", i,
+                         mem_byte(DVMA_BASE + 24'h004000 + i),
+                         8'((i*7 + 8'hC3) & 8'hFF));
+              bad++;
+           end
+         want(same, $sformatf("WRITE 8 KiB: all 8192 bytes survive (%0d wrong)", bad));
+      end
+
+      // ---------------------------------------------------------------
+      // 12. The same 8 KiB write, against memory as slow as the board's
+      // ---------------------------------------------------------------
+      // First the control, and it is not optional: the latency model is new,
+      // so a write that fails at 13 clocks proves nothing until a *read* at 13
+      // clocks is known to pass.  Without this, a broken memory model reads as
+      // a broken DMA engine.
+      mem_latency = 13;
+      wr16(BASE + 20'h004, 16'h0010);
+      wr16(BASE + 20'h004, 16'h0000);
+      dma_read(3, 20'h00400, 512, gok, status);
+      want(gok, "control: a READ(6) still completes at 13-clock latency");
+      if (gok) begin
+         bit ctl = 1'b1;
+         for (int i = 0; i < 512; i++)
+           if (mem_byte(DVMA_BASE + 24'h000400 + i) != 8'((3*7 + i) & 8'hFF)) ctl = 1'b0;
+         want(ctl, "control: and every byte is right, so the model is sound");
+      end
+
+      wr16(BASE + 20'h004, 16'h0010);
+      wr16(BASE + 20'h004, 16'h0000);
+
+      for (int i = 0; i < 8192; i++)
+        mem[(20'h02000 >> 2) + (i >> 2)][8*(i[1:0]) +: 8] = 8'((i*11 + 8'h17) & 8'hFF);
+
+      dma_write(24, 20'h02000, 8192, gok, status);
+      want(gok, "WRITE 8 KiB slow: the transfer completed");
+      rd16(BASE + 20'h004);
+      $display("   slow: ICR after the write = %04x (bit14 BusError, bit13 OddLen), residue %0d",
+               q, dvma_reads);
+      want(q[14] == 1'b0, "WRITE 8 KiB slow: no bus error was latched");
+      want(status == 8'h00,
+           $sformatf("WRITE 8 KiB slow: status is GOOD (got %02x)", status));
+
+      if (gok) begin
+         bit same = 1'b1;
+         int bad = 0;
+         // Read it back against a *fast* memory.  Which of the two directions
+         // is broken is the whole question, and a slow read-back cannot answer
+         // it: the destination buffer would keep the previous test's bytes and
+         // a failed read looks exactly like a failed write.
+         mem_latency = 0;
+         for (int i = 0; i < 8192; i++)
+           mem[(20'h04000 >> 2) + (i >> 2)][8*(i[1:0]) +: 8] = 8'hA5;
+         dma_read(24, 20'h04000, 8192, gok, status);
+         want(gok, "WRITE 8 KiB slow: it reads back");
+         for (int i = 0; i < 8192; i++)
+           if (mem_byte(DVMA_BASE + 24'h004000 + i) != 8'((i*11 + 8'h17) & 8'hFF)) begin
+              same = 1'b0;
+              if (bad < 4)
+                $display("   slow: first bad byte %0d: got %02x want %02x", i,
+                         mem_byte(DVMA_BASE + 24'h004000 + i),
+                         8'((i*11 + 8'h17) & 8'hFF));
+              bad++;
+           end
+         want(same, $sformatf("WRITE 8 KiB slow: all bytes survive (%0d wrong)", bad));
+      end
+      mem_latency = 0;
 
       $display("=== tb_mb_scsi: %0d checks, %0d failed ===", checks, fail);
       if (fail == 0) $display("PASS"); else $display("FAIL");

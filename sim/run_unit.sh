@@ -149,6 +149,18 @@ f.close()'
 		| grep -E '===|PASS|FAIL|checks|acknowledge|blk\]|DVMA|odd:'
 	;;
 
+blksd)
+	"$top/tools/patch_inputs.sh" Wish5380 2>/dev/null || true
+	"$top/tools/patch_inputs.sh" Wish5380
+	W5=$top/build/inputs/Wish5380/src
+	step xvlog --sv -i "$top/rtl/sun2-common" -d SUN2_SIM \
+		"$W5/wish5380_pkg.sv" "$W5/sd_spi.sv" "$W5/blk_sd.sv" \
+		"$top/tb/tb_blk_sd.sv"
+	step xelab --timescale 1ns/1ps work.tb_blk_sd -s blksd_sim
+	xsim blksd_sim -R \
+		| grep -E '===|PASS|FAIL|checks|init:|write|read|byte'
+	;;
+
 mbscsi)
 	"$top/tools/patch_inputs.sh" Wish5380 2>/dev/null || true
 	"$top/tools/patch_inputs.sh" Wish5380
@@ -166,7 +178,7 @@ f.close()'
 		"$top/tb/blk_file.sv" "$top/tb/tb_mb_scsi.sv"
 	step xelab --timescale 1ns/1ps work.tb_mb_scsi -s mbscsi_sim
 	xsim mbscsi_sim -R -testplusarg blk_image=sd0.img \
-		| grep -E '===|PASS|FAIL|checks|acknowledge|wrap:|READ'
+		| grep -E '===|PASS|FAIL|checks|acknowledge|wrap:|READ|WRITE|bad byte|control'
 	;;
 
 vtiming)

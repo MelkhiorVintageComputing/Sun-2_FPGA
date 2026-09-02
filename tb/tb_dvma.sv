@@ -581,6 +581,81 @@ module tb_dvma;
       checks++;
       if (dvma_active) begin $display("FAIL: still driving the bus when idle"); fail++; end
 
+      // --- sustained traffic against slow memory --------------------------
+      // Everything above moves one longword, or a handful.  A disk transfer
+      // moves thousands back to back, and on this board every one of them
+      // waits seven to thirteen clocks for DDR3 -- `make -C sim migddr3'
+      // measures seven for a Wishbone read, and the frame buffer's timeout
+      // race needed thirteen before it would show at all.
+      //
+      // This matters because three different disk controllers corrupt *large*
+      // writes on hardware while small ones survive, with reads perfect and
+      // the SD path proved clean on the card itself (test/deca_sdtest).  What
+      // is left is the path this module is the top of.  A single access at
+      // seven wait states, which is all this test did before, cannot see a
+      // fault that needs the previous transaction still settling.
+      begin
+         int          i;
+         logic [31:0] rdw;
+         bit          e;
+         int          bad = 0;
+
+         wait_states = 13;
+         for (i = 0; i < 64; i++)
+           wb_access(1'b1, 22'(22'h300 + i), 4'b1111, 32'hA5A5_0000 + 32'(i), rdw, e);
+         for (i = 0; i < 64; i++) begin
+            wb_access(1'b0, 22'(22'h300 + i), 4'b1111, 32'h0, rdw, e);
+            if (e || rdw !== (32'hA5A5_0000 + 32'(i))) begin
+               if (bad < 4)
+                 $display("   burst word %0d: got %08x want %08x err=%0d",
+                          i, rdw, 32'hA5A5_0000 + 32'(i), e);
+               bad++;
+            end
+         end
+         checks++;
+         if (bad != 0) begin
+            $display("FAIL: 64-longword burst at 13 wait states, %0d wrong", bad);
+            fail++;
+         end
+
+         // ...and the same with the CPU competing for the bus, which is what a
+         // kernel writing a file actually looks like: the master is granted
+         // between the halves of the CPU's own longword reads.
+         bad           = 0;
+         hostile_grant = 1'b1;
+         busen_dly     = 2;
+         for (i = 0; i < 32; i++) begin
+            fork
+               begin
+                  logic [31:0] r2; bit e2;
+                  wb_access(1'b1, 22'(22'h340 + i), 4'b1111,
+                            32'h5A5A_0000 + 32'(i), r2, e2);
+               end
+               begin
+                  logic [31:0] junk;
+                  cpu_read_long(23'h000200, i % 7, junk);
+               end
+            join
+         end
+         hostile_grant = 1'b0;
+         busen_dly     = 12;
+         for (i = 0; i < 32; i++) begin
+            wb_access(1'b0, 22'(22'h340 + i), 4'b1111, 32'h0, rdw, e);
+            if (e || rdw !== (32'h5A5A_0000 + 32'(i))) begin
+               if (bad < 4)
+                 $display("   contended word %0d: got %08x want %08x err=%0d",
+                          i, rdw, 32'h5A5A_0000 + 32'(i), e);
+               bad++;
+            end
+         end
+         checks++;
+         if (bad != 0) begin
+            $display("FAIL: 32 longwords with the CPU contending, %0d wrong", bad);
+            fail++;
+         end
+         wait_states = 0;
+      end
+
       $display("%0d checks, %0d bus cycles", checks, n_cycles);
       if (fail == 0) $display("PASS: sun2_dvma");
       else           $display("FAIL: %0d problems", fail);
