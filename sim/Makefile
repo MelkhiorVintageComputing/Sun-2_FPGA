@@ -119,6 +119,25 @@ ifneq ($(LOOPBUF),0)
 DEFINES += SUN2_LOOP_BUF_WORDS=$(LOOPBUF)
 endif
 
+# Does an RTE put loop mode back?  1 is the 68010's documented behaviour and
+# the core's default; 0 drops loop mode at RESUME instead, so no part of a loop
+# crosses an RTE.  An experiment rather than a default.
+# **The default is 0, and 1 is known bad**: with an RTE restoring loop mode,
+# SunOS loses inetd, sendmail and lpd to a fault in strncpy() inside openlog().
+RTE_LOOP ?= 0
+ifneq ($(RTE_LOOP),0)
+DEFINES += SUN2_RTE_RESTORES_LOOP=1
+$(warning RTE_LOOP=1 is a KNOWN BAD configuration: an RTE restoring loop mode \
+costs SunOS inetd, sendmail and lpd to a fault in strncpy() inside openlog(). \
+The default is 0; build this only to reproduce the bug.)
+endif
+
+# The other half: 0 empties the loop buffer's window at RESUME.  Needs LOOPBUF.
+RTE_BUF ?= 1
+ifneq ($(RTE_BUF),1)
+DEFINES += SUN2_RTE_KEEPS_LOOP_BUF=0
+endif
+
 # Power the segment and page map RAMs up as zeros, the way a 7-series block RAM
 # comes out of configuration, instead of leaving them X as the model otherwise
 # does.  An experiment rather than a default: it is what the board really does,
@@ -293,7 +312,7 @@ iverilog: rom
 # CPU=rd68011' reads the Suska run's log and passes on it.  Note this still
 # does not carry CPU_HZ or BAUD, which also tag a run directory -- pass
 # FBIMAGE= or the log path by hand for those.
-RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)$(if $(filter 1,$(VME_SCSI)),-vmescsi,)$(if $(filter 0,$(LOOPBUF)),,-lb$(LOOPBUF))$(CPUTAG)
+RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)$(if $(filter 1,$(VME_SCSI)),-vmescsi,)$(if $(filter 0,$(LOOPBUF)),,-lb$(LOOPBUF))$(if $(filter 0,$(RTE_LOOP)),,-rtelp)$(if $(filter 1,$(RTE_BUF)),,-nortebuf)$(CPUTAG)
 # What check_console.sh should expect, in order of what wins.  A display wins
 # outright: with one fitted the console moves to the screen and there is no
 # serial output left to check, whatever else is in the cage.  A disk beats an

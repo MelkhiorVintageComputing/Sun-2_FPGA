@@ -49,10 +49,14 @@ array set opt {
     -trace     0
     -trace_page 0
     -trace_fc  5
+    -trace_post 960
+    -trace_depth 10
     -disk_off_mib 0
     -xy450     0
     -vme_scsi  0
     -loopbuf   0
+    -rte_loop  0
+    -rte_buf   1
     -mb_ether  0
     -mb_3c400  0
     -fb        0
@@ -224,6 +228,7 @@ lappend defines SUN2_QUARTUS
 if {$opt(-trace) != 0} {
     lappend defines SUN2_ILA
     lappend defines SUN2_TRACE
+    puts "== trace buffer [expr {1 << $opt(-trace_depth)}] samples, POST $opt(-trace_post) =="
     puts "== trace recorder fitted, trigger page A\[23:11\] = [format 0x%04X [expr {$opt(-trace_page)}]] = addresses [format 0x%06X [expr {$opt(-trace_page) << 11}]].., FC $opt(-trace_fc) =="
 }
 if {$opt(-eth5) != 224} { lappend defines SUN2_IDPROM_ETH5=$opt(-eth5) }
@@ -253,6 +258,35 @@ if {$opt(-loopbuf) != 0} {
     }
     lappend defines SUN2_LOOP_BUF_WORDS=$opt(-loopbuf)
     puts "== RD68011 loop buffer: $opt(-loopbuf) words, invalidated on FC 3 =="
+}
+# What of a loop survives an RTE?  Two halves, two knobs.  -rte_loop defaults
+# to 0, which is the core's own default and the only configuration in which
+# this machine keeps its daemons alive; -rte_buf defaults to 1, the MC68010,
+# and is not implicated in anything.
+if {$opt(-rte_loop) != 0 || $opt(-rte_buf) == 0} {
+    if {$opt(-cpu) ne "rd68011"} {
+        puts "ERROR: -rte_loop/-rte_buf are RD68011 parameters; Suska has neither"
+        exit 1
+    }
+}
+if {$opt(-rte_loop) != 0} {
+    lappend defines SUN2_RTE_RESTORES_LOOP=1
+    puts "== ************************************************************** =="
+    puts "== ** WARNING: -rte_loop 1 -- KNOWN BAD CONFIGURATION          ** =="
+    puts "== ** An RTE restores loop mode from the frame's version word. ** =="
+    puts "== ** SunOS loses inetd, sendmail and lpd to a fault in        ** =="
+    puts "== ** strncpy() inside openlog().  A bisect put the failure    ** =="
+    puts "== ** wholly on this parameter.  The default is 0.             ** =="
+    puts "== ** Build this only to reproduce the bug.                    ** =="
+    puts "== ************************************************************** =="
+}
+if {$opt(-rte_buf) == 0} {
+    if {$opt(-loopbuf) == 0} {
+        puts "ERROR: -rte_buf 0 needs -loopbuf; there is no window to empty"
+        exit 1
+    }
+    lappend defines SUN2_RTE_KEEPS_LOOP_BUF=0
+    puts "== RD68011: RTE empties the loop buffer window (experiment) =="
 }
 
 foreach {n v} [list SUN2_RTC_MON  [lindex $rtc 0] SUN2_RTC_DAY  [lindex $rtc 1] \
@@ -325,6 +359,11 @@ if {$opt(-topent) ne "top"} {
         set_parameter -name TRACE_PAGE [expr {$opt(-trace_page)}]
     }
     set_parameter -name TRACE_FC [expr {$opt(-trace_fc)}]
+    # How much of the 1024-sample buffer is kept *after* the trigger.  A device
+    # probe wants nearly all of it; a fault wants nearly none, because the
+    # interesting cycles are the ones that led in.
+    set_parameter -name TRACE_POST [expr {$opt(-trace_post)}]
+    set_parameter -name TRACE_DEPTH [expr {$opt(-trace_depth)}]
 }
 set_global_assignment -name NUM_PARALLEL_PROCESSORS $opt(-jobs)
 

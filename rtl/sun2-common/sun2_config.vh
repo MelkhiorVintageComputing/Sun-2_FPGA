@@ -296,6 +296,39 @@
  `define SUN2_LOOP_BUF_WORDS 0
 `endif
 
+// Two halves of one question: what of a loop survives an RTE?
+//
+// SUN2_RTE_RESTORES_LOOP -- whether loop mode comes back from the frame's
+// version word.  **The default is 0, and 1 is a known-bad configuration on
+// this machine.**  The MC68010 manual can be read both ways two paragraphs
+// apart: a bus error is in its list of "abnormal conditions [that] cause the
+// MC68010 to exit the loop mode", and yet "when the return from exception
+// (RTE) instruction continues execution of the looped instruction, the
+// three-word loop is not fetched again".  The core argues both readings in
+// its doc/divergences.md and defaults to the first, because the first is the
+// one that works.
+//
+// What 1 does here, measured on a DECA netbooting SunOS 4.0.3: inetd,
+// sendmail and lpd all die in strncpy() inside openlog() in the shared C
+// library, at the same byte -- source 0xdd8899, libc frame 0xdd605c in every
+// core -- with the signal varying between SIGBUS at the loop's own PC and
+// SIGILL at a wild one.  A bisect put it wholly on this parameter;
+// SUN2_RTE_KEEPS_LOOP_BUF made no difference either way.  Do not set it to 1
+// except to reproduce that, which is the only handle on the defect there is.
+`ifndef SUN2_RTE_RESTORES_LOOP
+ `define SUN2_RTE_RESTORES_LOOP 0
+`endif
+
+// SUN2_RTE_KEEPS_LOOP_BUF -- the other half.  Nothing restores the loop
+// buffer, because it is not in the frame, but its window survives a fault and
+// a handler on its own, so a resumed loop can pick up through the buffer even
+// with loop mode gone.  Zero empties it at RESUME.  Only meaningful with
+// SUN2_LOOP_BUF_WORDS set, and 1 -- the default, and the MC68010 -- is not
+// implicated in anything: clearing it alone left every failure in place.
+`ifndef SUN2_RTE_KEEPS_LOOP_BUF
+ `define SUN2_RTE_KEEPS_LOOP_BUF 1
+`endif
+
 //---------------------------------------------------------------------
 // Does this build have block media?
 //---------------------------------------------------------------------

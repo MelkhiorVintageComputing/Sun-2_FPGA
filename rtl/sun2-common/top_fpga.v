@@ -405,7 +405,9 @@ module top(input         cpu_clk,
    // and neither is caught here.
    wire cpu_loop_inv_n = ~((cpu_fc == 3'h3) & ~cpu_as_n);
 
-   rd68011_top #(.LOOP_BUF_WORDS(`SUN2_LOOP_BUF_WORDS))
+   rd68011_top #(.LOOP_BUF_WORDS(`SUN2_LOOP_BUF_WORDS),
+                 .RTE_RESTORES_LOOP(`SUN2_RTE_RESTORES_LOOP),
+                 .RTE_KEEPS_LOOP_BUF(`SUN2_RTE_KEEPS_LOOP_BUF))
                 cpu_68k10(.clk(C100),
 			 .rst_n(RESET_INn), // async init; not a 68010 pin
 			 .loop_inv_n_i(cpu_loop_inv_n),

@@ -179,6 +179,21 @@ module sun2_fpga(input         cpu_clk,
       $display("   Sun VME SCSI/RTC board: 4 KiB at VME A24 0x%06x, SCSI low, clock high",
                `VME_SCSI_BASE);
 `endif
+`ifdef SUN2_CPU_RD68011
+      // A known-bad configuration, kept only because it is the reproduction
+      // handle for a defect that is not yet isolated.  Measured on a DECA
+      // netbooting SunOS 4.0.3: inetd, sendmail and lpd all die in strncpy()
+      // inside openlog(), and a bisect put it wholly on this parameter.  It is
+      // not a $fatal because reproducing it is a legitimate thing to build.
+      if (`SUN2_RTE_RESTORES_LOOP != 0) begin
+         $display("   ****************************************************************");
+         $display("   ** WARNING: SUN2_RTE_RESTORES_LOOP=1 -- KNOWN BAD             **");
+         $display("   ** An RTE restores loop mode from the frame's version word.   **");
+         $display("   ** SunOS loses inetd, sendmail and lpd to a fault in strncpy. **");
+         $display("   ** The default is 0.  Build this only to reproduce the bug.   **");
+         $display("   ****************************************************************");
+      end
+`endif
 `ifdef SUN2_MB_ETHER
  `ifdef SUN2_MB_3C400
       // One MII port, and top_fpga.v's two arms both drive mii_txd.  Left to

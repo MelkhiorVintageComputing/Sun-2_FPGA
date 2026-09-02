@@ -66,6 +66,8 @@ case " $SUN2_DEFINES " in *" SRAM_POWERUP_ZERO "*) rundir_tag="$rundir_tag-mapsz
 for _d in $SUN2_DEFINES; do
 	case "$_d" in
 	SUN2_LOOP_BUF_WORDS=*) rundir_tag="$rundir_tag-lb${_d#*=}" ;;
+	SUN2_RTE_RESTORES_LOOP=1) rundir_tag="$rundir_tag-rtelp" ;;
+	SUN2_RTE_KEEPS_LOOP_BUF=0) rundir_tag="$rundir_tag-nortebuf" ;;
 	esac
 done
 # ... and the memory size, but only when it is not a whole number of mebibytes.

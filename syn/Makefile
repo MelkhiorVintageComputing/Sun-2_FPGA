@@ -11,6 +11,9 @@
 #   make bitstream FB=1           with the frame buffer on HDMI
 #   make bitstream XY450=1        with the Xylogics 450 disk controller
 #   make quartus VME_SCSI=1       with the Sun VME SCSI/RTC board (VME only)
+#   make quartus LOOPBUF=16       RD68011's loop buffer, 16 words (rd68011 only)
+#   make quartus RTE_LOOP=1       RD68011: an RTE restores loop mode (KNOWN BAD)
+#   make quartus RTE_BUF=0        RD68011: an RTE empties the loop buffer window
 #   make bitstream CPU=rd68011    with the RD68011 core instead of Suska
 #   make bitstream ILA=1          with the ILA on the MMU debug bus
 #   make program                  put the built bitstream on the board
@@ -51,6 +54,20 @@ VME_SCSI ?= 0
 # Where the disk image starts on the micro-SD card, in MiB.  0 is the card's
 # beginning, which is where every build before this knob put it.
 DISK_OFF_MIB ?= 0
+# RD68011 loop buffer depth in words.  0 is an MC68010 and what every recorded
+# number in this tree was measured against.
+LOOPBUF ?= 0
+# Does an RTE put loop mode back?  1 is the 68010's documented behaviour and
+# the core's default; 0 drops loop mode at RESUME so no part of a loop crosses
+# an RTE.  An experiment, not a default -- see sun2_config.vh.
+# **The default is 0, and 1 is known bad**: with an RTE restoring loop mode,
+# SunOS loses inetd, sendmail and lpd to a fault in strncpy() inside openlog().
+# 1 is kept because reproducing that is the only handle on the defect.
+RTE_LOOP ?= 0
+# The other half of the same question: 0 empties the loop buffer's window at
+# RESUME, so a resumed loop cannot pick up through the buffer either.  Needs
+# LOOPBUF.  Clearing both knobs is the diagnostic that cleared every failure.
+RTE_BUF ?= 1
 
 # Which QMTech Wukong revision: v1 or v3.  They share all their RTL and differ
 # in the FPGA speed grade and four pins -- see syn/boards.tcl.  The default
@@ -247,11 +264,15 @@ TRACE_PAGE ?= 0x1DC5
 # a device probe is; FC 3 is control space, where the PROM's page-map writes
 # land on the same page's address and fire a naive trigger first.
 TRACE_FC   ?= 5
+# Post-trigger samples kept, of the 1024-sample buffer.
+TRACE_POST ?= 960
+# Buffer depth as a power of two.  10 = 1024 samples.
+TRACE_DEPTH ?= 10
 # The seed is part of the directory name for the reason MEM_LATENCY is not, and
 # should have been: two builds that differ only in a knob absent from the name
 # share a directory and clobber each other, which is exactly the comparison the
 # knob was added to make.
-QDIR = $(abspath $(SYNDIR))/quartus/$(BOARD)-$(MACHINE)-$(CPU)$(if $(MEM_PAGES),-p$(MEM_PAGES),)-cpu$(CPU_MHZ_TAG)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)$(if $(filter 0,$(QSEED)),,-seed$(QSEED))$(if $(filter 50,$(CPU_DUTY)),,-duty$(CPU_DUTY))$(if $(filter 0,$(TRACE)),,-trace$(TRACE_PAGE)fc$(TRACE_FC))$(if $(filter 0,$(XY450)),,-xy450)$(if $(filter 0,$(VME_SCSI)),,-vmescsi)$(if $(filter 0,$(DISK_OFF_MIB)),,-off$(DISK_OFF_MIB)m)$(if $(filter 0,$(MB_ETHER)),,-mbether)$(if $(filter 0,$(MB_3C400)),,-3c400)$(if $(filter 0,$(FB)),,-fb)
+QDIR = $(abspath $(SYNDIR))/quartus/$(BOARD)-$(MACHINE)-$(CPU)$(if $(MEM_PAGES),-p$(MEM_PAGES),)-cpu$(CPU_MHZ_TAG)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)$(if $(filter 0,$(QSEED)),,-seed$(QSEED))$(if $(filter 50,$(CPU_DUTY)),,-duty$(CPU_DUTY))$(if $(filter 0,$(TRACE)),,-trace$(TRACE_PAGE)fc$(TRACE_FC)$(if $(filter 960,$(TRACE_POST)),,p$(TRACE_POST))$(if $(filter 10,$(TRACE_DEPTH)),,d$(TRACE_DEPTH)))$(if $(filter 0,$(XY450)),,-xy450)$(if $(filter 0,$(VME_SCSI)),,-vmescsi)$(if $(filter 0,$(DISK_OFF_MIB)),,-off$(DISK_OFF_MIB)m)$(if $(filter 0,$(LOOPBUF)),,-lb$(LOOPBUF))$(if $(filter 0,$(RTE_LOOP)),,-rtelp)$(if $(filter 1,$(RTE_BUF)),,-nortebuf)$(if $(filter 0,$(MB_ETHER)),,-mbether)$(if $(filter 0,$(MB_3C400)),,-3c400)$(if $(filter 0,$(FB)),,-fb)
 
 quartus-run: rom inputs
 	@# A port left off an instantiation is an undriven wire, not an error --
@@ -260,14 +281,23 @@ quartus-run: rom inputs
 	@if [ "$(QTOPENT)" != "top" ]; then \
 		$(TOP)/tools/portcheck.sh $(TOP)/rtl/sun2-common/top_fpga.v top \
 			$(TOP)/boards/DECA/deca_top.sv || exit 1; fi
+	@if [ "$(RTE_LOOP)" != "0" ]; then \
+	  echo "=================================================================="; \
+	  echo "== WARNING: RTE_LOOP=1 -- KNOWN BAD CONFIGURATION               =="; \
+	  echo "== An RTE restores loop mode from the frame's version word.     =="; \
+	  echo "== SunOS loses inetd, sendmail and lpd to a fault in strncpy()  =="; \
+	  echo "== inside openlog().  The default is 0; build this only to      =="; \
+	  echo "== reproduce the bug.                                           =="; \
+	  echo "=================================================================="; \
+	fi
 	@mkdir -p $(QDIR)
 	cd $(QDIR) && $(QUARTUS) quartus_sh -t $(HERE)/quartus.tcl \
 		-root $(abspath $(TOP)) -board $(BOARD) -machine $(MACHINE) \
 		-cpu $(CPU) -topent $(QTOPENT) -stage $(QSTAGE) \
 		$(if $(MEM_PAGES),-mem_pages $(MEM_PAGES),) -cpu_hz $(CPU_HZ) \
 		-cpu_div $(if $(CPU_DIV),$(CPU_DIV),0) -eth5 $(ETH5_D) \
-		-eram $(ERAM) -jobs $(AJOBS) -seed $(QSEED) -cpu_duty $(CPU_DUTY) -trace $(TRACE) -trace_page $(TRACE_PAGE) -trace_fc $(TRACE_FC) \
-		-xy450 $(XY450) -vme_scsi $(VME_SCSI) -disk_off_mib $(DISK_OFF_MIB) -mb_ether $(MB_ETHER) -mb_3c400 $(MB_3C400) -fb $(FB) > $(QDIR)/quartus.log 2>&1 || \
+		-eram $(ERAM) -jobs $(AJOBS) -seed $(QSEED) -cpu_duty $(CPU_DUTY) -trace $(TRACE) -trace_page $(TRACE_PAGE) -trace_fc $(TRACE_FC) -trace_post $(TRACE_POST) -trace_depth $(TRACE_DEPTH) \
+		-xy450 $(XY450) -vme_scsi $(VME_SCSI) -disk_off_mib $(DISK_OFF_MIB) -loopbuf $(LOOPBUF) -rte_loop $(RTE_LOOP) -rte_buf $(RTE_BUF) -mb_ether $(MB_ETHER) -mb_3c400 $(MB_3C400) -fb $(FB) > $(QDIR)/quartus.log 2>&1 || \
 		{ echo "== FAILED, tail of $(QDIR)/quartus.log =="; tail -40 $(QDIR)/quartus.log; exit 1; }
 	@grep -E '^== ' $(QDIR)/quartus.log
 	@# An implicit net is a mis-parse, not a style point.  Vivado's equivalent
