@@ -280,6 +280,23 @@
 //`define SUN2_VME_SCSI
 
 //---------------------------------------------------------------------
+// RD68011's loop buffer
+//---------------------------------------------------------------------
+// Zero is an MC68010 and the default: the core holds no instructions of its
+// own, which is what every recorded number in this tree was measured against.
+// Anything else turns on a window of that many words that a tight loop can be
+// re-fetched from instead of going to memory.
+//
+// It is not free of consequence for a machine with an MMU.  The buffer holds
+// instruction *words*, indexed by the address they were fetched from -- so a
+// write to the segment or page map changes the translation under whatever it
+// is holding, and the words it would hand back are then the old page's.  That
+// is what loop_inv_n_i is for, and top_fpga.v drives it from FC 3.
+`ifndef SUN2_LOOP_BUF_WORDS
+ `define SUN2_LOOP_BUF_WORDS 0
+`endif
+
+//---------------------------------------------------------------------
 // Does this build have block media?
 //---------------------------------------------------------------------
 // Two different controllers reach the same micro-SD slot -- the Xylogics 450

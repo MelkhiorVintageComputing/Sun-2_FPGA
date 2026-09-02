@@ -57,6 +57,17 @@ case " $SUN2_DEFINES " in *" SUN2_VME_SCSI "*) rundir_tag="$rundir_tag-vmescsi" 
 # ... and the experiment that powers the maps up as zeros rather than X, which
 # is a different machine at time zero and must not write over a reference run.
 case " $SUN2_DEFINES " in *" SRAM_POWERUP_ZERO "*) rundir_tag="$rundir_tag-mapszero" ;; esac
+# The loop buffer's depth, which is a *number* rather than a flag -- so it is
+# matched out of the define rather than tested for.  It has to be in the run
+# directory's name for the same reason MEM_LATENCY had to be: two depths of the
+# same machine otherwise share one directory, the second recompiles the
+# snapshot while the first is executing, and the comparison that the whole
+# experiment exists for is between two runs that clobbered each other.
+for _d in $SUN2_DEFINES; do
+	case "$_d" in
+	SUN2_LOOP_BUF_WORDS=*) rundir_tag="$rundir_tag-lb${_d#*=}" ;;
+	esac
+done
 # ... and the memory size, but only when it is not a whole number of mebibytes.
 # Every size measured so far is MEM_MIB*512, so those keep their names; a sweep
 # looking for the least memory the PROM will boot in uses page counts that are

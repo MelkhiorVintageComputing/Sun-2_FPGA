@@ -390,8 +390,25 @@ module top(input         cpu_clk,
    wire        cpu_reset_n_o, cpu_reset_n_oe, cpu_halt_n_o, cpu_halt_n_oe;
    wire        cpu_e, cpu_vma_n, cpu_vma_oe;
 
-   rd68011_top cpu_68k10(.clk(C100),
+   // FC 3 is control space -- the segment map, the page map, the context
+   // registers.  A write to any of them changes the translation under the
+   // instruction stream, so anything the loop buffer is holding may no longer
+   // be the code at those addresses: SunOS switches context on every process
+   // switch and walks the maps in locore.s while it goes on executing.
+   // Asserted for the whole cycle rather than pulsed, because the pin's
+   // contract is "while it is asserted the buffer is emptied and kept empty",
+   // and a bus cycle is the shortest thing here that is definitely long
+   // enough.  Ignored by a core built with LOOP_BUF_WORDS 0.
+   //
+   // Note what this does *not* cover: a store to memory that a loop is
+   // executing out of, and a DVMA master writing over one.  Neither is FC 3
+   // and neither is caught here.
+   wire cpu_loop_inv_n = ~((cpu_fc == 3'h3) & ~cpu_as_n);
+
+   rd68011_top #(.LOOP_BUF_WORDS(`SUN2_LOOP_BUF_WORDS))
+                cpu_68k10(.clk(C100),
 			 .rst_n(RESET_INn), // async init; not a 68010 pin
+			 .loop_inv_n_i(cpu_loop_inv_n),
 
 			 .a_o(cpu_a),
 			 .a_oe(cpu_a_oe),

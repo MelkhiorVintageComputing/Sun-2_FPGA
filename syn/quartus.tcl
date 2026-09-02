@@ -52,6 +52,7 @@ array set opt {
     -disk_off_mib 0
     -xy450     0
     -vme_scsi  0
+    -loopbuf   0
     -mb_ether  0
     -mb_3c400  0
     -fb        0
@@ -242,6 +243,18 @@ if {[info exists ::env(RTC_DATE)]} {
                  [scan [clock format $now -format %M] %d] \
                  [scan [clock format $now -format %S] %d]]
 }
+# RD68011's loop buffer.  Zero is an MC68010 and the default; anything else
+# turns on a window of that many words, and top_fpga.v then drives the core's
+# loop_inv_n_i from FC 3 so a map write cannot leave stale instructions behind.
+if {$opt(-loopbuf) != 0} {
+    if {$opt(-cpu) ne "rd68011"} {
+        puts "ERROR: -loopbuf is an RD68011 feature; Suska has no loop buffer"
+        exit 1
+    }
+    lappend defines SUN2_LOOP_BUF_WORDS=$opt(-loopbuf)
+    puts "== RD68011 loop buffer: $opt(-loopbuf) words, invalidated on FC 3 =="
+}
+
 foreach {n v} [list SUN2_RTC_MON  [lindex $rtc 0] SUN2_RTC_DAY  [lindex $rtc 1] \
                     SUN2_RTC_WDAY [lindex $rtc 2] SUN2_RTC_HOUR [lindex $rtc 3] \
                     SUN2_RTC_MIN  [lindex $rtc 4] SUN2_RTC_SEC  [lindex $rtc 5]] {

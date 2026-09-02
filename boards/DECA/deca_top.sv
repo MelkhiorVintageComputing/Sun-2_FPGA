@@ -51,7 +51,8 @@ module deca_top #(
     // is on.  0x1DC5 is 0xEE2800, the Sun-2/50's SCSI registers, which is what
     // sdprobe touches and what stops raising a bus error above 12.5 MHz.
     parameter int TRACE_PAGE = 'h1DC5,
-    parameter int TRACE_POST = 192,
+    parameter int TRACE_POST = 960,
+    parameter int TRACE_DEPTH = 10,
     // Function code to qualify the trigger on, and whether to.  Defaults to 5,
     // supervisor data, which is what a device probe is -- the untypical case
     // is wanting *any* function code, not wanting one.
@@ -688,13 +689,21 @@ module deca_top #(
    // word, fault address) are pushed *last*, at the bottom of the frame.  A
    // 256-sample buffer catches the top of the frame and stops exactly before
    // the interesting part, which is how the first capture of it read.
-   localparam TRC_DEPTH_LOG2 = 10;
-   localparam TRC_POST       = 960;
+   // Depth is a build knob because a capture that must hold *both* halves of
+   // one fault -- the frame going down and the same frame being read back --
+   // needs to span the kernel's handling in between, which 1024 samples (about
+   // 61 us here) does not.
+   localparam TRC_DEPTH_LOG2 = TRACE_DEPTH;
+   // Post-trigger sample count.  960 of 1024 keeps what happened *after* the
+   // event, which is what a device probe wants.  A fault wants the opposite --
+   // the cycles that led into it -- so this is a build knob rather than a
+   // constant.
+   localparam TRC_POST       = TRACE_POST;
 
    wire [117:0] trc_rd_data;
    wire [TRC_DEPTH_LOG2-1:0] trc_wr_ptr;
    wire         trc_triggered, trc_done;
-   wire [31:0]  trc_src;
+   wire [63:0]  trc_src;
 
    // The source carries the whole instrument's controls, not just a read
    // address:
@@ -704,6 +713,16 @@ module deca_top #(
    //   [28:26] trigger function code [29]    qualify on it
    //   [30]    require a DVMA cycle -- an alternate master's, not the CPU's
    //   [31]    trigger page is physical (ma_pmap) rather than virtual
+   //   [41:32] A[10:1] within the page      [42]    match on it as well
+   //   [43]    require ERR -- the cycle must be one the machine is failing
+   //   [45:44] sample index bits 11:10, for buffers deeper than 1024
+   //   [60:48] capture filter: keep only this page   [61] apply it
+   //   [62]    store one sample per bus cycle, not per clock
+   //
+   // The address field exists because every 68010 exception vector shares one
+   // 2 KiB page: an address error vectors through VBR+0xC and the level-5
+   // clock through VBR+0x74, so a page-granular trigger catches the next timer
+   // tick rather than the fault being chased.
    //
    // The status word carries DEPTH_LOG2 and POST as well as the pointer, so the
    // reader never has to be told the buffer's shape.  The first version had
@@ -716,6 +735,9 @@ module deca_top #(
    // arm-high polarity would have made every unattended capture empty.
    wire [12:0] trc_page = (trc_src[24:12] != 13'd0) ? trc_src[24:12]
                                                     : TRACE_PAGE[12:0];
+
+   // A concatenation cannot be part-selected in place, so it is named first.
+   wire [11:0] trc_rd_index = {trc_src[45:44], trc_src[9:0]};
 
    sun2_trace #(.WIDTH(118), .DEPTH_LOG2(TRC_DEPTH_LOG2),
                 .POST(TRC_POST)) u_trace (
@@ -733,8 +755,18 @@ module deca_top #(
        .trig_fc_en(trc_src[29] | (TRACE_FC_EN != 0)),
        .trig_dvma_en(trc_src[30]),
        .trig_phys_en(trc_src[31]),
+       .trig_addr   (trc_src[41:32]),
+       .trig_addr_en(trc_src[42]),
+       .trig_err_en (trc_src[43]),
+       .filt_page   (trc_src[60:48]),
+       .filt_en     (trc_src[61]),
+       .one_per_cycle(trc_src[62]),
        .arm       (~trc_src[25]),
-       .rd_addr   (trc_src[9:0]),
+       // The index is 10 bits in its original place and grows upward into two
+       // spare bits, so every other field keeps the offset the tool already
+       // knows.  Renumbering them would have silently mis-decoded every
+       // existing capture script.
+       .rd_addr   (trc_rd_index[TRC_DEPTH_LOG2-1:0]),
        .rd_data   (trc_rd_data),
        .wr_ptr    (trc_wr_ptr),
        .triggered (trc_triggered),
@@ -748,15 +780,21 @@ module deca_top #(
        .sld_auto_instance_index ("YES"),
        .instance_id             ("TRAC"),
        .probe_width             (64),
-       .source_width            (32),
+       .source_width            (64),
        .source_initial_value    ("0"),
        .enable_metastability    ("YES")
    ) u_trace_issp (
        .source_clk (cpu_clk),
        .probe  ((trc_src[11:10] == 2'd0) ? trc_rd_data[63:0]
               : (trc_src[11:10] == 2'd1) ? {10'd0, trc_rd_data[117:64]}
-              : {trc_done, trc_triggered, trc_wr_ptr,
-                 TRC_DEPTH_LOG2[3:0], TRC_POST[15:0], 32'd0}),
+              // The write pointer is padded to a fixed 16 bits rather than
+              // being DEPTH_LOG2 wide.  It used to be the latter, which packed
+              // to exactly 64 bits at depth 10 and to *66* at depth 12 -- so a
+              // deeper buffer silently shifted every field below it and the
+              // host read "not triggered" from a capture that had triggered.
+              : {trc_done, trc_triggered,
+                 {{(16 - TRC_DEPTH_LOG2){1'b0}}, trc_wr_ptr},
+                 TRC_DEPTH_LOG2[3:0], TRC_POST[15:0], 26'd0}),
        .source (trc_src)
    );
 `endif

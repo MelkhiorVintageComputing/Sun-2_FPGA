@@ -33,12 +33,24 @@ module tb_sun2_trace;
    // must still be ignored unless an alternate master is driving.
    logic trig_dvma_en = 1'b0;
    logic trig_phys_en = 1'b0;
+   logic [9:0] trig_addr    = 10'd0;
+   logic       trig_addr_en = 1'b0;
+   logic       trig_err_en  = 1'b0;
+   logic [12:0] filt_page   = 13'h0;
+   logic        filt_en     = 1'b0;
+   logic        one_per_cycle = 1'b0;
 
    sun2_trace #(.WIDTH(WIDTH), .DEPTH_LOG2(DL2), .POST(POST))
    dut (.clk(clk), .rst(rst), .dbg_bus(bus),
 	.trig_page(PAGE), .trig_fc(TRIG_FC), .trig_fc_en(1'b1),
        .trig_dvma_en(trig_dvma_en),
        .trig_phys_en(trig_phys_en),
+       .trig_addr(trig_addr),
+       .trig_addr_en(trig_addr_en),
+       .trig_err_en(trig_err_en),
+       .filt_page(filt_page),
+       .filt_en(filt_en),
+       .one_per_cycle(one_per_cycle),
 	.arm(1'b1), .rd_addr(rd_addr),
 	.rd_data(rd_data), .wr_ptr(wr_ptr), .triggered(triggered), .done(done));
 
@@ -54,6 +66,16 @@ module tb_sun2_trace;
    // A dbg_bus word: AS_n at 47, A[23:11] at 73:61, a serial number in 15:0.
    function [WIDTH-1:0] mk(input as_n, input [12:0] page, input [15:0] serial);
       begin mk = mkfc(as_n, page, TRIG_FC, serial); end
+   endfunction
+
+   // The same, with A[10:1] set: what separates one exception vector from
+   // another inside the single page they all share.
+   function [WIDTH-1:0] mkal(input as_n, input [12:0] page, input [9:0] alow,
+                             input [15:0] serial);
+      begin
+         mkal = mkfc(as_n, page, TRIG_FC, serial);
+         mkal[60:51] = alow;
+      end
    endfunction
 
    function [WIDTH-1:0] mkfc(input as_n, input [12:0] page, input [2:0] fc,
@@ -216,6 +238,101 @@ module tb_sun2_trace;
          repeat (4) @(posedge clk);
          ck(triggered, "physical trigger: the translation is what matches");
          trig_phys_en = 1'b0;
+      end
+
+      // ---- the exact-address trigger -------------------------------------
+      // Every 68010 vector is in one 2 KiB page -- address error at VBR+0xC,
+      // the level-5 clock at VBR+0x74 -- so a page match alone fires on the
+      // next timer tick.  A[10:1] is what tells the fault from the tick.
+      begin
+         rst = 1'b1; trig_phys_en = 1'b0;
+         trig_addr = 10'h006;            /* A[10:1] of 0x00C */
+         trig_addr_en = 1'b1;
+         @(posedge clk); @(negedge clk); rst = 1'b0;
+         repeat (2) @(posedge clk);
+
+         // Right page, wrong offset: the clock vector, which must be ignored.
+         @(negedge clk); bus = mkal(1'b0, PAGE, 10'h03A, 16'h0001);
+         repeat (4) @(posedge clk);
+         ck(!triggered, "address trigger: another vector in the page does not fire it");
+
+         // Right page, right offset.
+         @(negedge clk); bus = mkal(1'b0, PAGE, 10'h006, 16'h0002);
+         repeat (4) @(posedge clk);
+         ck(triggered, "address trigger: the vector asked for does");
+         trig_addr_en = 1'b0;
+      end
+
+      // ---- the ERR qualifier -------------------------------------------
+      // A library page is touched by every process using that library, so a
+      // trigger on the address alone catches a healthy access and the fault
+      // it was aimed at is long past by the time the buffer fills.
+      begin
+         // Park the bus idle first: the previous case left a sample whose
+         // serial field happens to set bit 1, which is ERR, and the DUT would
+         // trigger on that the moment reset released.
+         @(negedge clk); bus = mk(1'b1, 13'h0, 16'h0);
+         rst = 1'b1; trig_addr_en = 1'b0; trig_err_en = 1'b1;
+         @(posedge clk); @(negedge clk); rst = 1'b0;
+         repeat (2) @(posedge clk);
+
+         // The right page, but the cycle is being answered normally.
+         @(negedge clk); bus = mk(1'b0, PAGE, 16'h0001);
+         repeat (4) @(posedge clk);
+         ck(!triggered, "err qualifier: a healthy cycle on the page does not fire it");
+
+         // The same page, this time with the machine failing the cycle.
+         @(negedge clk); bus = mk(1'b0, PAGE, 16'h0002); bus[1] = 1'b1;
+         repeat (4) @(posedge clk);
+         ck(triggered, "err qualifier: the failing cycle does");
+         trig_err_en = 1'b0;
+      end
+
+      // ---- the capture filter -------------------------------------------
+      // The filter gates what is stored, not what triggers.  A sample off the
+      // filtered page must still be able to fire the trigger, or an
+      // instrument narrower than its own trigger goes deaf.
+      begin
+         @(negedge clk); bus = mk(1'b1, 13'h0, 16'h0);
+         rst = 1'b1; trig_err_en = 1'b0;
+         filt_page = PAGE; filt_en = 1'b1;
+         @(posedge clk); @(negedge clk); rst = 1'b0;
+         repeat (2) @(posedge clk);
+
+         // A cycle on another page: must not be stored, and wr_ptr stays put.
+         @(negedge clk); bus = mkfc(1'b0, 13'h0123, TRIG_FC, 16'h00AA);
+         repeat (4) @(posedge clk);
+         ck(wr_ptr == 0, "filter: a cycle off the page is not stored");
+
+         // A cycle on the filtered page: stored, and it is also the trigger.
+         @(negedge clk); bus = mk(1'b0, PAGE, 16'h00BB);
+         repeat (4) @(posedge clk);
+         ck(wr_ptr != 0 && triggered, "filter: a cycle on the page is stored and triggers");
+         filt_en = 1'b0;
+      end
+
+      // ---- one sample per bus cycle ---------------------------------------
+      // A cycle here is a dozen clocks, so storing every clock spends the
+      // buffer eight times over on one cycle and the span in real time is an
+      // eighth of the depth.  Only the first clock of a cycle should be kept.
+      begin
+         @(negedge clk); bus = mk(1'b1, 13'h0, 16'h0);
+         rst = 1'b1; filt_en = 1'b0; one_per_cycle = 1'b1;
+         @(posedge clk); @(negedge clk); rst = 1'b0;
+         repeat (2) @(posedge clk);
+
+         // Hold one cycle asserted for six clocks: exactly one sample.
+         @(negedge clk); bus = mk(1'b0, PAGE, 16'h0001);
+         repeat (6) @(posedge clk);
+         ck(wr_ptr == 1, "one per cycle: a held cycle stores exactly one sample");
+
+         // Release and assert again: a second sample, not a continuation.
+         @(negedge clk); bus = mk(1'b1, PAGE, 16'h0002);
+         repeat (2) @(posedge clk);
+         @(negedge clk); bus = mk(1'b0, PAGE, 16'h0003);
+         repeat (3) @(posedge clk);
+         ck(wr_ptr == 2, "one per cycle: the next cycle stores one more");
+         one_per_cycle = 1'b0;
       end
 
       $display("=== %0d checks, %0d failed ===", checks, fails);

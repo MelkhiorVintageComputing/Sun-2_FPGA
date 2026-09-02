@@ -112,6 +112,13 @@ ifeq ($(VME_SCSI),1)
 DEFINES += SUN2_VME_SCSI
 endif
 
+# RD68011's loop buffer, in words.  0 is an MC68010 and the default; the core
+# ignores loop_inv_n_i entirely at 0, so this changes nothing until it is set.
+LOOPBUF ?= 0
+ifneq ($(LOOPBUF),0)
+DEFINES += SUN2_LOOP_BUF_WORDS=$(LOOPBUF)
+endif
+
 # Power the segment and page map RAMs up as zeros, the way a 7-series block RAM
 # comes out of configuration, instead of leaving them X as the model otherwise
 # does.  An experiment rather than a default: it is what the board really does,
@@ -286,7 +293,7 @@ iverilog: rom
 # CPU=rd68011' reads the Suska run's log and passes on it.  Note this still
 # does not carry CPU_HZ or BAUD, which also tag a run directory -- pass
 # FBIMAGE= or the log path by hand for those.
-RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)$(if $(filter 1,$(VME_SCSI)),-vmescsi,)$(CPUTAG)
+RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)$(if $(filter 1,$(VME_SCSI)),-vmescsi,)$(if $(filter 0,$(LOOPBUF)),,-lb$(LOOPBUF))$(CPUTAG)
 # What check_console.sh should expect, in order of what wins.  A display wins
 # outright: with one fitted the console moves to the screen and there is no
 # serial output left to check, whatever else is in the cage.  A disk beats an

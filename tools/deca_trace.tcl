@@ -102,16 +102,50 @@ set physbit 0
 foreach a $argv {
     if {[string match -nocase "phys*" $a]} { set physbit [expr {1 << 31}] }
 }
+# `at <addr>' narrows the trigger to one address inside the page, by matching
+# A[10:1] as well.  It exists for the exception vectors: they all share one
+# 2 KiB page, so a page trigger fires on the next clock tick (VBR+0x74) rather
+# than on the fault being chased (an address error, VBR+0xC).
+set errbit 0
+foreach a $argv {
+    if {[string match -nocase "err" $a]} { set errbit [expr {1 << 43}] }
+}
+# `keep <page>' stores only cycles on that page.  The buffer then spans the
+# whole of a kernel fault handler instead of 246 us of instruction fetches.
+# `percycle' stores one sample per bus cycle instead of one per clock, which
+# multiplies the buffer's span in real time by about eight.
+set percyc 0
+foreach a $argv {
+    if {[string match -nocase "percycle" $a]} { set percyc [expr {1 << 62}] }
+}
+set filtbits 0
+for {set i 0} {$i < [llength $argv]} {incr i} {
+    if {[string match -nocase "keep" [lindex $argv $i]]} {
+        set kp [expr {[lindex $argv [expr {$i + 1}]]}]
+        set filtbits [expr {($kp << 48) | (1 << 61)}]
+        puts [format "# capture filter: only page 0x%04X (0x%06X..0x%06X)" \
+                $kp [expr {$kp << 11}] [expr {($kp << 11) + 0x7FF}]]
+    }
+}
+set addrbits 0
+for {set i 0} {$i < [llength $argv]} {incr i} {
+    if {[string match -nocase "at" [lindex $argv $i]]} {
+        set a [expr {[lindex $argv [expr {$i + 1}]]}]
+        set addrbits [expr {(($a >> 1) & 0x3FF) << 32 | (1 << 42)}]
+        puts [format "# trigger narrowed to address 0x%06X (A\[10:1\]=0x%03X)" \
+                $a [expr {($a >> 1) & 0x3FF}]]
+    }
+}
 if {[llength $argv] > 0} {
     set page [expr {[lindex $argv 0]}]
-    wsrc $idx [expr {(1 << 25) | ($page << 12) | $fcbits | $dvbit | $physbit}]
+    wsrc $idx [expr {(1 << 25) | ($page << 12) | $fcbits | $dvbit | $physbit | $addrbits | $errbit | $filtbits | $percyc}]
     after 100
-    wsrc $idx [expr {($page << 12) | $fcbits | $dvbit | $physbit}]
+    wsrc $idx [expr {($page << 12) | $fcbits | $dvbit | $physbit | $addrbits | $errbit | $filtbits | $percyc}]
     puts [format "# re-armed on page A\[23:11\]=0x%04X (addresses 0x%06X..0x%06X)" \
             $page [expr {$page << 11}] [expr {($page << 11) + 0x7FF}]]
     puts "# the buffer is now empty; the machine must reach that page again."
 }
-set base [expr {($page << 12) | $fcbits | $dvbit | $physbit}]
+set base [expr {($page << 12) | $fcbits | $dvbit | $physbit | $addrbits | $errbit | $filtbits | $percyc}]
 
 # Status word (word 2), which also tells us the buffer's shape.
 wsrc $idx [expr {$base | (2 << 10)}]
@@ -119,9 +153,9 @@ after 5
 set st [read_probe_data -instance_index $idx]
 set done      [fld $st 64 63 63]
 set triggered [fld $st 64 62 62]
-set wrptr     [fld $st 64 61 52]
-set dl2       [fld $st 64 51 48]
-set POST      [fld $st 64 47 32]
+set wrptr     [fld $st 64 61 46]
+set dl2       [fld $st 64 45 42]
+set POST      [fld $st 64 41 26]
 set DEPTH     [expr {1 << $dl2}]
 puts "# buffer $DEPTH samples, POST $POST"
 
@@ -140,10 +174,16 @@ puts "row,rel,A,FC,AS,RW,UDS,LDS,DTACK,BERR,C_S4,C_S6,C_S8,C_S24,smap,ps_pmap,ma
 for {set i 0} {$i < $DEPTH} {incr i} {
     set a [expr {($wrptr + $i) % $DEPTH}]
 
-    wsrc $idx [expr {$base | $a}]
+    # The sample index is ten bits in its original place plus two more at
+    # [45:44], so a buffer deeper than 1024 can be read without renumbering the
+    # fields every existing decode depends on.
+    set alo [expr {$a & 0x3FF}]
+    set ahi [expr {(($a >> 10) & 0x3) << 44}]
+
+    wsrc $idx [expr {$base | $ahi | $alo}]
     after 2
     set lo [read_probe_data -instance_index $idx]
-    wsrc $idx [expr {$base | (1 << 10) | $a}]
+    wsrc $idx [expr {$base | $ahi | (1 << 10) | $alo}]
     after 2
     set hi [read_probe_data -instance_index $idx]
 

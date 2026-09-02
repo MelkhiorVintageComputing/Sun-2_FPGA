@@ -235,6 +235,34 @@ $(DISKDIR)/refmodprobe.bin: refmodprobe/refmodprobe.c refmodprobe/refmodprobe.ld
 
 refmodprobe: $(DISKDIR)/refmodprobe.bin
 
+$(DISKDIR)/strprobe.bin: strprobe/strprobe.c strprobe/strprobe.ld
+	@command -v $(M68K)-gcc >/dev/null || { \
+		echo "$(M68K)-gcc not found: the on-machine exerciser needs an m68k"; \
+		echo "cross-compiler.  On Debian/Ubuntu: apt install gcc-m68k-linux-gnu"; \
+		exit 1; }
+	mkdir -p $(DISKDIR)
+	$(M68K)-gcc $(XYCFLAGS) -T strprobe/strprobe.ld \
+		-o $(DISKDIR)/strprobe.elf \
+		strprobe/strprobe.c 2>&1 | grep -vE 'RWX|build-id' || true
+	$(M68K)-objcopy -O binary $(DISKDIR)/strprobe.elf $@
+	@echo "strprobe: $$(stat -c%s $@) bytes of 7680"
+
+strprobe: $(DISKDIR)/strprobe.bin
+
+$(DISKDIR)/rteprobe.bin: rteprobe/rteprobe.c rteprobe/rteprobe.ld
+	@command -v $(M68K)-gcc >/dev/null || { \
+		echo "$(M68K)-gcc not found: the on-machine exerciser needs an m68k"; \
+		echo "cross-compiler.  On Debian/Ubuntu: apt install gcc-m68k-linux-gnu"; \
+		exit 1; }
+	mkdir -p $(DISKDIR)
+	$(M68K)-gcc $(XYCFLAGS) -T rteprobe/rteprobe.ld \
+		-o $(DISKDIR)/rteprobe.elf \
+		rteprobe/rteprobe.c 2>&1 | grep -vE 'RWX|build-id' || true
+	$(M68K)-objcopy -O binary $(DISKDIR)/rteprobe.elf $@
+	@echo "rteprobe: $$(stat -c%s $@) bytes of 7680"
+
+rteprobe: $(DISKDIR)/rteprobe.bin
+
 $(DISKDIR)/usrprobe.bin: usrprobe/usrprobe.c usrprobe/usrprobe.ld
 	@command -v $(M68K)-gcc >/dev/null || { \
 		echo "$(M68K)-gcc not found: the on-machine exerciser needs an m68k"; \
@@ -248,4 +276,4 @@ $(DISKDIR)/usrprobe.bin: usrprobe/usrprobe.c usrprobe/usrprobe.ld
 
 usrprobe: $(DISKDIR)/usrprobe.bin
 
-.PHONY: xychain beprobe clkprobe dogprobe mmuprobe usrprobe ctxprobe loopprobe refmodprobe
+.PHONY: xychain beprobe clkprobe dogprobe mmuprobe usrprobe ctxprobe loopprobe refmodprobe strprobe rteprobe

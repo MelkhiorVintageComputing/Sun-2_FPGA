@@ -89,6 +89,40 @@ module sun2_trace
     // trigger can only watch one of them, and which one is not knowable from
     // outside.  The page map's output is the same either way.
     input  wire                  trig_phys_en,
+    // ...and, for the case a page cannot separate, the rest of the address.
+    // Every 68010 exception vector lives in the same 2 KiB page -- an address
+    // error is at VBR+0xC and the level-5 clock autovector at VBR+0x74 -- so a
+    // page-granular trigger fires on the next timer tick and never on the
+    // fault.  A[10:1] tells them apart.  Off by default, because it is the
+    // unusual case: most triggers want a page.
+    input  wire [9:0]            trig_addr,
+    input  wire                  trig_addr_en,
+    // ...and whether the cycle has to be a *failing* one.  A page a process
+    // uses normally is touched by every other process using the same library,
+    // so triggering on the address alone catches the healthy access and the
+    // fault is long gone by the time the buffer fills.  ERR is the machine's
+    // own verdict on the cycle, so this selects the fault and nothing else.
+    input  wire                  trig_err_en,
+    // A capture filter, separate from the trigger.  Without one the buffer
+    // records every cycle, so its span in real time is set by how fast the
+    // machine executes -- 4096 samples is 246 us here, and the thing being
+    // watched for (a stray write to one word of an exception frame) can be
+    // further away than that while the kernel handles a page fault.  With it,
+    // only cycles whose address is inside [filt_lo, filt_hi] are stored, so
+    // the same buffer covers the whole of the handling and holds nothing but
+    // the traffic that could be the culprit.  The trigger still decides *when*
+    // capture stops; this decides *what* goes in.
+    input  wire [12:0]           filt_page,    // A[23:11] to keep
+    input  wire                  filt_en,
+    // One sample per bus *cycle* rather than per clock.  The recorder samples
+    // every clock, and a 68010 cycle here is about twelve of them, so eight or
+    // so identical samples are stored for every cycle and the buffer's span in
+    // real time is an eighth of what the depth suggests.  With this set only
+    // the first clock of a cycle is stored -- the address, function code,
+    // strobes and error terms are all valid from the start, and the data is
+    // not (it arrives late and lags a transaction anyway, which every reader
+    // of these captures already has to account for).
+    input  wire                  one_per_cycle,
     input  wire                  arm,
 
     input  wire [DEPTH_LOG2-1:0] rd_addr,
@@ -111,6 +145,15 @@ module sun2_trace
 
    wire        as_low = ~dbg_bus[47];
    wire [12:0] page   =  dbg_bus[73:61];
+   wire [9:0]  alow   =  dbg_bus[60:51];   // A[10:1], below the page
+   wire        err    =  dbg_bus[1];        // ERR: this cycle is being failed
+   reg         as_low_q;
+   always @(posedge clk) as_low_q <= (rst ? 1'b0 : as_low);
+   wire        cyc_start = as_low && !as_low_q;   // AS just fell
+
+   wire        on_page   = as_low && (page == filt_page);
+   wire        keep      = (one_per_cycle ? cyc_start : 1'b1)
+                           && (!filt_en || on_page);
    wire [2:0]  fc     =  dbg_bus[50:48];
    wire        dvma   =  dbg_bus[101];
    wire [11:0] ppage  =  dbg_bus[17:6];    // ma_pmap2devices, the translation
@@ -118,6 +161,8 @@ module sun2_trace
                         && (trig_phys_en ? (ppage == trig_page[11:0])
                                          : (page  == trig_page))
                         && (!trig_fc_en || (fc == trig_fc))
+                        && (!trig_addr_en || (alow == trig_addr))
+                        && (!trig_err_en  || err)
                         && (!trig_dvma_en || dvma);
 
    assign wr_ptr    = wp;
@@ -131,8 +176,13 @@ module sun2_trace
 	 done_q   <= 1'b0;
 	 post_cnt <= POST[DEPTH_LOG2:0];
       end else if (!done_q) begin
-	 mem[wp] <= dbg_bus;
-	 wp      <= wp + 1'b1;
+	 // The filter gates the *store*, not the trigger: a sample that is not
+	 // kept must still be able to fire the trigger, or a filter narrower
+	 // than the trigger would make the instrument deaf to its own event.
+	 if (keep) begin
+	    mem[wp] <= dbg_bus;
+	    wp      <= wp + 1'b1;
+	 end
 	 if (!trig_q) begin
 	    if (hit) trig_q <= 1'b1;
 	 end else begin
@@ -141,8 +191,13 @@ module sun2_trace
 	    // done_q on the same edge as the last write rather than one later
 	    // is what makes that arithmetic exact, and the arithmetic is what
 	    // the host uses to find the event.
-	    if (post_cnt == 1) done_q <= 1'b1;
-	    post_cnt <= post_cnt - 1'b1;
+	    // Counted in *stored* samples, so POST keeps its meaning when a
+	    // filter is in force -- otherwise the buffer would stop after POST
+	    // clocks having written almost nothing.
+	    if (keep) begin
+	       if (post_cnt == 1) done_q <= 1'b1;
+	       post_cnt <= post_cnt - 1'b1;
+	    end
 	 end
       end
       // A second port on the same array, read-only and never used until the
