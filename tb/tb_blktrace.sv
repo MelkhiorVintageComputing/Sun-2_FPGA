@@ -100,15 +100,35 @@ module tb_blktrace;
    // Buffer -> card.  `hold' is how many clocks each address is presented for;
    // blk_sd holds one for eight (a byte is eight SPI clocks), and an edge-on-
    // change detector must not fold a held address more than once.
+   //
+   // **The walk ends by incrementing past 511 and wrapping to 0, and that is not
+   // a detail.**  blk_sd consumes the byte at address A in the clock it sets
+   // A+1 (blk_sd.sv:709-714), so the fold for the *last* byte rides on the
+   // transition that follows it.  A model that stops at 511 leaves that byte
+   // unfolded, makes correct RTL look as though it drops one, and invites a
+   // "fix" that rotates every signature by a byte.  That happened: the fix was
+   // built, put on a board, and only the read side -- whose path never changed
+   // -- showed which of the two was wrong.
    task write_xfer(input [31:0] lba, input [31:0] seed, input integer hold);
       integer i;
       begin
          fill(seed);
          begin_xfer(1'b1, lba);
+         // blk_sd leaves the *previous* transfer's address standing across the
+         // command and response phase and only parks at 0 on its way into the
+         // data phase (blk_sd.sv:683).  Holding it here is what makes the stale
+         // address visible: without this window a recorder that arms at
+         // blk_start rather than on the park looks correct, because it never
+         // gets the chance to fold the stale byte.
+         repeat (5) @(posedge clk);
+         buf_addr <= 9'd0;                  // blk_sd parks here
+         repeat (hold) @(posedge clk);
          for (i = 0; i < SECTOR; i = i + 1) begin
             buf_addr <= i[8:0];
             repeat (hold) @(posedge clk);
          end
+         buf_addr <= 9'd0;                  // the wrap blk_sd performs
+         repeat (hold) @(posedge clk);
          end_xfer;
       end
    endtask
@@ -189,10 +209,12 @@ module tb_blktrace;
       // ---- order matters: a plain XOR could not tell these apart ----
       fill(32'd3);
       begin_xfer(1'b1, 32'h0000_0009);
+      buf_addr <= 9'd0; repeat (8) @(posedge clk);
       for (i = SECTOR - 1; i >= 0; i = i - 1) begin      // same bytes, reversed
          buf_addr <= i[8:0];
          repeat (8) @(posedge clk);
       end
+      buf_addr <= 9'd511; repeat (8) @(posedge clk);
       end_xfer;
       readout(4, k, s);
       ck(s != sig_a, "the same bytes in a different order fold differently");
@@ -214,10 +236,12 @@ module tb_blktrace;
       fill(32'd17);
       begin_xfer(1'b1, 32'h0000_00C5);
       blk_lba <= 32'h7FFF_FFFF; blk_we <= 1'b0;      // the next request, early
+      buf_addr <= 9'd0; repeat (2) @(posedge clk);
       for (i = 0; i < SECTOR; i = i + 1) begin
          buf_addr <= i[8:0];
          repeat (2) @(posedge clk);
       end
+      buf_addr <= 9'd0; repeat (2) @(posedge clk);
       end_xfer;
       readout(6, k, s);
       ck(k[30:0] == 31'h0000_00C5, "the key is the LBA the transfer started with");

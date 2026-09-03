@@ -91,23 +91,38 @@ module sun2_blktrace #(
    // reads as a byte of its own, folding the buffer's *stale* contents into a
    // read's signature.  So the write side is gated on the transfer direction
    // rather than on buf_we alone.
+   // The write side folds on a change of address, and it has to know where the
+   // walk *starts* or it folds a byte that is not part of the sector.
+   //
+   // blk_sd parks sbuf_addr at 0 before the data phase (blk_sd.sv:683) and then
+   // walks 0,1,..,511 and wraps back to 0, consuming the byte for address A in
+   // the clock it sets A+1.  So the 512 folds wanted are the 512 transitions
+   // *after* the address reaches 0, and `armed' is what waits for that.  Seeding
+   // last_addr with a sentinel instead folds sbuf[0] twice (513 bytes, measured
+   // on a board: 255 of 585 written sectors matched s0,s0,s1..511 where 83
+   // matched the plain 512), and seeding it with whatever the address happens to
+   // hold at blk_start folds a byte of the *previous* transfer whenever a write
+   // follows a read, which leaves the address at 511.
    reg        is_write;
-   wire       rd_byte  = blk_buf_we;                       // card -> buffer
-   wire       wr_seen  = busy && is_write && !blk_buf_we &&
+   reg        armed;
+   wire       park     = busy && is_write && !armed && (blk_buf_addr == 9'd0);
+   wire       rd_byte  = blk_buf_we && !is_write;          // card -> buffer
+   wire       wr_seen  = busy && is_write && armed && !blk_buf_we &&
                          (blk_buf_addr != last_addr);      // buffer -> card
 
-   // **buf_rdata answers buf_addr one cycle late** (Inputs/Wish5380/doc/block.md:58),
-   // so the byte belonging to an address change has not arrived in the cycle the
-   // change is seen.  Fold it one cycle later.
+   // Fold rdata **in the cycle the address changes**, which looks off by one and
+   // is not.  buf_rdata answers buf_addr one cycle late
+   // (Inputs/Wish5380/doc/block.md:58), and blk_sd consumes the byte for address
+   // A in the same clock it increments to A+1 (blk_sd.sv:709-714) -- so in the
+   // clock the change appears, rdata is still answering A, and that is exactly
+   // the byte just consumed.  The two lateness cancel.
    //
-   // Getting this wrong is not a trace that looks broken -- it is a trace full of
-   // plausible signatures that are simply not the block's, and this cost a whole
-   // experiment.  The first run of this instrument folded rdata in the cycle of
-   // the change, which made 127 of 171 sectors of a copied file look wrong; `cmp'
-   // on the machine then put the file's first difference at byte 4385, proving
-   // the sectors before it were byte-identical and the signatures, not the data,
-   // were at fault.  The LBA half was unaffected and its verdict stood.
-   reg        wr_byte;
+   // This was "corrected" once to fold a cycle later and that rotated every
+   // write signature by one byte, which is what the board then showed: 109 of
+   // 642 written sectors matched a source file rotated by one and 18 matched it
+   // plain, against ~20 expected by chance.  The reads, whose path is unchanged,
+   // matched 183 of 184 in the same capture and were what proved the arithmetic
+   // and the source files right while the write side was wrong.
    wire [7:0] the_byte = blk_buf_we ? blk_buf_wdata : blk_buf_rdata;
 
    wire [15:0] sig_next = {sig[14:0], sig[15]} + {8'h00, the_byte};
@@ -138,24 +153,30 @@ module sun2_blktrace #(
             busy      <= 1'b1;
             is_write  <= blk_we;
             sig       <= 16'd0;
-            wr_byte   <= 1'b0;
-            last_addr <= 9'h1FF;         // so the first address is a change
+            armed     <= 1'b0;
+            // Seed from the address as it stands, NOT from a sentinel.  A
+            // sentinel guarantees the first comparison reports a change, and
+            // blk_sd already has the address parked at 0 when a transfer
+            // starts -- so the sentinel folded sbuf[0] an extra time and every
+            // signature was a fold of 513 bytes with the first one counted
+            // twice.  Measured both ways on a board: with the fold taken in the
+            // cycle of the change 255 written sectors matched s0,s0,s1..511 and
+            // 83 matched the plain 512, and with it taken a cycle later 287
+            // matched s0,s1..511,s0 -- the duplicate simply moved.  Seeded from
+            // the address, the first real transition folds sbuf[0] and the
+            // wrap past 511 folds sbuf[511]: 512 bytes, once each.
+            last_addr <= blk_buf_addr;
             cur_key   <= {blk_we, blk_lba[30:0]};
          end
 
-         // last_addr tracks the address as it changes; the fold trails it by one.
+         if (park) begin armed <= 1'b1; last_addr <= 9'd0; end
          if (wr_seen) last_addr <= blk_buf_addr;
-         wr_byte <= wr_seen;
+         if (busy && (rd_byte || wr_seen)) sig <= sig_next;
 
-         if (busy && (rd_byte || wr_byte)) sig <= sig_next;
-
-         // Safe against the trailing byte: blk_done comes after the card's CRC and
-         // response phase, many cycles after the last buffer access, so the
-         // delayed fold above has always retired by the time this fires.
          if (busy && blk_done) begin
             busy            <= 1'b0;
             t_key[wp]       <= cur_key;
-            t_sig[wp]       <= (rd_byte || wr_byte) ? sig_next : sig;
+            t_sig[wp]       <= (rd_byte || wr_seen) ? sig_next : sig;
             wp              <= wp + 1'b1;
             nx              <= nx + 16'd1;
          end

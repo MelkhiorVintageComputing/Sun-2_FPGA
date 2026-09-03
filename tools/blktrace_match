@@ -43,6 +43,15 @@ ap.add_argument("--lba-offset", type=lambda x: int(x, 0), default=0,
                 help="subtract this from every LBA (the partition's start on the card)")
 ap.add_argument("--run-min", type=int, default=4,
                 help="ignore write runs shorter than this many sectors")
+ap.add_argument("--fold", default="plain", choices=("plain", "dup0-head", "dup0-tail"),
+                help="which byte sequence the *write* side of the trace folded. "
+                     "`plain' is 512 bytes once each, which is what a correct "
+                     "sun2_blktrace produces. The other two are the 513-byte "
+                     "folds two earlier revisions produced, kept so captures "
+                     "taken with those bitstreams stay readable: `dup0-head' is "
+                     "s0,s0,s1..511 and `dup0-tail' is s0,s1..511,s0. Reads are "
+                     "always plain -- their path never had the defect, which is "
+                     "how the write side was caught.")
 a = ap.parse_args()
 
 # ---- the sources, folded per 512-byte sector -------------------------------
@@ -53,7 +62,11 @@ for spec in a.source:
         sys.exit("--source wants NAME=FILE, got %r" % spec)
     name, path = spec.split("=", 1)
     d = open(path, "rb").read()
-    secs = [fold(d[i:i+512].ljust(512, b"\0")) for i in range(0, len(d), 512)]
+    def seq(sec):
+        if a.fold == "dup0-head": return sec[:1] + sec
+        if a.fold == "dup0-tail": return sec + sec[:1]
+        return sec
+    secs = [fold(seq(d[i:i+512].ljust(512, b"\0"))) for i in range(0, len(d), 512)]
     srcsec[name] = secs
     for n, s in enumerate(secs):
         sig2src[s].append((name, n))
