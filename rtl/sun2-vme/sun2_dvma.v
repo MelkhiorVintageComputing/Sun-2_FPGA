@@ -167,7 +167,32 @@ module sun2_dvma(input             CLK,
    // sun2_wishbone_bridge presents its data the clock after it acknowledges.
    // Capturing a clock early returns the *previous* cycle's data, which looks
    // like a chip reading plausible rubbish rather than like a timing bug.
-   assign dvma_as_n   = ~(state == S_STROBE || state == S_LATCH);
+   // **AS is released on a falling edge, and is never narrower than 2.5 clocks.**
+   //
+   // The state machine runs on posedges, so driving AS straight from it puts
+   // *both* its edges there and makes the asserted width a whole number of
+   // clocks -- minimum 2.0, where a 68010 never produces less than 2.5 and
+   // negates on the falling edge of S7 (MC68000UM 5.1.1-5.1.2, spec #14).
+   //
+   // That is not cosmetic on this machine, because sun2_fpga's bus timing chain
+   // is edge-faithful: C_S3/5/7/9 advance and clear on `negedge C100' and the
+   // even states on the posedge.  Driving AS from posedges alone makes the odd
+   // states clear half a clock *before* the even ones, where a real CPU clears
+   // them in the opposite order.
+   //
+   // as_ext holds AS through the half clock after S_LATCH: it is set on the
+   // falling edge inside S_LATCH and cleared on the next one, so AS falls with
+   // the state change and rises on a negedge, one half clock later than the
+   // FSM leaves.
+   // Covers both exits from S_STROBE.  The bus-error branch used to jump
+   // straight to S_DONE, so extending only S_LATCH left the error path
+   // releasing AS on a rising edge and 1.5 clocks wide -- caught by
+   // tb_dvma's own check rather than by reading the code.
+   reg as_ext;
+   always @(negedge CLK)
+     as_ext <= (state == S_STROBE) || (state == S_LATCH);
+
+   assign dvma_as_n   = ~(state == S_STROBE || state == S_LATCH || as_ext);
    assign dvma_uds_n  = uds_n;
    assign dvma_lds_n  = lds_n;
 
@@ -287,7 +312,10 @@ module sun2_dvma(input             CLK,
 		      uds_n    <= 1'b1;
 		      lds_n    <= 1'b1;
 		      hi_todo  <= 1'b0;
-		      state    <= S_DONE;
+		      // Through S_LATCH rather than straight to S_DONE, so a
+		      // faulted cycle holds AS as long as a good one does.  What
+		      // it latches is discarded: err_cyc makes this a wb_err_o.
+		      state    <= S_LATCH;
 		   end
 		 else if (~P_DTACK_n)
 		   state <= S_LATCH;

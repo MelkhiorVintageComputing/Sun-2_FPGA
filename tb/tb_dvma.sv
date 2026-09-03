@@ -154,6 +154,32 @@ module tb_dvma;
       end
    end
 
+   // AS must look like a 68010's: never narrower than 2.5 clocks, and released
+   // on a *falling* edge (MC68000UM 5.1.1-5.1.2, spec #14).  sun2_fpga's bus
+   // timing chain is edge-faithful -- C_S3/5/7/9 on negedge, the even states on
+   // posedge -- so an AS driven from posedges alone clears the two halves in
+   // the wrong order relative to a real CPU.  Checking the clock's level at the
+   // moment AS rises is what distinguishes the two: released from a negedge
+   // flop it rises with clk low, released from the FSM it rises with clk high.
+   localparam time CLK_PERIOD = 10;
+   time as_fall_t = 0;
+   always @(negedge dvma_as_n) as_fall_t = $time;
+   always @(posedge dvma_as_n) begin
+      if (as_fall_t != 0) begin
+         checks++;
+         if (clk !== 1'b0) begin
+            $display("FAIL: [%t] AS released on a rising clock edge", $realtime);
+            fail++;
+         end
+         checks++;
+         if (($time - as_fall_t) * 2 < 5 * CLK_PERIOD) begin
+            $display("FAIL: [%t] AS asserted only %0t, under 2.5 clocks",
+                     $realtime, $time - as_fall_t);
+            fail++;
+         end
+      end
+   end
+
    // The property the fix rests on, checked on every edge of every test: the
    // master must not take the bus on a grant that was never withdrawn since it
    // last let go.  A level-sensitive test of P_BG_n passes this whenever the
