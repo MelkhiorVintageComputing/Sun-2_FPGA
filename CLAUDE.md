@@ -926,18 +926,36 @@ That is the instrument checked against ground truth rather than trusted.
   the gap between Wishbone fetches is far longer than the 1.5-3.5 clock window.
   Measured: with the fix in and a pristine filesystem, 5 sectors of ~600 still
   corrupt.
+* *AS timing.* `sun2_dvma` drove AS from a posedge state machine, so both edges
+  landed on rising ones and the asserted width was a whole number of clocks --
+  minimum 2.0, where a 68010 never gives less than 2.5 and releases on a falling
+  edge (spec #14). That matters in principle because `sun2_fpga`'s chain is
+  edge-faithful. **Fixed** (`09ecfe2`), and the corruption is unchanged: 5
+  sectors of ~600 again, at the same rate. The 2.0-clock floor was unreachable
+  anyway -- memory DTACK cannot arrive before `C_S6`, two clocks after AS, so a
+  DVMA memory cycle's AS is nine to fifteen clocks wide in practice.
 
   Note what the fix is *not*. A "BG was seen negated" flag deadlocks: it still
   re-asserts BR after two clocks, and a core deciding from the current BR level
   may then never negate BG, leaving the flag clear for ever. Holding BR negated
   is what makes the CPU withdraw the grant.
 
-**The asymmetry may be observational rather than real.** Disk writes are
-verifiable because the source is in hand; disk reads are not. A corrupted word
-arriving in a page read from disk is invisible until it is executed -- and this
-machine does produce `lpd` cores, `ld` SIGILL, `halt` with `Illegal
-instruction`, `fsck` with `Emulator trap`. Do not assume the read direction is
-clean merely because nothing checks it.
+**The asymmetry is real, and it was worth measuring rather than assuming.** The
+suspicion here used to be that it was observational -- writes are verifiable
+because the source is in hand, reads are not, and a corrupted word arriving in a
+page read from disk is invisible until it is executed, which this machine does
+plenty of (`lpd` cores, `ld` SIGILL, `halt` with `Illegal instruction`, `fsck`
+with `Emulator trap`). Measured, it is not: **`dd if=/dev/rsd0a bs=8k count=256
+| sum` twice gives `22901` both times.** The raw device bypasses the buffer
+cache, so that is two million words fetched from the medium into memory by DVMA
+with no caching in between; at the write side's rate of roughly one bad sector
+in a hundred and twenty the two sums could not agree. And `sum /usr/bin/adb`
+returns the reference image's `50905` on every boot, which is ground truth
+rather than self-consistency.
+
+So the fault is specifically **memory to device** -- the master's *read* of
+memory -- and not device to memory. The direction that works is the one where
+DVMA writes memory and the CPU reads it back.
 
 **A used filesystem stops being an instrument.** After several corrupting runs
 the machine's own `/usr/bin/csh` and `/usr/bin/adb` no longer matched their
