@@ -620,6 +620,22 @@ each was plausible enough to spend a build on:
   `DDR3_READY` fanning into the commander with a shortest chain of **one**
   register. Real, worth fixing, and not this: metastability is random and this
   failure is 5-for-5 identical.
+
+  **It is not the cause of the random single-word corruption either, and the
+  reason is worth keeping because the headline number is alarming and
+  meaningless.** On the MultiBus SCSI build the same report says worst-case
+  MTBF **85.2 seconds**, typical 7.4 days, over 857 chains -- which looks like
+  exactly the right order for one bad word per ten-minute copy. Sorting the
+  chains by MTBF shows every one of the low values is `DDR3_PHY -> DDR3_COMMANDER`,
+  i.e. `DDR3_READY`, **which goes high once at calibration and never changes
+  again**. A signal that does not toggle cannot resolve badly at runtime, so it
+  contributes nothing to the failure rate however short its chain. The rest of
+  the low-MTBF population is instrumentation -- JTAG's `altera_reserved_tms`,
+  the `altsource_probe` chains, `blk_sd|card_ready` into the probe -- none of it
+  in a data path. The chains that *are* in the data path, `rd68011_biu|a_o[3]`
+  into `sun2_dvma`'s `rd_lo`/`rd_hi` latches, come out at **greater than one
+  billion years**. Run the report by all means; sort by MTBF and then ask of
+  each offender whether it toggles.
 * *A stale Wishbone acknowledgement answering a device cycle* -- the Wukong trap
   in this file. `sun2_wishbone_bridge.v` is `W_ACK = (wb_ack_i & issued) | done`
   with both cleared when `MATCH_ANY` drops, so a late ack cannot acknowledge a
@@ -870,6 +886,65 @@ BrianHG's controller. `tools/wrprobe` puts a CPU in a spin loop while the
 master streams, which is the one condition no testbench here reproduces, and it
 passes -- so whatever it is, a boot block driving the same path does not
 provoke it.
+
+**What it is: exactly one 16-bit word per damaged sector, at an even offset.**
+Not a burst, not a whole sector, not another file's block:
+
+```
+  adb sector  89, byte 136:   660c -> ffff
+  csh sector  73, byte 500:   0000 -> 4ef8
+```
+
+`4ef8` is ordinary 68010 code (`JMP`), so the `ffff` is not a bus-idle pattern
+either -- both look like data from somewhere else. One word in roughly a hundred
+thousand. A DVMA longword is two 68010 cycles, so **one wrong 16-bit word is one
+half of one longword read**, which is the shape of two bugs this tree has already
+fixed (RD68011's bus-grant handover, and the bridge serving two masters).
+
+**The trace predicts the medium, twice over.** On a pristine filesystem it named
+`csh` sector 8 and `adb` sector 13 as the damaged ones; `cmp` on the rebooted
+machine put the first differences at bytes 4121 and 7145 -- sectors 8 and 13.
+That is the instrument checked against ground truth rather than trusted.
+
+**Two candidates eliminated by measurement, both cheap and both plausible:**
+
+* *BrianHG's `PORT_CACHE_SMART`.* With it zero, a read whose address matches a
+  write still sitting in the write cache (`WC_ready` set, `WC_DDR3_ack` not yet
+  seen) goes to DRAM and returns the previous contents -- the exact shape of the
+  fault. `deca_top` had it zero. Set to 1 (`DDR3_SMART`, +460 LE, timing met)
+  the corruption is unchanged. It also sits in the path the **CPU** uses, and
+  the machine's own survival argues against that path: the CPU issues orders of
+  magnitude more traffic through the bridge than any master, and a fault there
+  at this rate would be fatal long before it showed up in a file.
+* *A stale bus grant in `sun2_dvma`.* `P_BG_n` was tested as a level, and the
+  module negates `P_BR_n` for only two clocks (`S_ACK`, `S_IDLE`), so during a
+  streaming transfer it can re-request inside the CPU's spec-#36 window and read
+  the *previous* transaction's grant as an answer. Real, and **fixed** -- it now
+  waits in `S_IDLE` until the grant is withdrawn, which also buys spec #39 by
+  construction. But it cannot be the cause: `D_FETCH` returns only after
+  `D_OUT`/`D_OUTACK` have handed all four bytes to the target one at a time, so
+  the gap between Wishbone fetches is far longer than the 1.5-3.5 clock window.
+  Measured: with the fix in and a pristine filesystem, 5 sectors of ~600 still
+  corrupt.
+
+  Note what the fix is *not*. A "BG was seen negated" flag deadlocks: it still
+  re-asserts BR after two clocks, and a core deciding from the current BR level
+  may then never negate BG, leaving the flag clear for ever. Holding BR negated
+  is what makes the CPU withdraw the grant.
+
+**The asymmetry may be observational rather than real.** Disk writes are
+verifiable because the source is in hand; disk reads are not. A corrupted word
+arriving in a page read from disk is invisible until it is executed -- and this
+machine does produce `lpd` cores, `ld` SIGILL, `halt` with `Illegal
+instruction`, `fsck` with `Emulator trap`. Do not assume the read direction is
+clean merely because nothing checks it.
+
+**A used filesystem stops being an instrument.** After several corrupting runs
+the machine's own `/usr/bin/csh` and `/usr/bin/adb` no longer matched their
+pristine checksums, while `/usr/bin/sum` and `/usr/bin/od` still did -- so
+copies made from them looked corrupt against the reference image while being
+faithful copies of a damaged source. Verify the *sources* on the machine before
+each run; the card carries pristine copies at several offsets for this reason.
 
 **Do not read a signature out of a trace without checking the instrument
 first.** The signature half of `sun2_blktrace` was wrong on its first outing --

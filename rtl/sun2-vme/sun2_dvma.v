@@ -219,13 +219,43 @@ module sun2_dvma(input             CLK,
 			   err_cyc <= 1'b0;
 			   state   <= S_ACK; // nothing selected; nothing to do
 			end
-		      else
+		      else if (P_BG_n)
 			begin
+			   // **Only ask once the previous grant has been
+			   // withdrawn.**  P_BG_n is a level, and this module
+			   // negates P_BR_n for exactly two clocks (S_ACK,
+			   // S_IDLE) before asking again -- which during a
+			   // streaming transfer is well inside the CPU's
+			   // BR-negated-to-BG-negated window (MC68000UM spec
+			   // #36, 1.5 to 3.5 clocks).  Re-asserting BR inside
+			   // that window and then testing BG as a level reads
+			   // the *previous* transaction's grant as an answer to
+			   // this request, and the master can take the bus while
+			   // the CPU is resuming.  cpu_as_n and ~BUS_EN below
+			   // cover most of that overlap but neither is an
+			   // interlock: BUS_EN rises when the core re-enables
+			   // its drivers, and nothing orders it against this
+			   // decision.
+			   //
+			   // Waiting here rather than latching a "BG was seen
+			   // negated" flag is the safe half of the fix.  A flag
+			   // still re-asserts BR after two clocks, and a core
+			   // that decides from the current BR level may then
+			   // never negate BG at all -- the flag would stay clear
+			   // and the channel would hang.  Holding BR negated is
+			   // what makes the CPU withdraw the grant, and spec #39
+			   // (BG negated at least 1.5 clocks between grants)
+			   // then falls out by construction.
+			   //
+			   // It costs one arbitration round trip per Wishbone
+			   // access and nothing that matters: a sector is 128 of
+			   // these against thousands of clocks of SPI.
 			   err_cyc <= 1'b0;
 			   half    <= ~lo_needed;         // skip an empty low half
 			   hi_todo <= lo_needed & hi_needed;
 			   state   <= S_REQ;
 			end
+		      // else: stay in S_IDLE, BR negated, until the grant drops
 		   end
 
 	       S_REQ:

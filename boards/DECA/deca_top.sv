@@ -68,7 +68,13 @@ module deca_top #(
     // erase block is indistinguishable from a bad transfer.  Move the whole
     // disk somewhere else on the card, copy the filesystem there, and the
     // media is the only thing that changed.
-    parameter int DISK_LBA_OFFSET = 0
+    parameter int DISK_LBA_OFFSET = 0,
+
+    // BrianHG's write-cache-to-read forwarding.  1 is the controller's own
+    // default and closes the read-after-write window described at the
+    // instantiation below; 0 is what this board shipped with.  Not related to
+    // the two cache *timeouts*, which stay at zero either way.
+    parameter bit DDR3_SMART = 1'b1
 ) (
     input  wire        MAX10_CLK1_50,   // PIN_M8,  2.5 V
     input  wire [1:0]  KEY,             // H21 H22, 1.5 V Schmitt, active low
@@ -460,9 +466,27 @@ module deca_top #(
        // CPU bus actually needs.  BrianHG's own note on PORT_CACHE_SMART --
        // "Disable when designing a memory read/write testing algorithm" -- is
        // the same warning from the other direction.
+       //
+       // **PORT_CACHE_SMART is not part of that, and turning it off opened a
+       // hazard of its own.**  It is not a cache lifetime; it is the term at
+       // BrianHG_DDR3_COMMANDER_v16.sv:1381,1606 that serves a read from the
+       // *write* cache when the two addresses match.  A write is acknowledged
+       // when the commander takes it into that cache, and WC_ready stays set
+       // until WC_DDR3_ack (line 1571) -- so between those two moments the only
+       // copy of the data is in the write cache, and with the smart term off a
+       // read of that address goes to DDR3 and returns what was there before.
+       // One word, the location's previous contents, only when a read lands in
+       // that window.  That is the shape of the corruption measured on this
+       // board: files written by the machine come back with single 16-bit words
+       // replaced, about one word in a hundred thousand.
+       //
+       // The two timeouts stay at zero, which is what the sdprobe fault
+       // actually needed.  DDR3_SMART is a knob rather than a constant so the
+       // two can be compared on the same bitstream family instead of swapped
+       // blind.
        .PORT_W_CACHE_TOUT ('{16{9'd0}}),
        .PORT_R_CACHE_TOUT ('{16{9'd0}}),
-       .PORT_CACHE_SMART  ('{16{1'b0}})
+       .PORT_CACHE_SMART  ('{16{DDR3_SMART}})
    ) ddr3 (
        .RST_IN   (board_reset_raw),
        .CLK_IN   (MAX10_CLK1_50),

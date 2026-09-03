@@ -121,8 +121,11 @@ module tb_dvma;
    // mutating cpu_as_n out of sun2_dvma goes unnoticed.
    int busen_dly = 12;
    int grant_dly = 0;
+   int ungrant_cnt = 0;
+   int bg_hold = 0;          // clocks BG stays asserted after BR negates
    always @(posedge clk) begin
       if (!P_BR_n) begin
+         ungrant_cnt <= 0;
          if ((cpu_as_n && !cpu_busy) || hostile_grant) begin
             grant_dly <= grant_dly + 1;
             // BG first, the pins some clocks later.  A core does not do both
@@ -138,9 +141,37 @@ module tb_dvma;
          end
       end else begin
          grant_dly <= 0;
-         P_BG_n <= 1'b1;
+         // **BG does not drop in the same clock BR does.**  MC68000UM spec #36
+         // gives the CPU 1.5 to 3.5 clocks to negate the grant, and this model
+         // used to negate it instantly -- which made the stale-grant hazard
+         // impossible to reproduce here, because the master could never see a
+         // grant left over from its previous request.  bg_hold puts that window
+         // back; 0 keeps the old ideal behaviour for the tests that predate it.
+         if (ungrant_cnt >= bg_hold) P_BG_n <= 1'b1;
+         else                        ungrant_cnt <= ungrant_cnt + 1;
          // The pins come back only once the master has actually let go.
          if (!dvma_active) BUS_EN <= 1'b1;
+      end
+   end
+
+   // The property the fix rests on, checked on every edge of every test: the
+   // master must not take the bus on a grant that was never withdrawn since it
+   // last let go.  A level-sensitive test of P_BG_n passes this whenever the
+   // CPU happens to be quick and fails it whenever the CPU is slow, which is
+   // why it is stated here rather than left to a timing coincidence.
+   reg bg_withdrawn = 1'b1;
+   reg dvma_active_d = 1'b0;
+   always @(posedge clk) begin
+      dvma_active_d <= dvma_active;
+      if (P_BG_n) bg_withdrawn <= 1'b1;
+      // The moment it *takes* the bus, not every clock it holds it.
+      if (dvma_active && !dvma_active_d) begin
+         if (!bg_withdrawn) begin
+            $display("FAIL: [%t] DVMA took the bus on a grant it never saw withdrawn (bg_hold=%0d)",
+                     $realtime, bg_hold);
+            fail++;
+         end
+         bg_withdrawn <= 1'b0;
       end
    end
 
@@ -651,6 +682,51 @@ module tb_dvma;
          checks++;
          if (bad != 0) begin
             $display("FAIL: 32 longwords with the CPU contending, %0d wrong", bad);
+            fail++;
+         end
+
+         // ...and again with the CPU taking its documented time to withdraw the
+         // grant.  MC68000UM spec #36 allows 1.5 to 3.5 clocks between BR
+         // negating and BG negating, while this master negates BR for exactly
+         // two clocks between back-to-back accesses -- so during a streaming
+         // transfer it asks again while the previous grant is still asserted.
+         // Testing BG as a level there takes the bus on an answer to the
+         // *previous* request, next to a CPU that is resuming, and the
+         // property check above is what fails.  Every test before this one
+         // negated BG in the same clock BR dropped, which is an ideal CPU and
+         // made the hazard unreachable in simulation.
+         bad           = 0;
+         bg_hold       = 3;
+         hostile_grant = 1'b1;
+         busen_dly     = 2;
+         for (i = 0; i < 32; i++) begin
+            fork
+               begin
+                  logic [31:0] r4; bit e4;
+                  wb_access(1'b1, 22'(22'h380 + i), 4'b1111,
+                            32'h3C3C_0000 + 32'(i), r4, e4);
+               end
+               begin
+                  logic [31:0] junk4;
+                  cpu_read_long(23'h000200, i % 5, junk4);
+               end
+            join
+         end
+         hostile_grant = 1'b0;
+         busen_dly     = 12;
+         bg_hold       = 0;
+         for (i = 0; i < 32; i++) begin
+            wb_access(1'b0, 22'(22'h380 + i), 4'b1111, 32'h0, rdw, e);
+            if (e || rdw !== (32'h3C3C_0000 + 32'(i))) begin
+               if (bad < 4)
+                 $display("   late-grant word %0d: got %08x want %08x err=%0d",
+                          i, rdw, 32'h3C3C_0000 + 32'(i), e);
+               bad++;
+            end
+         end
+         checks++;
+         if (bad != 0) begin
+            $display("FAIL: 32 longwords with a late bus grant, %0d wrong", bad);
             fail++;
          end
          wait_states = 0;
