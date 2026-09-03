@@ -686,9 +686,11 @@ prints `Probing I/O bus: sd ie`, catches the probe itself:
 ```
 
 **That is a perfect timeout, and it is the only thing the hardware could do.**
-There is no SCSI anywhere in this design -- `grep -i scsi rtl/sun2-common/sun2_fpga.v`
-returns nothing -- so no `MATCH_*` term covers the page, nothing sources DTACK,
-and the cycle must time out. That is the documented contract for TYPE 2 space
+There was no SCSI anywhere in *that* design -- so no `MATCH_*` term covered the
+page, nothing sourced DTACK, and the cycle had to time out. (That is no longer
+true of the tree in general: `MB_SCSI=1` and `VME_SCSI=1` both decode a host
+adapter now, and a MultiBus build answers at `0x80000`. The reasoning below is
+about the build the capture came from, where the cage really was empty.) That is the documented contract for TYPE 2 space
 and it is how the PROM discovers empty addresses at all.
 
 Decoding `ps_pmap` (`ps_pmap2devices`, entry bits 31..20) says where the cycle
@@ -831,6 +833,50 @@ invalidate a decode that indexes the returned bit string MSB-first.
 **No card detect reaches the FPGA on this board**, unlike the Wukong's `sd_cd`.
 So "no card" and "a card that never initialised" are the same reading, and the
 only way to tell them apart is to try another card.
+
+**Writing to the card corrupts files, the blocks go to the right places, and
+what it needs is concurrency rather than volume.** A copy is byte-perfect on
+its own and three copies back to back all come back wrong -- measured on a
+freshly written filesystem in single user, so it is neither the medium's
+history nor a busy multi-user machine:
+
+```
+  /usr/bin/adb -> /wa   copied alone            50905 -> 50905   intact
+  /vmunix      -> /wb   three copies back to    22308 -> 12922   corrupt
+  /usr/bin/csh -> /wc   back, same session      34435 -> 29822   corrupt
+  /usr/bin/adb -> /wd                           50905 -> 46503   corrupt
+```
+
+`fsck` is clean afterwards, so the damage is inside files and not in the
+structure, and `cmp` puts `/wd`'s first difference at byte 4385 -- past several
+blocks that are byte-identical, so it is not a transfer that goes wrong from
+the start.
+
+**Misdirection is dead, and that was the open question.** `sun2_blktrace`
+(`BLKTRACE=1`, read out by `tools/deca_blktrace.tcl`) recorded the copies:
+every block landed at exactly the LBA its position in the file predicts --
+partition sector 2400 + 32k for block k, which is 4.2BSD's rotational layout --
+in order and self-consistent, for all thirteen blocks of a file that came back
+corrupt. So "the hardware writes at the wrong address" is finished, and the
+fault is in the data path between memory and the card.
+
+Four layers were already cleared by test and none of them was it: the media, the
+SD path on real hardware (`test/deca_sdtest`), `blk_sd` in simulation (`make -C
+sim blksd`), and the SCSI engine and `sun2_dvma` (`make -C sim mbscsi`, `dvma`)
+including at DDR3-like latency with several commands back to back. The XY450
+corrupts identically, which exonerates every line of the SCSI work; what the
+three controllers share below them is `sun2_dvma`, `sun2_wishbone_bridge` and
+BrianHG's controller. `tools/wrprobe` puts a CPU in a spin loop while the
+master streams, which is the one condition no testbench here reproduces, and it
+passes -- so whatever it is, a boot block driving the same path does not
+provoke it.
+
+**Do not read a signature out of a trace without checking the instrument
+first.** The signature half of `sun2_blktrace` was wrong on its first outing --
+see the trap below -- and it named two sectors of other files as the intruders
+in a corrupted block. Both were chance collisions in a 16-bit fold.
+`tools/blktrace_match` prints the expected number of those, `W*S/65536`, above
+its own output for that reason.
 
 **The DECA has a network again, and it is a 3Com 3C400.** `MB_3C400=1` fits
 `rtl/sun2-multibus/sun2_mb_3c400.sv`, the *other* MultiBus Ethernet -- three
@@ -1274,9 +1320,17 @@ forward. The boot PROMs work the same way: `tools/sim_speedup*.txt` are applied
 by `tools/rompatch` into `build/rom/`, never onto `Inputs/*.bin`, and rompatch
 verifies the existing word before changing it.
 
-**`Inputs/sunos-34-src` is the boot PROMs' own source.** `sun/prom_monitor/msun/`
-builds the MultiBus monitor and `rsun/` the VME one, from the same files behind
-`#ifdef VME`. Reach for it before guessing at what a PROM is doing —
+**`Inputs/sunos-34-src` is the boot PROMs' own source, and `msun`/`rsun` are
+revisions rather than machines.** This file said for a long time that
+`sun/prom_monitor/msun/` builds the MultiBus monitor and `rsun/` the VME one.
+It does not. They are **Rev Q** and **Rev R** of one tree -- their `sys/`
+subtrees are identical bar an extra README and `h/`, and `mon/kernel` differs in
+two files -- and the machine is chosen by **`-DVME` per build directory**, in
+the `IDENT` line of each Makefile: `msun/mon/RevQ2` is Rev Q MultiBus,
+`msun/mon/RevQs` is Rev Q **VME**, and `rsun/mon/RevR2` is Rev R MultiBus. So
+the VME monitor is built out of `msun`, which is the opposite of what the old
+sentence said, and a question about VME behaviour answered by reading `rsun`
+was answered from the wrong directory. Reach for it before guessing at what a PROM is doing —
 `sys/mon/s2map.h` names every I/O page numerically, `mon/kernel/sunmon.c` has
 both machines' page-map setup side by side, and `mon/h/buserr.h` documents
 register semantics no manual states. `m68k-linux-gnu-objdump -D -b binary -m
@@ -1823,6 +1877,30 @@ is mostly the machine *idling in the monitor afterwards*, where an unarmed
 counter reads 0 because that is correct.
 
 ## Traps that have already cost time
+
+* **An instrument with no testbench, and a signature that looked plausible.**
+  `sun2_blktrace` folds each sector as it passes so a block can be identified by
+  its contents. `Inputs/Wish5380/doc/block.md:58` says `buf_rdata` answers
+  `buf_addr` **one cycle late**; the first version folded it in the cycle the
+  address changed, so every write-side signature was a fold over a byte sequence
+  shifted by one. Nothing about that looks broken -- it yields ordinary-looking
+  16-bit values that are simply not the block's -- and it reported 127 of 171
+  sectors of a *correctly copied* file as corrupt, and named two sectors of
+  other files as the intruders. `cmp` on the machine then put that file's first
+  difference at byte 4385, past every sector the trace had condemned.
+
+  Two things saved it from being believed. The LBA half of the same entry does
+  not depend on that timing, and it was internally consistent -- thirteen blocks
+  in the right order at the addresses 4.2BSD predicts -- so the two halves
+  disagreed with each other. And a 16-bit fold over ~800 writes against ~2000
+  candidate sectors is expected to collide about 24 times by chance, which is
+  more than the "evidence" found. `tools/blktrace_match` prints that number
+  above its output now, and `make -C sim blktrace` is the test the module
+  shipped without: 23 checks, four mutations tried and all four caught -- the
+  fourth only after the test was extended, because recording the key at
+  `blk_done` instead of latching it at `blk_start` passed the first twenty.
+  Writing the testbench also found a second defect the board had not yet shown,
+  where a read's between-strobe idle cycles were folded as bytes of their own.
 
 * **A test harness that runs a stale snapshot when the compile fails, and this
   one did, for every unit test.** `sim/run_unit.sh` guarded each step with
