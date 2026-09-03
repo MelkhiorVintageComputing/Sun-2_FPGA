@@ -162,6 +162,38 @@ module tb_dvma;
    // moment AS rises is what distinguishes the two: released from a negedge
    // flop it rises with clk low, released from the FSM it rises with clk high.
    localparam time CLK_PERIOD = 10;
+
+   // UDS and LDS carry the same requirement as AS and are checked the same way.
+   time uds_fall_t = 0, lds_fall_t = 0;
+   always @(negedge dvma_uds_n) uds_fall_t = $time;
+   always @(negedge dvma_lds_n) lds_fall_t = $time;
+   always @(posedge dvma_uds_n) if (uds_fall_t != 0) begin
+      checks++;
+      if (clk !== 1'b0) begin
+         $display("FAIL: [%t] UDS released on a rising clock edge", $realtime);
+         fail++;
+      end
+      checks++;
+      if (($time - uds_fall_t) * 2 < 5 * CLK_PERIOD) begin
+         $display("FAIL: [%t] UDS asserted only %0t, under 2.5 clocks",
+                  $realtime, $time - uds_fall_t);
+         fail++;
+      end
+   end
+   always @(posedge dvma_lds_n) if (lds_fall_t != 0) begin
+      checks++;
+      if (clk !== 1'b0) begin
+         $display("FAIL: [%t] LDS released on a rising clock edge", $realtime);
+         fail++;
+      end
+      checks++;
+      if (($time - lds_fall_t) * 2 < 5 * CLK_PERIOD) begin
+         $display("FAIL: [%t] LDS asserted only %0t, under 2.5 clocks",
+                  $realtime, $time - lds_fall_t);
+         fail++;
+      end
+   end
+
    time as_fall_t = 0;
    always @(negedge dvma_as_n) as_fall_t = $time;
    always @(posedge dvma_as_n) begin

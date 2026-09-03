@@ -188,13 +188,23 @@ module sun2_dvma(input             CLK,
    // straight to S_DONE, so extending only S_LATCH left the error path
    // releasing AS on a rising edge and 1.5 clocks wide -- caught by
    // tb_dvma's own check rather than by reading the code.
+   // UDS/LDS carry the same requirement and get the same treatment: a 68010
+   // asserts them with AS and releases all three together on the falling edge
+   // of S7.  Held through the extension only for the lanes that were actually
+   // selected -- a byte access drives one of the two, and an unselected lane
+   // must stay negated rather than be dragged low for half a clock.
    reg as_ext;
-   always @(negedge CLK)
-     as_ext <= (state == S_STROBE) || (state == S_LATCH);
+   reg uds_ext_n, lds_ext_n;
+   wire strobing = (state == S_STROBE) || (state == S_LATCH);
+   always @(negedge CLK) begin
+      as_ext    <= strobing;
+      uds_ext_n <= uds_n | ~strobing;
+      lds_ext_n <= lds_n | ~strobing;
+   end
 
    assign dvma_as_n   = ~(state == S_STROBE || state == S_LATCH || as_ext);
-   assign dvma_uds_n  = uds_n;
-   assign dvma_lds_n  = lds_n;
+   assign dvma_uds_n  = uds_n & uds_ext_n;
+   assign dvma_lds_n  = lds_n & lds_ext_n;
 
    // Write data for the half we are on, lanes crossed.
    assign dvma_dout = half ? {wb_dat_i[23:16], wb_dat_i[31:24]}
