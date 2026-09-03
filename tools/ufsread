@@ -192,10 +192,14 @@ def open_fs(image, letter):
 def main(argv):
     ap = argparse.ArgumentParser(description="read a 4.2BSD filesystem in a Sun disk image")
     ap.add_argument("image")
-    ap.add_argument("command", choices=["ls", "cat", "label"])
+    ap.add_argument("command", choices=["ls", "cat", "label", "blocks"])
     ap.add_argument("path", nargs="?", default="/")
     ap.add_argument("-p", "--partition", default="a", help="partition letter (default a)")
     ap.add_argument("-o", "--output", help="write here instead of stdout")
+    ap.add_argument("--lba-offset", type=int, default=0, metavar="N",
+                    help="sectors from the start of the medium to the start of "
+                         "this image, so `blocks' can print absolute card LBAs "
+                         "-- DISK_LBA_OFFSET, e.g. 7340032 for 3584 MiB")
     args = ap.parse_args(argv[1:])
 
     if args.command == "label":
@@ -212,6 +216,33 @@ def main(argv):
         return 0
 
     f, fs, lab = open_fs(args.image, args.partition)
+
+    if args.command == "blocks":
+        # Where a file's data *should* be, to line up against where the machine
+        # actually wrote -- tools/deca_blktrace.tcl gives the other half.
+        #
+        # The chain is inode block pointer -> fragment -> sector, plus the
+        # partition start and then the image's own offset on the medium.  Each
+        # 4.2BSD block is fs_bsize (8 KiB here), which is sixteen sectors, so
+        # one block of a file is one run of sixteen consecutive LBAs -- exactly
+        # the shape a correct trace shows.
+        ino = fs.lookup(args.path)
+        nblk = (ino["size"] + fs.bsize - 1) // fs.bsize
+        secs_per_blk = fs.bsize // SECSIZE
+        print("%s: inode %d, %d bytes, %d blocks of %d"
+              % (args.path, ino["ino"], ino["size"], nblk, fs.bsize))
+        print("  partition starts at image sector %d; image starts at card "
+              "sector %d" % (fs.base // SECSIZE, args.lba_offset))
+        for i in range(nblk):
+            fr = fs._blk(ino, i)
+            if not fr:
+                print("  blk %4d  HOLE" % i)
+                continue
+            sec = (fs._frag_off(fr)) // SECSIZE
+            print("  blk %4d  frag %8d  image sector %8d  card lba %8d..%d"
+                  % (i, fr, sec, sec + args.lba_offset,
+                     sec + args.lba_offset + secs_per_blk - 1))
+        return 0
 
     if args.command == "ls":
         ino = fs.lookup(args.path)

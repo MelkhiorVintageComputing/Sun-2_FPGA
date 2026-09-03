@@ -15,6 +15,7 @@
 #   ./run_unit.sh xy450     sun2_xy450's registers, as the PROM and SunOS probe them
 #   ./run_unit.sh scc       the Z8530's interrupts, driven as SunOS drives them
 #   ./run_unit.sh trace     sun2_trace: the DECA's JTAG-readable capture buffer
+#   ./run_unit.sh blktrace sun2_blktrace: the LBA/signature trace of block transfers
 #   ./run_unit.sh scanout   fb_scanout: DDR3 to pixels, a whole frame checked
 #
 set -e -o pipefail
@@ -76,6 +77,15 @@ clkgen)
 		xsim clkgen_sim -R | grep -E 'wukong_clkgen:|measured|PASS|FAIL|ok$|FAIL$|===|kHz'
 	done
 	;;
+blktrace)
+	# The block trace, whose signature half reached a board unverified and
+	# reported a correctly-copied file as 74% corrupt.  See the testbench
+	# header: the fold is over data that arrives a cycle after the address.
+	step xvlog --sv "$top/rtl/sun2-common/sun2_blktrace.v" "$top/tb/tb_blktrace.sv"
+	step xelab -debug off --timescale 1ns/1ps work.tb_blktrace -s blktrace_sim
+	xsim blktrace_sim -R | grep -E '===|PASS|FAIL|ok:'
+	;;
+
 trace)
 	# The DECA's logic analyser.  It is ordinary RTL precisely so that it can
 	# be tested here rather than only on a board -- SignalTap cannot be, and

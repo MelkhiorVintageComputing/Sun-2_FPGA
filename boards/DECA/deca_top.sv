@@ -857,6 +857,54 @@ module deca_top #(
        .sd_mosi_o (SD_CMD),
        .sd_miso_i (SD_MISO)
    );
+
+ `ifdef SUN2_BLKTRACE
+   // Every block transfer, in order, read out after the fact.  Tapped on
+   // blk_req_media rather than blk_req, so the LBA recorded is the one the card
+   // is actually given -- DISK_LBA_OFFSET included.  That is the number a
+   // filesystem image taken off the card afterwards can be compared against.
+   wire [10:0] bt_src;
+   wire [31:0] bt_data;
+   wire [15:0] bt_wp, bt_nx;
+
+   sun2_blktrace #(.DEPTH_LOG2(10)) blktrace (
+       .clk           (cpu_clk),
+       .rst           (sys_reset),
+       .blk_start     (blk_req_media.start),
+       .blk_we        (blk_req_media.we),
+       .blk_lba       (blk_req_media.lba),
+       .blk_done      (blk_rsp.done),
+       .blk_buf_we    (blk_rsp.buf_we),
+       .blk_buf_addr  (blk_rsp.buf_addr),
+       .blk_buf_wdata (blk_rsp.buf_wdata),
+       .blk_buf_rdata (blk_req_media.buf_rdata),
+       .rd_addr       (bt_src[9:0]),
+       .rd_half       (bt_src[10]),
+       .rd_data       (bt_data),
+       .wr_ptr        (bt_wp),
+       .n_xfer        (bt_nx));
+
+   // 32 + 16 + 16 = 64.  Count it whenever a field changes width: a probe
+   // narrower than its concatenation truncates in silence and every field
+   // below the cut reads as nonsense.
+   altsource_probe #(
+       .sld_auto_instance_index ("YES"),
+       .instance_id             ("BLKT"),
+       .probe_width             (64),
+       .source_width            (11),
+       .source_initial_value    ("0"),
+       // source_clk clocks the hardening registers enable_metastability asks
+       // for, and without it the source never leaves its initial value: the
+       // first readout of this trace returned entry 0 for every index, with
+       // the signature equal to the low half of the LBA, because both halves
+       // were answering a select stuck at zero.  The SUN2 instance above
+       // carries the same note, having been bitten first.
+       .enable_metastability    ("YES")
+   ) u_blktrace_issp (
+       .source_clk (cpu_clk),
+       .probe  ({bt_data, bt_wp, bt_nx}),
+       .source (bt_src));
+ `endif
 `else
    // No Xylogics, so no media.  The card is left deselected rather than
    // undriven: these pins are assigned in deca_pins.qsf whether or not a disk

@@ -617,13 +617,64 @@ module tb_mb_scsi;
       end
       mem_latency = 0;
 
+      // ---------------------------------------------------------------
+      // 13. Many commands back to back -- what a large file really is
+      // ---------------------------------------------------------------
+      // A 4.2BSD block is 8 KiB, so a 106 KB file is thirteen separate
+      // WRITE(6) commands of sixteen sectors each, issued one after another.
+      // Everything above is *one* command; nothing in this tree has ever done
+      // several in a row, and that is precisely the shape that fails on
+      // hardware while 2 KB and 10 KB files survive.
+      //
+      // Each command re-selects, re-arms DMA and reloads dma_addr/dma_count,
+      // but the engine's own carry-over state -- st_odd, data_r, the bus-error
+      // latch -- persists across them, and so does whatever the previous
+      // command left in the target.
+      mem_latency = 13;
+      begin
+         int bad = 0;
+         for (int c = 0; c < 4; c++) begin
+            for (int i = 0; i < 4096; i++)
+              mem[(20'h02000 >> 2) + (i >> 2)][8*(i[1:0]) +: 8]
+                = 8'(((i + c*29)*13 + 8'h6B) & 8'hFF);
+            dma_write(24 + c*8, 20'h02000, 4096, gok, status);
+            if (!gok || status != 8'h00) begin
+               $display("   cmd %0d: gok=%0d status=%02x", c, gok, status);
+               bad++;
+            end
+         end
+         want(bad == 0, $sformatf("four WRITE(6) commands back to back all completed (%0d bad)", bad));
+
+         // ...and every one of them landed, checked from the media.
+         mem_latency = 0;
+         bad = 0;
+         for (int c = 0; c < 4; c++) begin
+            for (int i = 0; i < 4096; i++)
+              mem[(20'h04000 >> 2) + (i >> 2)][8*(i[1:0]) +: 8] = 8'hA5;
+            dma_read(24 + c*8, 20'h04000, 4096, gok, status);
+            for (int i = 0; i < 4096; i++)
+              if (mem_byte(DVMA_BASE + 24'h004000 + i)
+                  != 8'(((i + c*29)*13 + 8'h6B) & 8'hFF)) begin
+                 if (bad < 4)
+                   $display("   cmd %0d byte %0d: got %02x want %02x", c, i,
+                            mem_byte(DVMA_BASE + 24'h004000 + i),
+                            8'(((i + c*29)*13 + 8'h6B) & 8'hFF));
+                 bad++;
+              end
+         end
+         want(bad == 0,
+              $sformatf("...and all four read back byte for byte (%0d wrong)", bad));
+      end
+
       $display("=== tb_mb_scsi: %0d checks, %0d failed ===", checks, fail);
       if (fail == 0) $display("PASS"); else $display("FAIL");
       $finish;
    end
 
    initial begin
-      #40_000_000;
+      // Four back-to-back commands at 13-clock latency, plus their read-back,
+      // cost far more simulated time than a single transfer does.
+      #400_000_000;
       $display("FAIL: tb_mb_scsi timed out");
       $finish;
    end

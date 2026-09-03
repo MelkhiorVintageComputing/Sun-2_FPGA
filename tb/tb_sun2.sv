@@ -1137,6 +1137,7 @@ module tb_sun2 #(
    // the Wishbone word is P_ADR_IN[23:2] and P_A[1] picks the half.
    //
    int mem_rd = 0, match_a = 0, match_b = 0, shown = 0;
+   int dvma_rd = 0, dvma_lag = 0, dvma_now = 0, dvma_shown = 0;
    reg [11:0] prev_ma; reg [22:0] prev_pa; reg prev_valid = 1'b0;
    reg [15:0] prev_exp; reg prev_dvma = 1'b0;
 
@@ -1164,7 +1165,42 @@ module tb_sun2 #(
             // suspicion.
             if (cyc[46] && cyc[0] && !$isunknown(cyc[17:6])) begin
                logic [31:0] dw;
+               // ...and check what this cycle is *carrying* as well as
+               // recording what it asked for.
+               //
+               // Recording alone leaves a hole exactly the shape of a disk
+               // transfer.  The lagged data of a master's read shows up during
+               // the following cycle, so it is only ever compared when a CPU
+               // cycle happens to come next -- and during a disk transfer one
+               // DVMA cycle follows another for thousands in a row, none of
+               // which was ever checked.  That is the direction a disk *write*
+               // uses, and the one place a corrupted master read would not have
+               // been noticed by anything in this tree.
                dw = mem_word(cyc[17:6], cyc[73:51]);
+               // Score *both* candidate mappings and let the run say which,
+               // rather than assuming the CPU branch's one-transaction lag
+               // applies here too.  It does not: a first attempt compared a
+               // master's read against the previous transaction's expectation
+               // and every reported line had `memory held' equal to the line
+               // before's `carried' -- the signature of an off-by-one in the
+               // checker, not of a machine losing data.  Consecutive master
+               // cycles appear to carry their own data, which is a different
+               // relationship from the CPU's and worth measuring rather than
+               // guessing.  A run where neither score is near the total means
+               // this is still wrong and nothing may be concluded from it.
+               if (prev_valid && !$isunknown(cyc[89:74])) begin
+                  logic [15:0] own;
+                  own = cyc[51] ? {dw[31:24], dw[23:16]} : {dw[15:8], dw[7:0]};
+                  dvma_rd++;
+                  if (cyc[89:74] === prev_exp) dvma_lag++;
+                  if (cyc[89:74] === own)      dvma_now++;
+                  if (cyc[89:74] !== prev_exp && cyc[89:74] !== own
+                      && dvma_shown < 12) begin
+                     dvma_shown++;
+                     $display("[%t] MASTER read: carried %04x, this cycle holds %04x, previous %04x",
+                              $realtime, cyc[89:74], own, prev_exp);
+                  end
+               end
                prev_ma    <= cyc[17:6];
                prev_pa    <= cyc[73:51];
                prev_exp   <= cyc[51] ? {dw[31:24], dw[23:16]} : {dw[15:8], dw[7:0]};
@@ -1222,6 +1258,11 @@ module tb_sun2 #(
       $display("longword reads: %0d, of which %0d split by DVMA (%0d master cycles seen)",
                lw_total, lw_split, dvma_cycles);
       $display("CPU memory reads checked: %0d, wrong: %0d", mem_rd, mem_rd - match_a);
+      // Both scores, because which mapping is right is a measurement here and
+      // not an assumption.  On a machine that works one of them should match
+      // essentially every read and the other almost none.
+      $display("DVMA memory reads checked: %0d, matching own cycle: %0d, matching previous: %0d",
+               dvma_rd, dvma_now, dvma_lag);
    endtask
 
    task automatic wrap_up(input string why);

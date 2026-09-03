@@ -55,6 +55,7 @@ array set opt {
     -xy450     0
     -vme_scsi  0
     -mb_scsi   0
+    -blktrace  0
     -loopbuf   0
     -rte_loop  0
     -rte_buf   1
@@ -220,6 +221,20 @@ if {$opt(-mb_scsi) != 0} {
     }
     lappend defines SUN2_MB_SCSI
     puts "== MultiBus SCSI adapter fitted, media on the micro-SD slot =="
+}
+# A trace of every block transfer, for the write-corruption hunt.  Needs a
+# disk, obviously; without one it would compile to a buffer nothing fills.
+if {$opt(-blktrace) != 0} {
+    if {$opt(-xy450) == 0 && $opt(-vme_scsi) == 0 && $opt(-mb_scsi) == 0} {
+        puts "ERROR: -blktrace needs a disk controller (-xy450, -vme_scsi or -mb_scsi)"
+        exit 1
+    }
+    lappend defines SUN2_BLKTRACE
+    puts "== block trace fitted: the last 1024 transfers, read over ISSP =="
+    # The source itself is added further down, with the rest of them.  It
+    # cannot go here: `sv' is created by `set sv [list ...]' below, so a
+    # lappend at this point is silently thrown away and the define reaches a
+    # module nothing compiled -- the same shape as fb_video_en and HDMI30.
 }
 # Only when given.  Empty means "let sun2_config.vh choose", which it does per
 # machine, and both of its answers are inside this range by construction.
@@ -511,6 +526,11 @@ if {$opt(-vme_scsi) != 0 || $opt(-mb_scsi) != 0} {
                $top/rtl/sun2-common/sun2_scsi_core.sv
     if {$opt(-vme_scsi) != 0} { lappend sv $top/rtl/sun2-vme/sun2_vme_scsi.sv }
     if {$opt(-mb_scsi)  != 0} { lappend sv $top/rtl/sun2-multibus/sun2_mb_scsi.sv }
+}
+
+# The block trace, guarded far above where the define is set.
+if {$opt(-blktrace) != 0} {
+    lappend sv $top/rtl/sun2-common/sun2_blktrace.v
 }
 
 # The CPU core.
