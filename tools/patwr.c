@@ -78,6 +78,14 @@
  * The workload that corrupts is a filesystem copy, which stages through kernel
  * buffers.  So the raw device is a useful *control* and not the reproduction.
  *
+ * **A verify is only meaningful if the write finished.**  The first fill-mode
+ * run came back with sector 0 almost entirely "OLD content, same place", which
+ * reads like a catastrophic write failure and was nothing of the kind: the
+ * machine had slowed to about two sectors a second, the pattern pass had not
+ * finished after an hour, and resetting it left a half-written file.  Check
+ * that the write pass printed its summary before believing any verify -- and if
+ * the machine is crawling, that is its own finding and not this one's.
+ *
  * **It writes to the raw device, and the partition matters.**  In Sun's scheme
  * partition 3 -- `c' -- is normally the *whole disk*, overlapping `a' and `b',
  * so writing to `rsd0c' scribbles on the label and the root filesystem and
@@ -101,6 +109,25 @@ char *malloc();
 long  atol();
 long  lseek();
 
+/*
+ * Two generations of the same encoding, differing only in the tag bit.
+ *
+ *   fillword  bit 15 = 0   written first, and left on the medium
+ *   patword   bit 15 = 1   written over it, and what should be read back
+ *
+ * Because only the tag differs, a corrupted word decodes to a position either
+ * way and the tag says which generation it belongs to.  That is the whole
+ * discrimination:
+ *
+ *   tag 0 at its own position  the new word was never written -- the medium
+ *                              still holds what was there before
+ *   tag 0 at another position  old content from somewhere else
+ *   tag 1 at another position  new data displaced, by that many words
+ *
+ * Filling with zeros, as the first run did, cannot tell the first case from the
+ * third: every bad word came back 0000/0001/00ef with no position in it.
+ */
+
 /* The word that belongs at (sector, offset). */
 unsigned short
 patword(sec, off)
@@ -110,17 +137,24 @@ int off;
     return (unsigned short)(0x8000 | (((sec & 0x7f) << 8)) | (off & 0xff));
 }
 
-/* Decode a word back to where it came from.  Returns 0 if it is not ours. */
+unsigned short
+fillword(sec, off)
+long sec;
+int off;
+{
+    return (unsigned short)((((sec & 0x7f) << 8)) | (off & 0xff));
+}
+
+/* Decode a word to its position; returns the generation tag. */
 int
 decode(w, secp, offp)
 unsigned short w;
 long *secp;
 int *offp;
 {
-    if ((w & 0x8000) == 0) return 0;
     *secp = (w >> 8) & 0x7f;
     *offp = w & 0xff;
-    return 1;
+    return (w >> 15) & 1;
 }
 
 static char *dev;
@@ -143,23 +177,22 @@ int off;
 unsigned short want, got;
 {
     long gsec;
-    int  goff;
+    int  goff, gen;
     long dw;
 
     printf("BAD  sector %5ld  word %3d  want %04x  got %04x  ",
            sec, off, want, got);
 
-    if (!decode(got, &gsec, &goff)) {
-        printf("not pattern data\n");
+    gen  = decode(got, &gsec, &goff);
+    dw   = ((gsec - (sec & 0x7f)) & 0x7f) * (long)WPS + (goff - off);
+    if (dw > (64L * WPS)) dw -= 128L * WPS;
+
+    if (gen == 0 && dw == 0) {
+        printf("OLD content, same place: this word was never written\n");
         return;
     }
-
-    /* Distance in words, modulo the 128-sector window. */
-    dw = ((gsec - (sec & 0x7f)) & 0x7f) * (long)WPS + (goff - off);
-    if (dw > (64L * WPS)) dw -= 128L * WPS;      /* fold to nearest */
-
-    printf("= sector %ld word %d, %+ld words (%+ld bytes)\n",
-           gsec, goff, dw, dw * 2);
+    printf("%s gen, sector %ld word %d, %+ld words (%+ld bytes)\n",
+           gen ? "new" : "OLD", gsec, goff, dw, dw * 2);
 }
 
 int
@@ -169,28 +202,34 @@ char **argv;
 {
     unsigned short *buf;
     long sec, base, done;
-    int  off, fd, i, vonly;
+    int  off, fd, i, vonly, fill;
     long chunk = 64;                    /* sectors per I/O, 32 KiB */
     long off_bytes;
 
     if (argc != 5 && argc != 6) {
         fprintf(stderr,
-          "usage: %s <path> <startsec> <nsec> <passes> [-v]\n", argv[0]);
+          "usage: %s <path> <startsec> <nsec> <passes> [-v|-f]\n", argv[0]);
         fprintf(stderr,
-          "       -v verifies only, for a run after a reboot\n");
+          "       -v verify only, for a run after a reboot\n");
+        fprintf(stderr,
+          "       -f write the OLD generation (tag 0) and stop: run this,\n");
+        fprintf(stderr,
+          "          then a normal pass, then -v after a reboot\n");
         return 1;
     }
     dev    = argv[1];
     start  = atol(argv[2]);
     nsec   = atol(argv[3]);
     passes = atoi(argv[4]);
-    vonly  = (argc == 6);
+    vonly  = (argc == 6 && argv[5][1] == 'v');
+    fill   = (argc == 6 && argv[5][1] == 'f');
 
     buf = (unsigned short *)malloc((unsigned)(chunk * SECSZ));
     if (buf == 0) { fprintf(stderr, "out of memory\n"); return 1; }
 
     printf("patwr: %s sectors %ld..%ld, %d pass(es)%s\n",
-           dev, start, start + nsec - 1, passes, vonly ? ", verify only" : "");
+           dev, start, start + nsec - 1, passes,
+           vonly ? ", verify only" : (fill ? ", fill (old generation)" : ""));
 
     for (i = 0; i < passes; i++) {
         if (!vonly) {
@@ -200,7 +239,9 @@ char **argv;
                 long n = (nsec - base < chunk) ? (nsec - base) : chunk;
                 for (sec = 0; sec < n; sec++)
                     for (off = 0; off < WPS; off++)
-                        buf[sec * WPS + off] = patword(start + base + sec, off);
+                        buf[sec * WPS + off] = fill
+                            ? fillword(start + base + sec, off)
+                            : patword(start + base + sec, off);
                 off_bytes = (start + base) * (long)SECSZ;
                 if (lseek(fd, off_bytes, 0) != off_bytes) {perror("lseek w");return 1;}
                 if (write(fd, (char *)buf, (int)(n * SECSZ)) != n * SECSZ) {
@@ -209,6 +250,11 @@ char **argv;
             }
             close(fd);
             sync();
+            /* The fill has to reach the medium before the real pass overwrites
+             * it, or the two coalesce in the buffer cache and the medium never
+             * holds the old generation at all -- which is what makes the
+             * "never written" case visible. */
+            if (fill) { printf("fill written and synced\n"); return 0; }
         }
 
         /* Read-only for the verify: after a reboot the root is mounted ro,
