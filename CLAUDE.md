@@ -992,6 +992,32 @@ through `scsi_fabric`, and lands it in `scsi_targ`'s dual-ported `mem`
 the fault is in what they share, and everything shared above the data itself has
 now been measured clean.
 
+**And the whole chain below it accounts perfectly, which puts the fault in the
+data BrianHG's controller returns.** `deca_wb_to_ddr3` counts the reads it
+issues, the responses it receives, responses arriving outside `D_READ`, and
+reads whose 32-bit lane changed between issue and response -- the last being the
+one *value* selection in the path, since BrianHG returns a 128-bit line and the
+adapter takes a quarter of it by `req_adr[1:0]`. Measured on a run that
+corrupted `csh` at sector 13 and `adb` at sector 171:
+
+```
+  captures      33280   no_load 0   late_load 0   wrong half 0
+  reads issued  38592   responses 38592   unexpected 0   wrong lane 0
+```
+
+So every request has exactly one response, no response arrives unbidden, the
+right quarter of the line is taken, the right half of that word is taken, and
+the master captures it exactly once -- and sixteen bits still arrive wrong. The
+memory holds the right data at that moment (a copy read back from the buffer
+cache before any reboot checksums correctly), so what is left is that the read
+returned the wrong contents. That is inside `Inputs/BrianHG-DDR3`, not in
+anything this project wrote above it.
+
+Worth knowing before chasing it there: the CPU uses the same controller and the
+machine runs for hours, so whatever it is has to be far rarer for the CPU's
+access pattern than for a master's, or invisible to it. `test/deca_ddr3` walks a
+mebibyte and passes, which is the pattern *least* like a disk transfer.
+
 **Getting that instrument to read anything took five separate fixes to the same
 signal, and the lesson is about `ifdef` rather than about DVMA.** The port on
 `sun2_fpga`, its connection in `top_fpga`, the port on `top_fpga`, and the

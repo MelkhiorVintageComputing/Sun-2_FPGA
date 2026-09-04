@@ -36,7 +36,7 @@ set raw [read_probe_data -instance_index $idx]
 
 # Anchor to the end: the tool pads the returned string up to a convenient
 # multiple, and indexing from the front is only right when it happens not to.
-set W 96
+set W 160
 if {[string length $raw] > $W} {
     set raw [string range $raw [expr {[string length $raw] - $W}] end]
 }
@@ -48,6 +48,11 @@ set n_latch     [field $raw 32 16]
 set n_no_load   [field $raw 48 16]
 set n_late_load [field $raw 64 16]
 set n_load      [field $raw 80 16]
+# Appended below dvma_probe, so the offsets above are unchanged.
+set rd_unexp    [field $raw  96 16]
+set rd_ready    [field $raw 112 16]
+set rd_issued   [field $raw 128 16]
+set lane_bad    [field $raw 144 16]
 set seen        0
 
 puts [format "heartbeat    %6d (mod 65536)  -- free-running; 0 means the probe is dead" $n_clk]
@@ -56,6 +61,15 @@ puts [format "captures     %6d (mod 65536)" $n_latch]
 puts [format "no_load      %6d   -- captured with nothing loaded the clock before" $n_no_load]
 puts [format "late_load    %6d   -- more than one load inside one cycle" $n_late_load]
 puts [format "wrong half   %6d   -- load took the other 16 bits of the 32-bit word" $n_half_bad]
+puts ""
+puts "DDR3 adapter (cmd_clk domain, counts may tear on a read; zero is still zero)"
+puts [format "  reads issued   %6d" $rd_issued]
+puts [format "  responses      %6d   -- should track reads issued" $rd_ready]
+puts [format "  unexpected     %6d   -- CMD_read_ready outside D_READ: a response" $rd_unexp]
+puts        "                          with no request to answer, which the next"
+puts        "                          read could take as its own"
+puts [format "  wrong lane     %6d   -- the 32-bit quarter of the 128-bit line" $lane_bad]
+puts        "                          changed between issue and response"
 if {$n_latch == 0} {
     if {$n_load == 0} {
         puts "             and no bridge loads either -- the probe or its readout is dead"

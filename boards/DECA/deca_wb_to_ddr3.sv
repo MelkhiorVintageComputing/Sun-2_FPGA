@@ -82,6 +82,26 @@ module deca_wb_to_ddr3 #(
     output wire [PORT_CACHE_BITS-1:0]  CMD_wdata,
     output wire [PORT_CACHE_BITS/8-1:0] CMD_wmask,
     input  wire                        CMD_read_ready,
+
+    // ---- instrumentation, for tools/deca_dvmaprobe.tcl --------------------
+    // The adapter is single-transaction-in-flight and D_READ consumes whatever
+    // CMD_read_ready presents.  So a response arriving outside that window, or
+    // a second one for the same request, is data from another transaction
+    // sitting where the next read can take it -- which is the shape of the
+    // corruption being chased.  There is no ground truth for the *value* here,
+    // but the request/response accounting can be checked without one.
+    output reg  [15:0]                 dbg_rd_issued,     // reads accepted
+    output reg  [15:0]                 dbg_rd_ready,      // responses seen
+    output reg  [15:0]                 dbg_rd_unexpected, // ... outside D_READ
+    // Reads whose 32-bit lane changed between issue and response.  BrianHG
+    // returns a 128-bit line and this adapter takes one quarter of it by
+    // req_adr[1:0]; req_adr is latched in the wb domain and the response is
+    // consumed in the cmd_clk one, so if a new request overwrote it while a
+    // read was in flight the wrong quarter is taken.  That is 32 bits wrong,
+    // which reaches the machine as *sixteen* -- a DVMA longword is two bridge
+    // transactions contributing half each -- and it is the one value selection
+    // in this path that the request/response accounting above cannot see.
+    output reg  [15:0]                 dbg_lane_bad,
     input  wire [PORT_CACHE_BITS-1:0]  CMD_read_data
 );
 
@@ -96,6 +116,7 @@ module deca_wb_to_ddr3 #(
    reg [3:0]  req_sel;
    reg        req_we;
    reg [31:0] rd_lane;
+   reg [1:0]  lane_at_issue;
 
    reg        req_tgl;      // toggles to launch a transaction   (clk_wb)
    reg        ack_tgl;      // toggles when one completes        (cmd_clk)
@@ -214,7 +235,21 @@ module deca_wb_to_ddr3 #(
          dstate  <= D_IDLE;
          ack_tgl <= 1'b0;
          rd_lane <= 32'h0;
+         dbg_rd_issued     <= 16'd0;
+         dbg_rd_ready      <= 16'd0;
+         dbg_rd_unexpected <= 16'd0;
+         dbg_lane_bad      <= 16'd0;
+         lane_at_issue     <= 2'd0;
       end else begin
+         // Counted outside the case so nothing about the state machine's own
+         // branching can hide them.
+         if (CMD_ena && !req_we)                 dbg_rd_issued <= dbg_rd_issued + 16'd1;
+         if (CMD_read_ready)                     dbg_rd_ready  <= dbg_rd_ready  + 16'd1;
+         if (CMD_read_ready && dstate != D_READ) dbg_rd_unexpected <= dbg_rd_unexpected + 16'd1;
+         if (CMD_ena && !req_we)                 lane_at_issue <= lane;
+         if (CMD_read_ready && dstate == D_READ && lane != lane_at_issue)
+                                                 dbg_lane_bad <= dbg_lane_bad + 16'd1;
+
          case (dstate)
            D_IDLE:
              if (req_pulse) dstate <= D_SEND;

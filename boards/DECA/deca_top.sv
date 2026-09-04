@@ -301,6 +301,9 @@ module deca_top #(
    // From the JTAG side it looked like a healthy machine with every counter at
    // zero, because bit 0 was the only bit with a path.
    wire [95:0]  dvma_probe;
+   // The DDR3 adapter's read accounting, appended *below* dvma_probe in the
+   // ISSP word so every existing offset in tools/deca_dvmaprobe.tcl stays put.
+   wire [15:0]  ddr3_rd_issued, ddr3_rd_ready, ddr3_rd_unexpected, ddr3_lane_bad;
    wire         dvmp_src;   // the ISSP's source, unused but connected
 
    top machine (
@@ -447,6 +450,10 @@ module deca_top #(
        .CMD_wdata      (w_cmd_wdata),
        .CMD_wmask      (w_cmd_wmask),
        .CMD_read_ready (cmd_rready_a[0]),
+       .dbg_rd_issued     (ddr3_rd_issued),
+       .dbg_rd_ready      (ddr3_rd_ready),
+       .dbg_rd_unexpected (ddr3_rd_unexpected),
+       .dbg_lane_bad      (ddr3_lane_bad),
        .CMD_read_data  (cmd_rdata_a[0])
    );
 
@@ -958,12 +965,13 @@ module deca_top #(
        .sld_auto_instance_index ("YES"),
        .instance_id             ("DVMP"),
        .source_initial_value    ("0"),
-       .probe_width             (96),
+       .probe_width             (160),
        .source_width            (1),
        .enable_metastability    ("YES")
    ) u_dvmaprobe_issp (
        .source_clk (cpu_clk),
-       .probe      (dvma_probe),
+       .probe      ({dvma_probe, ddr3_rd_unexpected,
+                    ddr3_rd_ready, ddr3_rd_issued, ddr3_lane_bad}),
        // Connected, not left open.  Both instances on this board that read back
        // correctly -- SUN2 and BLKT -- drive a real wire here, and this one did
        // not; with it open the probe returned a fixed ...0001 whatever was
