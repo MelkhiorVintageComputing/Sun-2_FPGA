@@ -36,18 +36,20 @@ set raw [read_probe_data -instance_index $idx]
 
 # Anchor to the end: the tool pads the returned string up to a convenient
 # multiple, and indexing from the front is only right when it happens not to.
-set W 64
+set W 80
 if {[string length $raw] > $W} {
     set raw [string range $raw [expr {[string length $raw] - $W}] end]
 }
 proc field {raw off len} { return [b2i [string range $raw $off [expr {$off + $len - 1}]]] }
 
-set n_latch     [field $raw  0 16]
-set n_no_load   [field $raw 16 16]
-set n_late_load [field $raw 32 16]
-set n_load      [field $raw 48 16]
+set n_clk       [field $raw  0 16]
+set n_latch     [field $raw 16 16]
+set n_no_load   [field $raw 32 16]
+set n_late_load [field $raw 48 16]
+set n_load      [field $raw 64 16]
 set seen        0
 
+puts [format "heartbeat    %6d (mod 65536)  -- free-running; 0 means the probe is dead" $n_clk]
 puts [format "bridge loads %6d (mod 65536)" $n_load]
 puts [format "captures     %6d (mod 65536)" $n_latch]
 puts [format "no_load      %6d   -- captured with nothing loaded the clock before" $n_no_load]

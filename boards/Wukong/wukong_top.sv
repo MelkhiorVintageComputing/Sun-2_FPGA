@@ -325,12 +325,13 @@ module wukong_top #(
    // it was not.
 `ifdef SUN2_ILA
    wire [117:0] dbg_bus;
+`endif
 
    // sun2_dvma_probe's counters.  Declared and left for the tools to prune:
    // this board has no In-System Sources and Probes, and an unconnected port
    // is how `fb_video_en' reached a bitstream dead for the life of the frame
    // buffer -- so it is connected to a named wire rather than left off.
-   wire [63:0]  dvma_probe;
+   wire [79:0]  dvma_probe;
 
    // Named wires rather than slices straight into the core, because the
    // Hardware Manager names a probe after the net it is driven from -- and

@@ -15,7 +15,7 @@ module tb_dvma_probe;
    reg clk = 0, rst = 1;
    always #5 clk = ~clk;
 
-   reg         brg_load = 0, dvma_latch = 0;
+   reg         brg_load = 0, dvma_latch = 0, dvma_busy = 0;
    reg  [15:0] dvma_din = 0;
    reg  [23:1] dvma_a   = 0;
 
@@ -25,9 +25,10 @@ module tb_dvma_probe;
 
    sun2_dvma_probe dut (
        .clk(clk), .rst(rst),
-       .brg_load(brg_load), .dvma_latch(dvma_latch),
+       .brg_load(brg_load), .dvma_busy(dvma_busy), .dvma_latch(dvma_latch),
        .dvma_din(dvma_din), .dvma_a(dvma_a),
        .n_latch(n_latch), .n_no_load(n_no_load), .n_late_load(n_late_load),
+       .n_clk(), .n_load(),
        .first_a(first_a), .first_d(first_d), .seen(seen));
 
    integer checks = 0, errors = 0;
@@ -39,32 +40,47 @@ module tb_dvma_probe;
       end
    endtask
 
-   // A healthy access: the bridge loads, and the master captures one clock
-   // later.  This is the shape every correct DVMA read has.
+   // A healthy cycle: the strobes go on, the bridge loads once somewhere
+   // inside it, and the master takes the data at the end.  The load is placed
+   // several clocks before the capture on purpose -- that is what the machine
+   // does, and checking only the clock before is the mistake this model was
+   // built to stop repeating.
    task healthy(input [23:1] a, input [15:0] d);
       begin
-         @(posedge clk); brg_load <= 1'b1;
-         @(posedge clk); brg_load <= 1'b0;
-                         dvma_latch <= 1'b1; dvma_a <= a; dvma_din <= d;
-         @(posedge clk); dvma_latch <= 1'b0;
+         @(posedge clk); dvma_busy <= 1'b1;
+         @(posedge clk); brg_load  <= 1'b1;
+         @(posedge clk); brg_load  <= 1'b0;
+         repeat (3) @(posedge clk);
+         dvma_latch <= 1'b1; dvma_a <= a; dvma_din <= d;
+         @(posedge clk); dvma_latch <= 1'b0; dvma_busy <= 1'b0;
+         @(posedge clk);
       end
    endtask
 
-   // The master captures with nothing loaded in the clock before.
+   // A cycle in which the bridge never loaded: the master takes whatever
+   // P_DATA_OUT held from an earlier transaction.
    task no_load(input [23:1] a, input [15:0] d);
       begin
-         @(posedge clk); dvma_latch <= 1'b1; dvma_a <= a; dvma_din <= d;
-         @(posedge clk); dvma_latch <= 1'b0;
+         @(posedge clk); dvma_busy <= 1'b1;
+         repeat (4) @(posedge clk);
+         dvma_latch <= 1'b1; dvma_a <= a; dvma_din <= d;
+         @(posedge clk); dvma_latch <= 1'b0; dvma_busy <= 1'b0;
+         @(posedge clk);
       end
    endtask
 
-   // The bridge loads on the very edge the master captures: both registered
-   // off it, so the master takes the pre-load value.
+   // Two loads inside one cycle: the second overwrote this cycle's data.
    task late_load(input [23:1] a, input [15:0] d);
       begin
-         @(posedge clk); brg_load <= 1'b1; dvma_latch <= 1'b1;
-                         dvma_a <= a; dvma_din <= d;
-         @(posedge clk); brg_load <= 1'b0; dvma_latch <= 1'b0;
+         @(posedge clk); dvma_busy <= 1'b1;
+         @(posedge clk); brg_load  <= 1'b1;
+         @(posedge clk); brg_load  <= 1'b0;
+         @(posedge clk); brg_load  <= 1'b1;
+         @(posedge clk); brg_load  <= 1'b0;
+         @(posedge clk);
+         dvma_latch <= 1'b1; dvma_a <= a; dvma_din <= d;
+         @(posedge clk); dvma_latch <= 1'b0; dvma_busy <= 1'b0;
+         @(posedge clk);
       end
    endtask
 
@@ -103,7 +119,7 @@ module tb_dvma_probe;
       // ---- a load on the same edge ----
       late_load(23'h00CAFE, 16'h5678);
       settle;
-      ck(n_late_load == 1,   "a load on the capture edge is caught");
+      ck(n_late_load == 1,   "two loads in one cycle are caught");
       settle;
       ck(n_no_load == 1,
          "and is not also counted as a no-load: the two are exclusive");

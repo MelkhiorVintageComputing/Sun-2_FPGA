@@ -25,7 +25,7 @@ module top(input         cpu_clk,
 	   // DECA does not define it -- that guard is for the Wukong's Xilinx
 	   // ILA -- and this probe has to exist on the board where the fault it
 	   // watches for actually happens.
-	   output [63:0]  dvma_probe,
+	   output [79:0]  dvma_probe,
 
 	   /* Ethernet diagnostics, for the board top to surface: a PHY that
 	    holds carrier sense asserted stops transmission dead, and it is the
@@ -222,6 +222,7 @@ module top(input         cpu_clk,
    // never masters the bus.
    wire        dbg_wb_load;
    wire        dvma_latch;
+   wire        dvma_busy;
    // Driven by whichever MultiBus master this build has -- xy_dvma or sc_dvma,
    // which are exclusive arms of the same ifdef -- and tied off when it has
    // neither.  Both guards are needed: with only the MB_SCSI one, an XY450
@@ -233,6 +234,7 @@ module top(input         cpu_clk,
 `ifndef SUN2_MB_SCSI
  `ifndef SUN2_XY450
    assign dvma_latch = 1'b0;
+   assign dvma_busy  = 1'b0;
  `endif
 `endif
 
@@ -242,6 +244,7 @@ module top(input         cpu_clk,
        // share reads exactly like a signal that never toggles.
        .clk(C100), .rst(sys_reset),
        .brg_load(dbg_wb_load),
+       .dvma_busy(dvma_busy),
        .dvma_latch(dvma_latch),
        .dvma_din(P_DOUT),
        .dvma_a(dvma_a),
@@ -250,6 +253,7 @@ module top(input         cpu_clk,
        // first-event capture came out while the readout itself was in doubt:
        // an instrument whose numbers cannot be trusted should carry as few
        // fields as possible until they can.
+       .n_clk(dvma_probe[79:64]),
        .n_latch(dvma_probe[63:48]),
        .n_no_load(dvma_probe[47:32]),
        .n_late_load(dvma_probe[31:16]),
@@ -1025,6 +1029,7 @@ module top(input         cpu_clk,
 
 		     .dvma_active(dvma_active),
 		     .dbg_latch(dvma_latch),
+		     .dbg_busy(dvma_busy),
 		     .dvma_a(dvma_a),
 		     .dvma_fc(dvma_fc),
 		     .dvma_as_n(dvma_as_n),
@@ -1129,6 +1134,7 @@ module top(input         cpu_clk,
 
 		     .dvma_active(dvma_active),
 		     .dbg_latch(dvma_latch),
+		     .dbg_busy(dvma_busy),
 		     .dvma_a(dvma_a),
 		     .dvma_fc(dvma_fc),
 		     .dvma_as_n(dvma_as_n),

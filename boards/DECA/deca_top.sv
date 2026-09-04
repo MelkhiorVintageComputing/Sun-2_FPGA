@@ -287,13 +287,21 @@ module deca_top #(
    wire        ev_rx_valid, ev_wr_data, ev_rd_valid, ev_tx_start;
 `ifdef SUN2_ILA
    wire [117:0] dbg_bus;
-
-   // sun2_dvma_probe's counters: {seen, n_latch, n_no_load, n_late_load,
-   // first_a[23:1], first_d}.  Always built -- it is a handful of counters --
-   // and read out only under BLKTRACE, which is the disk-debugging bitstream.
-   wire [63:0]  dvma_probe;
-   wire         dvmp_src;   // the ISSP's source, unused but connected
 `endif
+
+   // sun2_dvma_probe's counters, and the ISSP source that reads them out.
+   //
+   // **Declared outside the SUN2_ILA guard, and that was the last of five
+   // places this same signal had to be moved out of it.**  SUN2_ILA is only
+   // defined under TRACE=1; inside the guard this declaration disappeared in an
+   // ordinary build and every reference below became an *implicit one-bit net*,
+   // silently.  Quartus reports it, and only in the map report's port
+   // connectivity check: "Output port (80 bits) is wider than the port
+   // expression (1 bits) it drives; bit(s) dvma_probe[79..1] have no fanout".
+   // From the JTAG side it looked like a healthy machine with every counter at
+   // zero, because bit 0 was the only bit with a path.
+   wire [79:0]  dvma_probe;
+   wire         dvmp_src;   // the ISSP's source, unused but connected
 
    top machine (
        .cpu_clk        (cpu_clk),
@@ -950,7 +958,7 @@ module deca_top #(
        .sld_auto_instance_index ("YES"),
        .instance_id             ("DVMP"),
        .source_initial_value    ("0"),
-       .probe_width             (64),
+       .probe_width             (80),
        .source_width            (1),
        .enable_metastability    ("YES")
    ) u_dvmaprobe_issp (

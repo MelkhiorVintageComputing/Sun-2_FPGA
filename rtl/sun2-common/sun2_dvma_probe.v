@@ -43,6 +43,7 @@ module sun2_dvma_probe (
 
     // ---- the two halves of the pairing, watched and not touched ----------
     input  wire        brg_load,    // bridge: P_DATA_OUT loads at this edge
+    input  wire        dvma_busy,   // master: its bus cycle is in progress
     input  wire        dvma_latch,  // master: capturing dvma_din at this edge
     input  wire [15:0] dvma_din,    // what it is capturing
     input  wire [23:1] dvma_a,      // and for which address
@@ -56,6 +57,14 @@ module sun2_dvma_probe (
     // n_latch beside a healthy n_load means the master's strobe is.  Without
     // it, "all counters zero" has two explanations and no way to choose.
     output wire [15:0] n_load,
+    // A free-running clock counter.  It proves the whole instrument at once --
+    // the clock arrives, a counter increments, the value crosses the module
+    // boundary, and the readout decodes it -- so a zero anywhere else can be
+    // read as a fact about the machine instead of a question about the probe.
+    // This one exists because four separate guards silently disconnected the
+    // signals above, and nothing in the readout could tell that from a healthy
+    // bus.
+    output wire [15:0] n_clk,
     output wire [23:1] first_a,
     output wire [15:0] first_d,
     output wire        seen
@@ -64,6 +73,7 @@ module sun2_dvma_probe (
    reg load_d;                      // a load happened in the previous clock
 
    reg [15:0] latches, no_load, late_load, loads;
+   reg [15:0] heartbeat;
    reg [23:1] f_a;
    reg [15:0] f_d;
    reg        f_seen;
@@ -72,8 +82,23 @@ module sun2_dvma_probe (
    // not a no_load: data did arrive, it arrived one edge too late to be the
    // value taken.  Counting it as both would inflate no_load and make the two
    // numbers impossible to reason about separately.
-   wire bad_late_load = dvma_latch &  brg_load;
-   wire bad_no_load   = dvma_latch & ~load_d & ~brg_load;
+   // **Count the loads across the master's whole cycle, not in the clock before
+   // the capture.**  The first version checked the clock before, on the theory
+   // that the bridge presents data the clock after it acknowledges and the
+   // master captures a clock after seeing DTACK.  Measured on the board, that
+   // flagged *every* capture -- 11282 of 11282 -- which is not a machine that
+   // boots, so the model was wrong and not the bus.  W_ACK is
+   // `(wb_ack_i & issued) | done', and the DTACK the master actually waits on
+   // is gated further by sun2_fpga's C_S chain, so the load lands somewhere
+   // inside the cycle rather than one clock before its end.
+   //
+   // The property that does hold: exactly one load between the strobes going on
+   // and the data being taken.  None means the master took whatever
+   // P_DATA_OUT still held from an earlier transaction; more than one means a
+   // second load overwrote this cycle's data before it was read.
+   reg [3:0] loads_this_cycle;
+   wire bad_no_load   = dvma_latch & (loads_this_cycle == 4'd0);
+   wire bad_late_load = dvma_latch & (loads_this_cycle >  4'd1);
 
    always @(posedge clk) begin
       if (rst) begin
@@ -82,9 +107,18 @@ module sun2_dvma_probe (
          no_load   <= 16'd0;
          late_load <= 16'd0;
          loads     <= 16'd0;
+         heartbeat <= 16'd0;
+         loads_this_cycle <= 4'd0;
          f_seen    <= 1'b0;
       end else begin
+         heartbeat <= heartbeat + 16'd1;
          load_d <= brg_load;
+
+         // Reset the per-cycle tally when the master is not in a cycle, and
+         // saturate rather than wrap: two is already "more than one".
+         if (!dvma_busy)                        loads_this_cycle <= 4'd0;
+         else if (brg_load && loads_this_cycle != 4'd15)
+                                                loads_this_cycle <= loads_this_cycle + 4'd1;
          if (brg_load) loads <= loads + 16'd1;
 
          if (dvma_latch) begin
@@ -108,6 +142,7 @@ module sun2_dvma_probe (
    assign n_no_load   = no_load;
    assign n_late_load = late_load;
    assign n_load      = loads;
+   assign n_clk       = heartbeat;
    assign first_a     = f_a;
    assign first_d     = f_d;
    assign seen        = f_seen;

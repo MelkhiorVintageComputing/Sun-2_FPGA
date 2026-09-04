@@ -75,6 +75,11 @@ module sun2_dvma(input             CLK,
 		 // High during the clock whose trailing edge loads rd_lo/rd_hi
 		 // from dvma_din, for sun2_dvma_probe.
 		 output 	   dbg_latch,
+		 // The master's own bus cycle: strobes asserted, data not yet
+		 // taken.  sun2_dvma_probe counts bridge loads across this
+		 // window -- see its header for why the clock before the
+		 // capture is the wrong thing to look at.
+		 output 	   dbg_busy,
 		 output [23:1] 	   dvma_a,
 		 output [2:0] 	   dvma_fc,
 		 output 	   dvma_as_n,
@@ -161,7 +166,14 @@ module sun2_dvma(input             CLK,
    // and it saves a second round trip through the core's arbiter.
    assign P_BR_n = ~(state != S_IDLE && state != S_ACK);
 
-   assign dbg_latch   = (state == S_LATCH);
+   // **Read cycles only.**  S_LATCH runs on writes too -- it is where the
+   // strobes are released -- and a write produces no P_DATA_OUT load, because
+   // the bridge only loads on `~wb_we_o'.  Counting write cycles as captures
+   // therefore flagged every one of them: on the board that was 11282 of 11282,
+   // which is a boot streaming a disk *into* memory, not a broken bus.  The
+   // pairing being watched exists only in the direction where the master reads.
+   assign dbg_latch   = (state == S_LATCH) && ~wb_we_i;
+   assign dbg_busy    = ((state == S_STROBE) || (state == S_LATCH)) && ~wb_we_i;
    assign dvma_active = own;
    assign dvma_a      = {wb_adr_i, half};
    assign dvma_fc     = 3'b101; // supervisor data, as the U215 PAL drives it

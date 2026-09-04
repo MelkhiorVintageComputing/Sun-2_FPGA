@@ -964,6 +964,55 @@ copies made from them looked corrupt against the reference image while being
 faithful copies of a damaged source. Verify the *sources* on the machine before
 each run; the card carries pristine copies at several offsets for this reason.
 
+**The bridge-to-master handoff is clean, and that was the last named
+candidate.** `sun2_dvma_probe` (`BLKTRACE=1`, read by `tools/deca_dvmaprobe.tcl`)
+watches the one pairing that exists only in the failing direction:
+`sun2_wishbone_bridge` loads `P_DATA_OUT` on `wb_ack_i & issued`, and
+`sun2_dvma` captures `dvma_din` at the end of `S_LATCH`. Over a run of three
+copies it counted **33,280 memory-read captures with exactly one bridge load
+inside every one** -- no captures with none, none with two -- and the same run
+corrupted `csh` at sector 77, confirmed by `cmp` after a reboot. So the master
+takes the word its own cycle asked for, and the corruption is either in the data
+the bridge was given (DDR3 and `deca_wb_to_ddr3`) or after the capture, between
+`sun2_dvma` and the sector buffer.
+
+**Getting that instrument to read anything took five separate fixes to the same
+signal, and the lesson is about `ifdef` rather than about DVMA.** The port on
+`sun2_fpga`, its connection in `top_fpga`, the port on `top_fpga`, and the
+declaration *and* connection in `deca_top` were each inside `` `ifdef SUN2_ILA ``,
+which is only defined under `TRACE=1`. In an ordinary build every one of them
+vanished, and the readout showed a healthy machine with all counters zero. The
+declaration was the worst of them: with it compiled out, `dvma_probe` became an
+**implicit one-bit net**, so bit 0 had a path and bits 79..1 did not -- which is
+why the probe returned a fixed `...0001` whatever was wired to it, including a
+hardcoded constant.
+
+Quartus reports that, and in exactly one place: the map report's port
+connectivity check, `Output port (80 bits) is wider than the port expression
+(1 bits) it drives`. Nothing appears in the console log, and binding a
+connection to a port that does not exist produces no message at all. `grep -A6
+'Port Connectivity Checks' build/syn/quartus/*/sun2.map.rpt` is the check to run
+after adding any signal that crosses a module boundary.
+
+Two probe design rules came out of it, both cheap and both load-bearing:
+
+* **A free-running heartbeat counter.** It proves clock, counter, module
+  crossing and readout in one number, so a zero anywhere else is a fact about
+  the machine rather than a question about the probe.
+* **A counter for something that must be busy.** Bridge loads happen on every
+  CPU memory read, so zero there can only be the instrument. Without it, "all
+  counters zero" has two explanations and no way to choose -- which is precisely
+  where this sat for four builds.
+
+And two wrong models the board corrected, neither of which reading the RTL had
+caught. The first invariant was "a load in the clock before the capture", which
+flagged 11282 of 11282 captures: `W_ACK` is `(wb_ack_i & issued) | done` and the
+DTACK the master waits on is gated further by the `C_S` chain, so the load lands
+somewhere inside the cycle. The second was counting *every* `S_LATCH`, which
+flagged everything again -- `S_LATCH` runs on writes too, and a write produces no
+load at all, so a boot streaming a disk into memory looks like total failure.
+100% of anything is a broken model, not a broken machine.
+
 **Do not read a signature out of a trace without checking the instrument
 first.** The signature half of `sun2_blktrace` was wrong on its first outing --
 see the trap below -- and it named two sectors of other files as the intruders
