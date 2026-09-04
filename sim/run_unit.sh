@@ -16,6 +16,7 @@
 #   ./run_unit.sh scc       the Z8530's interrupts, driven as SunOS drives them
 #   ./run_unit.sh trace     sun2_trace: the DECA's JTAG-readable capture buffer
 #   ./run_unit.sh blktrace sun2_blktrace: the LBA/signature trace of block transfers
+#   ./run_unit.sh dvmaprobe sun2_dvma_probe: the bridge-load / master-capture pairing
 #   ./run_unit.sh scanout   fb_scanout: DDR3 to pixels, a whole frame checked
 #
 set -e -o pipefail
@@ -77,6 +78,15 @@ clkgen)
 		xsim clkgen_sim -R | grep -E 'wukong_clkgen:|measured|PASS|FAIL|ok$|FAIL$|===|kHz'
 	done
 	;;
+dvmaprobe)
+	# The bridge-load / master-capture pairing.  Written before the probe was
+	# ever built into a bitstream, because this one is going to be used to
+	# accuse a specific pair of registers.
+	step xvlog --sv "$top/rtl/sun2-common/sun2_dvma_probe.v" "$top/tb/tb_dvma_probe.sv"
+	step xelab -debug off --timescale 1ns/1ps work.tb_dvma_probe -s dvmaprobe_sim
+	xsim dvmaprobe_sim -R | grep -E '===|PASS|FAIL|ok:'
+	;;
+
 blktrace)
 	# The block trace, whose signature half reached a board unverified and
 	# reported a correctly-copied file as 74% corrupt.  See the testbench

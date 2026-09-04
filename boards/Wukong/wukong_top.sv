@@ -326,6 +326,12 @@ module wukong_top #(
 `ifdef SUN2_ILA
    wire [117:0] dbg_bus;
 
+   // sun2_dvma_probe's counters.  Declared and left for the tools to prune:
+   // this board has no In-System Sources and Probes, and an unconnected port
+   // is how `fb_video_en' reached a bitstream dead for the life of the frame
+   // buffer -- so it is connected to a named wire rather than left off.
+   wire [63:0]  dvma_probe;
+
    // Named wires rather than slices straight into the core, because the
    // Hardware Manager names a probe after the net it is driven from -- and
    // eight slices of one net all get that net's name.  Vivado then called the
@@ -487,8 +493,15 @@ module wukong_top #(
        .todebug    (todebug),
        .fb_video_en (fb_video_en),
 `ifdef SUN2_ILA
-       .dbg_bus    (dbg_bus),
+       .dbg_bus        (dbg_bus),
 `endif
+       // Outside the guard: SUN2_ILA is only defined under TRACE=1, and this
+       // probe has to exist in an ordinary build.  Four separate places had
+       // this same connection inside that guard -- the port and the wiring in
+       // sun2_fpga, and both again here -- and each read back as a healthy
+       // machine because an undriven wire is all zeros.
+       .dvma_probe     (dvma_probe),
+
 
        .eth_crs_stuck (eth_crs_stuck),
 

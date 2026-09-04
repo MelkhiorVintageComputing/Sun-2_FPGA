@@ -135,6 +135,20 @@ module sun2_fpga(input         cpu_clk,
 		 // field map below.  Debug only: nothing downstream of here reads it.
 		 input         dbg_dvma_active,
 `endif
+
+		 // The Wishbone bridge's P_DATA_OUT load enable, for
+		 // sun2_dvma_probe in top_fpga: the other half of the pairing
+		 // lives up there, on the master.
+		 //
+		 // **Outside the SUN2_ILA guard, and that is the whole point.**
+		 // It was inside it first.  SUN2_ILA is only defined under
+		 // TRACE=1, so in an ordinary build the port did not exist, the
+		 // connection in top_fpga bound to nothing, and the wire sat
+		 // undriven at zero -- a probe reporting a perfectly healthy
+		 // machine because it was watching a constant.  The counter for
+		 // bridge loads is what caught it: the CPU makes those on every
+		 // memory read, so zero there could only be the instrument.
+		 output          dbg_wb_load,
 		 /* wishbone */
 		 output        wb_cyc_o,
 		 output        wb_stb_o,
@@ -1160,6 +1174,7 @@ module sun2_fpga(input         cpu_clk,
    assign L_M_MAP_SEEN = (leds == 8'h8F); 
    
    sun2_wishbone_bridge #(.FB_WB_BASE(`FB_WB_BASE)) wbridge(.CLK(C100),
+							   .dbg_load(dbg_wb_load),
 				// Power-up state, not reset state.  ENABLE is armed
 				// when the monitor writes LED code 0x8F and gates
 				// wb_cyc/wb_stb, so while it is clear main memory

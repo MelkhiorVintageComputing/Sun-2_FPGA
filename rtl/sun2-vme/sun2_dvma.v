@@ -71,6 +71,10 @@ module sun2_dvma(input             CLK,
 		 // the CPU's own outputs when dvma_active is set.
 		 //
 		 output 	   dvma_active,
+
+		 // High during the clock whose trailing edge loads rd_lo/rd_hi
+		 // from dvma_din, for sun2_dvma_probe.
+		 output 	   dbg_latch,
 		 output [23:1] 	   dvma_a,
 		 output [2:0] 	   dvma_fc,
 		 output 	   dvma_as_n,
@@ -157,6 +161,7 @@ module sun2_dvma(input             CLK,
    // and it saves a second round trip through the core's arbiter.
    assign P_BR_n = ~(state != S_IDLE && state != S_ACK);
 
+   assign dbg_latch   = (state == S_LATCH);
    assign dvma_active = own;
    assign dvma_a      = {wb_adr_i, half};
    assign dvma_fc     = 3'b101; // supervisor data, as the U215 PAL drives it

@@ -287,6 +287,12 @@ module deca_top #(
    wire        ev_rx_valid, ev_wr_data, ev_rd_valid, ev_tx_start;
 `ifdef SUN2_ILA
    wire [117:0] dbg_bus;
+
+   // sun2_dvma_probe's counters: {seen, n_latch, n_no_load, n_late_load,
+   // first_a[23:1], first_d}.  Always built -- it is a handful of counters --
+   // and read out only under BLKTRACE, which is the disk-debugging bitstream.
+   wire [63:0]  dvma_probe;
+   wire         dvmp_src;   // the ISSP's source, unused but connected
 `endif
 
    top machine (
@@ -305,6 +311,13 @@ module deca_top #(
 `ifdef SUN2_ILA
        .dbg_bus        (dbg_bus),
 `endif
+       // Outside the guard: SUN2_ILA is only defined under TRACE=1, and this
+       // probe has to exist in an ordinary build.  Four separate places had
+       // this same connection inside that guard -- the port and the wiring in
+       // sun2_fpga, and both again here -- and each read back as a healthy
+       // machine because an undriven wire is all zeros.
+       .dvma_probe     (dvma_probe),
+
        .eth_crs_stuck  (eth_crs_stuck),
        .fb_video_en    (fb_video_en),
 
@@ -928,6 +941,27 @@ module deca_top #(
        .source_clk (cpu_clk),
        .probe  ({bt_data, bt_wp, bt_nx}),
        .source (bt_src));
+
+   // The pairing counters, read with tools/deca_dvmaprobe.tcl.  A separate
+   // instance rather than extra bits on the block trace's probe: that one is
+   // indexed by a source and adding fields to it shifts every existing offset,
+   // which this project has already silently invalidated a decode by doing.
+   altsource_probe #(
+       .sld_auto_instance_index ("YES"),
+       .instance_id             ("DVMP"),
+       .source_initial_value    ("0"),
+       .probe_width             (64),
+       .source_width            (1),
+       .enable_metastability    ("YES")
+   ) u_dvmaprobe_issp (
+       .source_clk (cpu_clk),
+       .probe      (dvma_probe),
+       // Connected, not left open.  Both instances on this board that read back
+       // correctly -- SUN2 and BLKT -- drive a real wire here, and this one did
+       // not; with it open the probe returned a fixed ...0001 whatever was
+       // wired to it, including a hardcoded constant.
+       .source     (dvmp_src));
+
  `endif
 `else
    // No Xylogics, so no media.  The card is left deselected rather than

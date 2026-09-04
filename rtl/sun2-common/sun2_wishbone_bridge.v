@@ -35,6 +35,12 @@ module sun2_wishbone_bridge #(
 			     input 	       MATCH_MEM,
 			     input 	       MATCH_FB,
 			     output 	       W_ACK,
+
+			     // The P_DATA_OUT load enable, for sun2_dvma_probe.
+			     // A master captures dvma_din exactly one clock
+			     // after this pulses; nothing but that convention
+			     // pairs the two registers, and the probe checks it.
+			     output 	       dbg_load,
 			     
 			     // wishbone
 			     output 	       wb_cyc_o,
@@ -166,5 +172,7 @@ module sun2_wishbone_bridge #(
 	  //else P_DATA_OUT[15:0] <= P_DATA_OUT[15:0] + 1;
 	
      end
+
+   assign dbg_load = ENABLE & wb_ack_i & issued & ~wb_we_o;
 
 endmodule // sun3_wishbone_bridge
