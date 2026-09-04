@@ -149,6 +149,8 @@ module sun2_fpga(input         cpu_clk,
 		 // bridge loads is what caught it: the CPU makes those on every
 		 // memory read, so zero there could only be the instrument.
 		 output          dbg_wb_load,
+		 // ... and which half that load took.
+		 output          dbg_wb_load_half,
 		 /* wishbone */
 		 output        wb_cyc_o,
 		 output        wb_stb_o,
@@ -1175,6 +1177,7 @@ module sun2_fpga(input         cpu_clk,
    
    sun2_wishbone_bridge #(.FB_WB_BASE(`FB_WB_BASE)) wbridge(.CLK(C100),
 							   .dbg_load(dbg_wb_load),
+							   .dbg_load_half(dbg_wb_load_half),
 				// Power-up state, not reset state.  ENABLE is armed
 				// when the monitor writes LED code 0x8F and gates
 				// wb_cyc/wb_stb, so while it is clear main memory

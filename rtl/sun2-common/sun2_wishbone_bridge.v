@@ -41,6 +41,10 @@ module sun2_wishbone_bridge #(
 			     // after this pulses; nothing but that convention
 			     // pairs the two registers, and the probe checks it.
 			     output 	       dbg_load,
+			     // Which 16-bit half of the 32-bit word the load
+			     // took, for sun2_dvma_probe.  Valid in the clock
+			     // dbg_load is high.
+			     output 	       dbg_load_half,
 			     
 			     // wishbone
 			     output 	       wb_cyc_o,
@@ -174,5 +178,6 @@ module sun2_wishbone_bridge #(
      end
 
    assign dbg_load = ENABLE & wb_ack_i & issued & ~wb_we_o;
+   assign dbg_load_half = P_ADR_IN[1];
 
 endmodule // sun3_wishbone_bridge

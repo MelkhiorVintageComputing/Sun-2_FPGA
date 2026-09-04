@@ -16,19 +16,21 @@ module tb_dvma_probe;
    always #5 clk = ~clk;
 
    reg         brg_load = 0, dvma_latch = 0, dvma_busy = 0;
+   reg         brg_half = 0;
    reg  [15:0] dvma_din = 0;
    reg  [23:1] dvma_a   = 0;
 
-   wire [15:0] n_latch, n_no_load, n_late_load, first_d;
+   wire [15:0] n_latch, n_no_load, n_late_load, first_d, n_half_bad;
    wire [23:1] first_a;
    wire        seen;
 
    sun2_dvma_probe dut (
        .clk(clk), .rst(rst),
-       .brg_load(brg_load), .dvma_busy(dvma_busy), .dvma_latch(dvma_latch),
+       .brg_load(brg_load), .brg_half(brg_half),
+       .dvma_busy(dvma_busy), .dvma_latch(dvma_latch),
        .dvma_din(dvma_din), .dvma_a(dvma_a),
        .n_latch(n_latch), .n_no_load(n_no_load), .n_late_load(n_late_load),
-       .n_clk(), .n_load(),
+       .n_clk(), .n_load(), .n_half_bad(n_half_bad),
        .first_a(first_a), .first_d(first_d), .seen(seen));
 
    integer checks = 0, errors = 0;
@@ -47,8 +49,9 @@ module tb_dvma_probe;
    // built to stop repeating.
    task healthy(input [23:1] a, input [15:0] d);
       begin
+         dvma_a <= a;                       // the address is up before the load
          @(posedge clk); dvma_busy <= 1'b1;
-         @(posedge clk); brg_load  <= 1'b1;
+         @(posedge clk); brg_load  <= 1'b1; brg_half <= a[1];
          @(posedge clk); brg_load  <= 1'b0;
          repeat (3) @(posedge clk);
          dvma_latch <= 1'b1; dvma_a <= a; dvma_din <= d;
@@ -72,6 +75,7 @@ module tb_dvma_probe;
    // Two loads inside one cycle: the second overwrote this cycle's data.
    task late_load(input [23:1] a, input [15:0] d);
       begin
+         dvma_a <= a; brg_half <= a[1];     // the half the master asked for
          @(posedge clk); dvma_busy <= 1'b1;
          @(posedge clk); brg_load  <= 1'b1;
          @(posedge clk); brg_load  <= 1'b0;
@@ -131,6 +135,26 @@ module tb_dvma_probe;
       ck(first_a == 23'h00BEEF, "but the first event's address survives");
       ck(first_d == 16'h1234,   "and its data");
 
+      // ---- a load that took the wrong half of the word ----
+      // The bridge picks by P_ADR_IN[1] and the master asks for dvma_a[1].  A
+      // disagreement hands the master sixteen bits of the neighbouring word --
+      // the granule the corruption actually has -- and the one-load-per-cycle
+      // check cannot see it, because a load did happen.
+      begin
+         dvma_a <= 23'h001001;                                  // half = 1
+         @(posedge clk); dvma_busy <= 1'b1;
+         @(posedge clk); brg_load <= 1'b1; brg_half <= 1'b0;    // wrong half
+         @(posedge clk); brg_load <= 1'b0;
+         repeat (3) @(posedge clk);
+         dvma_latch <= 1'b1; dvma_din <= 16'hDEAD;
+         @(posedge clk); dvma_latch <= 1'b0; dvma_busy <= 1'b0;
+         @(posedge clk);
+      end
+      settle;
+      ck(n_half_bad == 1, "a load that took the wrong half is caught");
+      settle;
+      ck(n_no_load == 2,  "and not as a missing load: one did happen");
+
       // ---- healthy traffic after a violation stays quiet ----
       for (i = 0; i < 10; i = i + 1) healthy(23'h002000 + i[22:0], 16'hB000 + i[15:0]);
       settle;
@@ -144,7 +168,7 @@ module tb_dvma_probe;
       repeat (5) @(posedge clk);
       brg_load <= 1'b0; @(posedge clk);
       settle;
-      ck(n_latch == 33 && n_no_load == 2 && n_late_load == 1,
+      ck(n_latch == 34 && n_no_load == 2 && n_late_load == 1,
          "bridge loads without a capture are ignored");
 
       $display("=== %0d checks, %0d failures ===", checks, errors);

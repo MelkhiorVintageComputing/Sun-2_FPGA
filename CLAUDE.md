@@ -964,17 +964,33 @@ copies made from them looked corrupt against the reference image while being
 faithful copies of a damaged source. Verify the *sources* on the machine before
 each run; the card carries pristine copies at several offsets for this reason.
 
-**The bridge-to-master handoff is clean, and that was the last named
-candidate.** `sun2_dvma_probe` (`BLKTRACE=1`, read by `tools/deca_dvmaprobe.tcl`)
+**The bridge-to-master handoff is clean, including which half of the word it
+took.** `sun2_dvma_probe` (`BLKTRACE=1`, read by `tools/deca_dvmaprobe.tcl`)
 watches the one pairing that exists only in the failing direction:
 `sun2_wishbone_bridge` loads `P_DATA_OUT` on `wb_ack_i & issued`, and
 `sun2_dvma` captures `dvma_din` at the end of `S_LATCH`. Over a run of three
 copies it counted **33,280 memory-read captures with exactly one bridge load
-inside every one** -- no captures with none, none with two -- and the same run
-corrupted `csh` at sector 77, confirmed by `cmp` after a reboot. So the master
-takes the word its own cycle asked for, and the corruption is either in the data
-the bridge was given (DDR3 and `deca_wb_to_ddr3`) or after the capture, between
-`sun2_dvma` and the sector buffer.
+inside every one**, none with none, none with two, and **none that took the
+wrong half** -- while the same run corrupted `csh` at sector 45 and `adb` at
+sector 157, both confirmed by `cmp` after a reboot with the sources verified
+pristine beforehand.
+
+The half check matters because of the granule. A DVMA longword is two 68010
+cycles, each of which fetches a 32-bit word from DDR3 and takes 16 bits of it by
+`P_ADR_IN[1]`; the corruption is 16 bits wide, so a wrong half-select was the
+natural fit and is now excluded by measurement. **What is left is the value**:
+the master got exactly one load, from the half it asked for, and the data in
+that half was wrong. That points below the bridge -- `deca_wb_to_ddr3` and
+BrianHG's controller -- and not at the handshake above it.
+
+**The two controllers agreeing is what makes that argument tight.** After
+`sun2_dvma` the paths share nothing: the XY450 unpacks `wb_dat_i` straight into
+its own `sbuf` through one muxed write port (`sun2_xy450.sv:851,320`), while the
+SCSI card stages the longword, walks it out a byte at a time across the SCSI bus
+through `scsi_fabric`, and lands it in `scsi_targ`'s dual-ported `mem`
+(`sun2_scsi_core.sv:618,193`, `scsi_targ.sv:154`). Both corrupt identically, so
+the fault is in what they share, and everything shared above the data itself has
+now been measured clean.
 
 **Getting that instrument to read anything took five separate fixes to the same
 signal, and the lesson is about `ifdef` rather than about DVMA.** The port on

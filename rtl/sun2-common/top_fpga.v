@@ -25,7 +25,7 @@ module top(input         cpu_clk,
 	   // DECA does not define it -- that guard is for the Wukong's Xilinx
 	   // ILA -- and this probe has to exist on the board where the fault it
 	   // watches for actually happens.
-	   output [79:0]  dvma_probe,
+	   output [95:0]  dvma_probe,
 
 	   /* Ethernet diagnostics, for the board top to surface: a PHY that
 	    holds carrier sense asserted stops transmission dead, and it is the
@@ -221,6 +221,7 @@ module top(input         cpu_clk,
    // probe then counts nothing, which is the honest reading of a machine that
    // never masters the bus.
    wire        dbg_wb_load;
+   wire        dbg_wb_load_half;
    wire        dvma_latch;
    wire        dvma_busy;
    // Driven by whichever MultiBus master this build has -- xy_dvma or sc_dvma,
@@ -244,6 +245,7 @@ module top(input         cpu_clk,
        // share reads exactly like a signal that never toggles.
        .clk(C100), .rst(sys_reset),
        .brg_load(dbg_wb_load),
+       .brg_half(dbg_wb_load_half),
        .dvma_busy(dvma_busy),
        .dvma_latch(dvma_latch),
        .dvma_din(P_DOUT),
@@ -253,6 +255,7 @@ module top(input         cpu_clk,
        // first-event capture came out while the readout itself was in doubt:
        // an instrument whose numbers cannot be trusted should carry as few
        // fields as possible until they can.
+       .n_half_bad(dvma_probe[95:80]),
        .n_clk(dvma_probe[79:64]),
        .n_latch(dvma_probe[63:48]),
        .n_no_load(dvma_probe[47:32]),
@@ -370,6 +373,7 @@ module top(input         cpu_clk,
 		  // and the same pair one level up in top_fpga -- that each had
 		  // to be moved out before the probe saw a single bridge load.
 		  .dbg_wb_load(dbg_wb_load),
+		  .dbg_wb_load_half(dbg_wb_load_half),
 				
 		  // wishbone
 		  .wb_cyc_o(wb_cyc_o),

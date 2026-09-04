@@ -43,6 +43,7 @@ module sun2_dvma_probe (
 
     // ---- the two halves of the pairing, watched and not touched ----------
     input  wire        brg_load,    // bridge: P_DATA_OUT loads at this edge
+    input  wire        brg_half,    // ... and which 16-bit half it took
     input  wire        dvma_busy,   // master: its bus cycle is in progress
     input  wire        dvma_latch,  // master: capturing dvma_din at this edge
     input  wire [15:0] dvma_din,    // what it is capturing
@@ -65,6 +66,12 @@ module sun2_dvma_probe (
     // signals above, and nothing in the readout could tell that from a healthy
     // bus.
     output wire [15:0] n_clk,
+    // Loads that took the *wrong half* of the 32-bit word.  The bridge selects
+    // by P_ADR_IN[1] at the load edge; the master asks for dvma_a[1].  These
+    // must agree, and if they ever do not the master gets sixteen bits of the
+    // neighbouring word -- which is the exact granule of the corruption being
+    // chased, and something the one-load-per-cycle check above cannot see.
+    output wire [15:0] n_half_bad,
     output wire [23:1] first_a,
     output wire [15:0] first_d,
     output wire        seen
@@ -73,7 +80,8 @@ module sun2_dvma_probe (
    reg load_d;                      // a load happened in the previous clock
 
    reg [15:0] latches, no_load, late_load, loads;
-   reg [15:0] heartbeat;
+   reg [15:0] heartbeat, half_bad;
+   reg        load_half;
    reg [23:1] f_a;
    reg [15:0] f_d;
    reg        f_seen;
@@ -108,6 +116,7 @@ module sun2_dvma_probe (
          late_load <= 16'd0;
          loads     <= 16'd0;
          heartbeat <= 16'd0;
+         half_bad  <= 16'd0;
          loads_this_cycle <= 4'd0;
          f_seen    <= 1'b0;
       end else begin
@@ -117,13 +126,18 @@ module sun2_dvma_probe (
          // Reset the per-cycle tally when the master is not in a cycle, and
          // saturate rather than wrap: two is already "more than one".
          if (!dvma_busy)                        loads_this_cycle <= 4'd0;
-         else if (brg_load && loads_this_cycle != 4'd15)
-                                                loads_this_cycle <= loads_this_cycle + 4'd1;
+         else if (brg_load && loads_this_cycle != 4'd15) begin
+            loads_this_cycle <= loads_this_cycle + 4'd1;
+            load_half        <= brg_half;      // which half this load took
+         end
          if (brg_load) loads <= loads + 16'd1;
 
          if (dvma_latch) begin
             latches <= latches + 16'd1;
             if (bad_no_load)   no_load   <= no_load   + 16'd1;
+            // Only meaningful when a load actually happened in this cycle.
+            if (!bad_no_load && (load_half != dvma_a[1]))
+                               half_bad  <= half_bad  + 16'd1;
             if (bad_late_load) late_load <= late_load + 16'd1;
 
             // The first one only: a later violation cannot overwrite the
@@ -143,6 +157,7 @@ module sun2_dvma_probe (
    assign n_late_load = late_load;
    assign n_load      = loads;
    assign n_clk       = heartbeat;
+   assign n_half_bad  = half_bad;
    assign first_a     = f_a;
    assign first_d     = f_d;
    assign seen        = f_seen;

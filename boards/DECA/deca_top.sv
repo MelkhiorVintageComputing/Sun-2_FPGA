@@ -300,7 +300,7 @@ module deca_top #(
    // expression (1 bits) it drives; bit(s) dvma_probe[79..1] have no fanout".
    // From the JTAG side it looked like a healthy machine with every counter at
    // zero, because bit 0 was the only bit with a path.
-   wire [79:0]  dvma_probe;
+   wire [95:0]  dvma_probe;
    wire         dvmp_src;   // the ISSP's source, unused but connected
 
    top machine (
@@ -958,7 +958,7 @@ module deca_top #(
        .sld_auto_instance_index ("YES"),
        .instance_id             ("DVMP"),
        .source_initial_value    ("0"),
-       .probe_width             (80),
+       .probe_width             (96),
        .source_width            (1),
        .enable_metastability    ("YES")
    ) u_dvmaprobe_issp (
