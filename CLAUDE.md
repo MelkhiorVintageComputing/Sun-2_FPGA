@@ -1018,6 +1018,41 @@ machine runs for hours, so whatever it is has to be far rarer for the CPU's
 access pattern than for a master's, or invisible to it. `test/deca_ddr3` walks a
 mebibyte and passes, which is the pattern *least* like a disk transfer.
 
+**The corrupted word is stale data, not a failed write, and `tools/patwr`
+is what said so.** It writes a pattern that describes its own position -- bit 15
+a generation tag, bits 14:8 the sector modulo 128, bits 7:0 the word offset --
+in two generations differing only in the tag, so a bad word decodes to a
+position *and* says which generation it belongs to. Filling with zeros first
+could not do that: zero carries no position, and the first run's bad words came
+back `0000`, `0001`, `00ef` with nothing in them to read.
+
+With a fill generation underneath, on a freshly written card:
+
+```
+  sector 293 word 210   want a5d2  got 0096
+  OLD gen, sector 0 word 150, -9532 words (-19064 bytes)
+```
+
+One word in 262,144, the rate files show. The tag is clear, so it is
+**fill-generation content** -- what the medium and the buffer cache held before
+this write -- and it is at a *different* offset, so it is not the "this word was
+never written" case either. It is old data fetched from somewhere else.
+
+That matters because the address checks are all clean: `sun2_dvma_probe` and the
+adapter's counters say one load per cycle, the right 32-bit lane, the right
+16-bit half. What none of them checks is that the data a response carries
+*belongs to the address that was requested* -- BrianHG's controller could answer
+with a previous read's contents and every counter above would still read zero.
+That is the gap the next instrument should close, and the read vector the
+controller carries (`READ_ID`, `DDR3_VECTOR_SIZE`) is the handle for it.
+
+Two cautions for anyone repeating this. The sector index is modulo 128, so a
+file longer than 128 sectors makes the displacement ambiguous by multiples of
+64 KiB -- the -19064 bytes above is the smallest candidate, not a certainty, and
+a run of 128 sectors or fewer would be exact. And a verify is meaningless unless
+the *write* pass printed its summary: an interrupted write leaves a half-written
+file that reads as catastrophic corruption.
+
 **Getting that instrument to read anything took five separate fixes to the same
 signal, and the lesson is about `ifdef` rather than about DVMA.** The port on
 `sun2_fpga`, its connection in `top_fpga`, the port on `top_fpga`, and the
