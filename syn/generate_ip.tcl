@@ -186,6 +186,28 @@ if {$got != 16} {
 }
 puts "== sun2_ila: $got probes =="
 
+# ---------------------------------------------------------------------------
+# The VIO.  An ILA answers "what happened around this event"; a VIO answers
+# "what does this register hold now", which is what a counter needs and what
+# the DECA's In-System Sources and Probes gave for free.  A capture window is
+# 205 us and the fault being counted happens a few times per minute, so no
+# trigger could ever have bridged that -- see the trap in CLAUDE.md.
+#
+# Inputs only: nothing here drives the machine, it only reads counters out.
+create_ip -name vio -vendor xilinx.com -library ip -module_name sun2_vio \
+    -dir $ipdir -force
+set_property -dict [list \
+    CONFIG.C_NUM_PROBE_IN  {5} \
+    CONFIG.C_NUM_PROBE_OUT {0} \
+    CONFIG.C_PROBE_IN0_WIDTH {16} \
+    CONFIG.C_PROBE_IN1_WIDTH {16} \
+    CONFIG.C_PROBE_IN2_WIDTH {16} \
+    CONFIG.C_PROBE_IN3_WIDTH {32} \
+    CONFIG.C_PROBE_IN4_WIDTH {32} \
+] [get_ips sun2_vio]
+generate_target all [get_ips sun2_vio]
+puts "== sun2_vio: 5 input probes =="
+
 generate_target {instantiation_template synthesis simulation} [get_ips sun2_ila]
 
 puts "== done; generated under $ipdir/sun2_ila =="

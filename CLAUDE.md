@@ -2257,6 +2257,36 @@ counter reads 0 because that is correct.
 
 ## Traps that have already cost time
 
+**The read-side clock crossing is clean, measured with a counter rather than a
+capture.** `syn/vio_read.tcl` reads the adapter's crossing counters over a VIO
+-- the Xilinx equivalent of the DECA's In-System Sources and Probes, fitted with
+`ILA=1`. After two full `patwr` passes (1 MiB):
+
+```
+  reads       0x3705      read acknowledgements
+  pattern     0x2000      ... whose word matched the pattern before crossing
+  corrupted   0x0000      ... and did not match after
+```
+
+`pattern` is the control and it is large, so the check demonstrably sees the
+pattern -- which is exactly what the ILA attempt could never show. Zero
+corrupted, on a workload that reliably produces bad words, clears
+`rd_lane -> wb_dat_o`.
+
+Read the counters knowing they are 16 bits and wrap: `pattern` is 8192 *modulo
+65536*, so it bounds nothing from above. What it does establish is that the
+check is live and that no word which was correct before the crossing was wrong
+after it.
+
+**Which moves the suspicion to the mirror image, the *write* crossing.**
+`req_dat` is latched in the Wishbone domain and read combinationally in the
+memory clock domain, and nothing has tested it. A word corrupted there explains
+every observation at once: `WRITE_VERIFY` compares `CMD_read_data` against
+`req_dat` and would be comparing the corrupted value with itself; `DOUBLE_READ`
+finds DRAM self-consistent because DRAM faithfully holds the wrong word; the
+master's capture sees it already wrong; and both boards share the crossing by
+duplication while their controllers differ.
+
 * **An ILA capture window is 205 us and a disk workload is minutes, so the
   trigger has to do all the work -- and a trigger nobody has validated is worth
   nothing.** The crossing check in `wb_to_mig_ui` (`xchk_bad`, ILA mode `xchk`)

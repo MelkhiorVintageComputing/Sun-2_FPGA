@@ -475,6 +475,22 @@ if {$ila == 1} {
     }
     synth_ip [get_ips sun2_ila]
     puts "== ILA fitted on the MMU debug bus =="
+
+    # The VIO rides with the ILA: both are the debug build, and a counter that
+    # has to be read after the run is the half an ILA cannot do.
+    set vioxci $ipdir/sun2_vio/sun2_vio.xci
+    if {![file exists $vioxci]} {
+        puts "ERROR: the VIO has not been generated. Run:"
+        puts "    make -C syn ip-ila BOARD=$board"
+        exit 1
+    }
+    read_ip $vioxci
+    if {[llength [get_ips sun2_vio]] == 0} {
+        puts "ERROR: sun2_vio.xci did not load"
+        exit 1
+    }
+    synth_ip [get_ips sun2_vio]
+    puts "== VIO fitted on the adapter's crossing counters =="
 }
 
 # Revision file first, then the shared one: common creates the MII clocks and

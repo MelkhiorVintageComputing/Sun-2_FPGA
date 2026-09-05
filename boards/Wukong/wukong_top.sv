@@ -339,6 +339,7 @@ module wukong_top #(
    // file before.
    wire        xchk_bad;
    wire [31:0] xchk_got, xchk_exp;
+   wire [15:0] xchk_n_read, xchk_n_pat, xchk_n_bad;
 
 `ifdef SUN2_ILA
    // Named wires rather than slices straight into the core, because the
@@ -364,6 +365,19 @@ module wukong_top #(
    // INT7_n..INT1_n, timer_int[5:1]}.  One probe, because the basic trigger
    // unit is one comparator per probe and these are always read together.
    wire [15:0] dbg_irq  = dbg_bus[117:102];
+
+   // Counters, read after the run with syn/vio_read.tcl.  n_pat is the control
+   // that makes n_bad mean anything: zero bad crossings proves nothing unless
+   // pattern words were crossing at all, which is the mistake the ILA-only
+   // attempt made.
+   sun2_vio u_vio (
+       .clk        (cpu_clk),
+       .probe_in0  (xchk_n_read),
+       .probe_in1  (xchk_n_pat),
+       .probe_in2  (xchk_n_bad),
+       .probe_in3  (xchk_got),
+       .probe_in4  (xchk_exp)
+   );
 
    sun2_ila u_ila (
        .clk    (cpu_clk),
@@ -611,6 +625,9 @@ module wukong_top #(
        .c_addr (c0_addr), .c_we (c0_we), .c_wdata (c0_wdata), .c_wmask (c0_wmask),
        .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata),
        .xchk_bad (xchk_bad),
+       .xchk_n_read (xchk_n_read),
+       .xchk_n_pat (xchk_n_pat),
+       .xchk_n_bad (xchk_n_bad),
        .xchk_got (xchk_got),
        .xchk_exp (xchk_exp)
    );

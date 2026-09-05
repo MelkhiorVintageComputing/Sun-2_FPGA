@@ -92,7 +92,15 @@ module wb_to_mig_ui #(
     // would cost a build to discover and the order is not what is being tested.
     output wire                      xchk_bad,
     output wire [31:0]               xchk_got,
-    output wire [31:0]               xchk_exp
+    output wire [31:0]               xchk_exp,
+    // Counters, read once at the end over a VIO.  An ILA capture is 205 us
+    // against a workload of minutes, so the capture could never answer this;
+    // a count can.  n_pat is the control -- it is what makes n_bad meaningful,
+    // because zero bad crossings means nothing unless pattern words were
+    // crossing to begin with.
+    output wire [15:0]               xchk_n_read,   // read acks, mod 65536
+    output wire [15:0]               xchk_n_pat,    // ... that were the pattern
+    output wire [15:0]               xchk_n_bad
 );
 
    // ------------------------------------------------------------------
@@ -142,6 +150,11 @@ module wb_to_mig_ui #(
    // ------------------------------------------------------------------
    reg        xb_q;
    reg [31:0] xg_q, xe_q;
+   reg [15:0] c_read, c_pat, c_bad;
+
+   // The verdict on this side of the crossing, of the value clk_wb sampled.
+   wire post_ok = (rd_lane == pat_for(req_adr, 1'b0)) ||
+                  (rd_lane == pat_for(req_adr, 1'b1));
 
    reg  ack_tgl_s1, ack_tgl_s2, ack_tgl_s3;
    wire ack_pulse = ack_tgl_s2 ^ ack_tgl_s3;
@@ -165,6 +178,7 @@ module wb_to_mig_ui #(
          wb_ack_o <= 1'b0;
          wb_dat_o <= 32'h0;
          xb_q     <= 1'b0;
+         c_read   <= 16'd0; c_pat <= 16'd0; c_bad <= 16'd0;
          req_adr  <= 30'h0;
          req_dat  <= 32'h0;
          req_sel  <= 4'h0;
@@ -185,8 +199,12 @@ module wb_to_mig_ui #(
             wb_dat_o <= rd_lane;   // written before ack_tgl flipped, stable now
             // The same question asked again on this side of the crossing, of
             // the value clk_wb actually sampled.
-            xb_q     <= pre_ok && !((rd_lane == pat_for(req_adr, 1'b0)) ||
-                                    (rd_lane == pat_for(req_adr, 1'b1)));
+            xb_q     <= pre_ok && !post_ok;
+            if (!req_we) begin
+               c_read <= c_read + 16'd1;
+               if (pre_ok)             c_pat <= c_pat + 16'd1;
+               if (pre_ok && !post_ok) c_bad <= c_bad + 16'd1;
+            end
             xg_q     <= rd_lane;
             xe_q     <= pat_for(req_adr, 1'b0);
             wb_ack_o <= 1'b1;
@@ -259,5 +277,8 @@ module wb_to_mig_ui #(
    assign xchk_bad = xb_q;
    assign xchk_got = xg_q;
    assign xchk_exp = xe_q;
+   assign xchk_n_read = c_read;
+   assign xchk_n_pat  = c_pat;
+   assign xchk_n_bad  = c_bad;
 
 endmodule
