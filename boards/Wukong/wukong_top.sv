@@ -333,6 +333,7 @@ module wukong_top #(
    // buffer -- so it is connected to a named wire rather than left off.
    wire [182:0] dvma_probe;
 
+`ifdef SUN2_ILA
    // Named wires rather than slices straight into the core, because the
    // Hardware Manager names a probe after the net it is driven from -- and
    // eight slices of one net all get that net's name.  Vivado then called the

@@ -1005,6 +1005,35 @@ counter only counts `CMD_ena && !req_we`.
 there.** Handshake, response accounting, lane, half, capture, read consistency
 and write visibility all read zero on runs that corrupt.
 
+**It is not the DECA, and it is not BrianHG's controller.** A Wukong V3 --
+Xilinx, Vivado, MIG, a MultiBus machine with the **Xylogics 450** rather than
+SCSI, at 20 MHz -- boots SunOS from the same micro-SD card and corrupts at the
+same rate. `tools/patwr`, 512 KiB, written and verified cold after a reboot:
+
+```
+  BAD  sector  69 word 132  want c584  got 6d08
+  BAD  sector 215 word 114  want d772  got 281c
+  BAD  sector 326 word 158  want c69e  got 6d08
+  BAD  sector 853 word  44  want d52c  got 281c
+  patwr: 4 of 262144 words wrong
+```
+
+Four in 262,144, against three to six on the DECA. So the fault survives a
+change of FPGA vendor, toolchain, DDR3 controller, board and disk controller,
+which eliminates every DECA-specific suspect at once -- BrianHG's controller
+above all, after several sessions spent narrowing onto it.
+
+**What both machines share is this project's own RTL**: `sun2_wishbone_bridge`,
+`sun2_dvma`, the MMU and bus in `sun2_fpga`, `blk_sd`, and the RD68011 core.
+The DECA measurements already put the damage *before* the master's capture --
+the word is wrong as it comes out of the bridge -- and the bridge is shared
+while the two memory controllers under it are not. That is the place to look.
+
+**Two distinct wrong values, each appearing twice**, is the other lead: `6d08`
+at two file offsets 9834 words apart and `281c` at two more. A fault that
+returns the *same* wrong word at unrelated addresses is not random decay; it
+looks like a stale register or a buffer read twice.
+
 **Caught in flight: the data is already wrong when it reaches the card.**
 `tools/patwr -u` writes a pattern that is the same in every sector -- halfword i
 is `0x8000 | i`, so byte 2i is `0x80` and byte 2i+1 is `i` -- which the FPGA can
