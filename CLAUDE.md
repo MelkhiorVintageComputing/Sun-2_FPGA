@@ -1005,6 +1005,32 @@ counter only counts `CMD_ena && !req_we`.
 there.** Handshake, response accounting, lane, half, capture, read consistency
 and write visibility all read zero on runs that corrupt.
 
+**Caught in flight: the data is already wrong when it reaches the card.**
+`tools/patwr -u` writes a pattern that is the same in every sector -- halfword i
+is `0x8000 | i`, so byte 2i is `0x80` and byte 2i+1 is `i` -- which the FPGA can
+predict from the buffer address alone. `sun2_blktrace` checks every byte against
+that as it goes out, gated on the sector's first two bytes so ordinary traffic
+is ignored. On a freshly written filesystem, 256 KiB:
+
+```
+  sectors seen      512
+  bytes wrong         6
+  first: LBA 00100644 byte 432, wanted 80 got 53
+```
+
+Six bytes in 262,144 -- the familiar rate -- and **the fault is now localised in
+hardware, at the moment it happens**, rather than inferred from a checksum after
+a reboot. It is upstream of `blk_sd`, the SPI bus, the card and the medium,
+because it is already present at the last point inside the FPGA before them.
+`wanted 80 got 53` is also informative: `0x80` is the *even* byte of every
+halfword, so the damaged byte is the high half of a 16-bit word, and `0x53` is
+neither a neighbouring pattern byte nor zero.
+
+Note what this does **not** yet separate: the data passes through DDR3, the
+bridge, `sun2_dvma` and the controller's sector buffer before reaching this
+check, and it was correct in memory when the CPU wrote it. The same checker
+placed at `dvma_din` would split that span in two.
+
 **The gap that remains is the write *data* path above the adapter.** Everything
 built so far checks reads, or checks a write against `req_dat` -- what the
 adapter was handed. Nothing checks that `req_dat` is what the CPU or the master
@@ -2177,6 +2203,15 @@ is mostly the machine *idling in the monitor afterwards*, where an unarmed
 counter reads 0 because that is correct.
 
 ## Traps that have already cost time
+
+* **A probe narrower than its concatenation truncates in silence, and the
+  arithmetic is easy to get wrong.** `probe_width` was set to 366 for a
+  concatenation of 382 bits -- two 8-bit fields forgotten in the sum -- and
+  every field shifted. The readout was not obviously broken; it was plausible
+  nonsense, reporting `bridge loads 0` beside `late_load 39240` and `reads
+  issued 0` beside `responses 41467`. Nothing warns, at any stage. Add up the
+  widths in the comment beside the concatenation and check the total against
+  `probe_width` each time one changes.
 
 * **An instrument with no testbench, and a signature that looked plausible.**
   `sun2_blktrace` folds each sector as it passes so a block can be identified by

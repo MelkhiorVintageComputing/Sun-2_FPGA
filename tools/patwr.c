@@ -128,12 +128,33 @@ long  lseek();
  * third: every bad word came back 0000/0001/00ef with no position in it.
  */
 
+/*
+ * `-u' makes the pattern **the same in every sector**: halfword i of a sector is
+ * 0x8000 | i, so byte 2i is 0x80 and byte 2i+1 is i (the 68010 is big-endian).
+ *
+ * That looks like a downgrade -- it throws away the sector field, so a bad word
+ * no longer says which sector it came from -- and it buys something no software
+ * check can have: **the FPGA can verify it**.  sun2_blktrace already sees every
+ * byte going to the card with its buffer address, and with a pattern that
+ * depends only on the offset within the sector the expected byte is
+ * `addr[0] ? addr[8:1] : 8'h80' -- a comparison in a few LUTs, with no
+ * knowledge of files, inodes or LBAs.  So the corruption can be caught *as it
+ * happens*, at the last point inside the FPGA before the SD card, instead of
+ * being inferred from a checksum after a reboot.
+ *
+ * Use -u with the hardware checker, and the default encoding when the
+ * displacement of a bad word matters more.
+ */
+
 /* The word that belongs at (sector, offset). */
+static int uniform = 0;         /* -u: same pattern in every sector */
+
 unsigned short
 patword(sec, off)
 long sec;
 int off;
 {
+    if (uniform) return (unsigned short)(0x8000 | (off & 0xff));
     return (unsigned short)(0x8000 | (((sec & 0x7f) << 8)) | (off & 0xff));
 }
 
@@ -208,28 +229,33 @@ char **argv;
 
     if (argc != 5 && argc != 6) {
         fprintf(stderr,
-          "usage: %s <path> <startsec> <nsec> <passes> [-v|-f]\n", argv[0]);
+          "usage: %s <path> <startsec> <nsec> <passes> [-v|-f|-u]\n", argv[0]);
         fprintf(stderr,
           "       -v verify only, for a run after a reboot\n");
         fprintf(stderr,
           "       -f write the OLD generation (tag 0) and stop: run this,\n");
         fprintf(stderr,
           "          then a normal pass, then -v after a reboot\n");
+        fprintf(stderr,
+          "       -u sector-uniform pattern, which the FPGA can check itself\n");
         return 1;
     }
     dev    = argv[1];
     start  = atol(argv[2]);
     nsec   = atol(argv[3]);
     passes = atoi(argv[4]);
-    vonly  = (argc == 6 && argv[5][1] == 'v');
-    fill   = (argc == 6 && argv[5][1] == 'f');
+    vonly   = (argc == 6 && argv[5][1] == 'v');
+    fill    = (argc == 6 && argv[5][1] == 'f');
+    uniform = (argc == 6 && argv[5][1] == 'u');
 
     buf = (unsigned short *)malloc((unsigned)(chunk * SECSZ));
     if (buf == 0) { fprintf(stderr, "out of memory\n"); return 1; }
 
     printf("patwr: %s sectors %ld..%ld, %d pass(es)%s\n",
            dev, start, start + nsec - 1, passes,
-           vonly ? ", verify only" : (fill ? ", fill (old generation)" : ""));
+           vonly ? ", verify only"
+                 : (fill ? ", fill (old generation)"
+                         : (uniform ? ", uniform (hardware-checkable)" : "")));
 
     for (i = 0; i < passes; i++) {
         if (!vonly) {

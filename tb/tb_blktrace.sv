@@ -38,6 +38,9 @@ module tb_blktrace;
    reg            rd_half = 0;
    wire [31:0]    rd_data;
    wire [15:0]    wr_ptr, n_xfer;
+   wire [15:0]    pat_sectors, pat_bad;
+   wire [8:0]     pat_first_off;
+   wire [7:0]     pat_first_exp, pat_first_got;
 
    sun2_blktrace #(.DEPTH_LOG2(DL2)) dut (
        .clk(clk), .rst(rst),
@@ -46,7 +49,10 @@ module tb_blktrace;
        .blk_buf_we(buf_we), .blk_buf_addr(buf_addr),
        .blk_buf_wdata(buf_wdata), .blk_buf_rdata(buf_rdata),
        .rd_addr(rd_addr), .rd_half(rd_half), .rd_data(rd_data),
-       .wr_ptr(wr_ptr), .n_xfer(n_xfer));
+       .wr_ptr(wr_ptr), .n_xfer(n_xfer),
+       .pat_sectors(pat_sectors), .pat_bad(pat_bad),
+       .pat_first_lba(), .pat_first_off(pat_first_off),
+       .pat_first_exp(pat_first_exp), .pat_first_got(pat_first_got));
 
    integer errors = 0, checks = 0;
    task ck(input cond, input [511:0] name);
@@ -164,6 +170,30 @@ module tb_blktrace;
 
    reg [31:0] k; reg [15:0] s;
    reg [15:0] sig_a, sig_b;
+   // A sector holding tools/patwr -u's pattern: byte 2i is 0x80, byte 2i+1 is i.
+   // `badoff' corrupts one byte, to prove the checker sees it -- a checker that
+   // cannot fail on an injected fault makes a zero reading meaningless.
+   task pattern_xfer(input [31:0] lba, input integer badoff);
+      integer i;
+      begin
+         for (i = 0; i < SECTOR; i = i + 1)
+           sbuf[i] = i[0] ? i[8:1] : 8'h80;
+         if (badoff >= 0) sbuf[badoff] = 8'hEE;
+         begin_xfer(1'b1, lba);
+         buf_addr <= 9'd0; repeat (2) @(posedge clk);
+         for (i = 0; i < SECTOR; i = i + 1) begin
+            buf_addr <= i[8:0];
+            repeat (2) @(posedge clk);
+         end
+         buf_addr <= 9'd0; repeat (2) @(posedge clk);
+         end_xfer;
+      end
+   endtask
+
+   // The counters are non-blocking assignments in the DUT, so a check written
+   // straight after the edge that produced them reads the pre-edge value.
+   task settle; begin @(posedge clk); #1; end endtask
+
    integer i;
 
    initial begin
@@ -258,6 +288,29 @@ module tb_blktrace;
       ck(k[30:0] == 31'h0000_00B2, "the oldest entry was overwritten by the newest");
       readout(0, k, s);
       ck(k[30:0] == 31'h0000_00B1, "the entry before it is still the previous one");
+
+      // ---- the in-flight pattern checker ----
+      pattern_xfer(32'h0000_0200, -1);
+      settle;
+      ck(pat_sectors == 16'd1, "a pattern sector is recognised");
+      settle;
+      ck(pat_bad == 16'd0,     "and a clean one reports no bad bytes");
+
+      pattern_xfer(32'h0000_0201, 137);
+      settle;
+      ck(pat_sectors == 16'd2, "a second pattern sector is recognised");
+      settle;
+      ck(pat_bad != 16'd0,     "an injected bad byte is caught");
+      settle;
+      ck(pat_first_off == 9'd137, "at the right offset");
+      settle;
+      ck(pat_first_got == 8'hEE && pat_first_exp == 8'd68,
+         "with the byte seen and the byte wanted");
+
+      // Ordinary data must not be mistaken for the pattern.
+      write_xfer(32'h0000_0300, 32'd5, 2);
+      settle;
+      ck(pat_sectors == 16'd2, "ordinary traffic is not counted as pattern");
 
       $display("=== %0d checks, %0d failures ===", checks, errors);
       if (errors == 0) $display("PASS"); else $display("FAIL");

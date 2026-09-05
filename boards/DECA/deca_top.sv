@@ -942,6 +942,10 @@ module deca_top #(
    // filesystem image taken off the card afterwards can be compared against.
    wire [10:0] bt_src;
    wire [31:0] bt_data;
+   wire [15:0] bt_pat_sectors, bt_pat_bad;
+   wire [8:0]  bt_pat_off;
+   wire [7:0]  bt_pat_exp, bt_pat_got;
+   wire [31:0] bt_pat_lba;
    wire [15:0] bt_wp, bt_nx;
 
    sun2_blktrace #(.DEPTH_LOG2(10)) blktrace (
@@ -959,7 +963,13 @@ module deca_top #(
        .rd_half       (bt_src[10]),
        .rd_data       (bt_data),
        .wr_ptr        (bt_wp),
-       .n_xfer        (bt_nx));
+       .n_xfer        (bt_nx),
+       .pat_sectors   (bt_pat_sectors),
+       .pat_bad       (bt_pat_bad),
+       .pat_first_lba (bt_pat_lba),
+       .pat_first_off (bt_pat_off),
+       .pat_first_exp (bt_pat_exp),
+       .pat_first_got (bt_pat_got));
 
    // 32 + 16 + 16 = 64.  Count it whenever a field changes width: a probe
    // narrower than its concatenation truncates in silence and every field
@@ -990,17 +1000,24 @@ module deca_top #(
        .sld_auto_instance_index ("YES"),
        .instance_id             ("DVMP"),
        .source_initial_value    ("0"),
-       .probe_width             (286),
+       .probe_width             (382),
        .source_width            (1),
        .enable_metastability    ("YES")
    ) u_dvmaprobe_issp (
        .source_clk (cpu_clk),
-       // 96+16+16+16+16 +16+16+30+32+32 = 286.  Appended at the end, so every
+       // 286 + 16 + 16 + 32 + 16 + 8 + 8 = **382**.  Count it every time: the
+       // first version of this line said 366, having dropped the two 8-bit
+       // fields, and a probe narrower than its concatenation truncates in
+       // silence -- every field shifts and the readout is plausible nonsense
+       // (bridge loads 0 beside late_load 39240).  Nothing warns.  Appended at the end, so every
        // offset tools/deca_dvmaprobe.tcl already decodes is unchanged.
        .probe      ({dvma_probe, ddr3_rd_unexpected,
                     ddr3_rd_ready, ddr3_rd_issued, ddr3_lane_bad,
                     ddr3_reread_bad, ddr3_wv_bad,
-                    ddr3_rr_adr, ddr3_rr_v1, ddr3_rr_v2}),
+                    ddr3_rr_adr, ddr3_rr_v1, ddr3_rr_v2,
+                    // the in-flight pattern checker, appended last
+                    bt_pat_sectors, bt_pat_bad, bt_pat_lba,
+                    {7'd0, bt_pat_off}, bt_pat_exp, bt_pat_got}),
        // Connected, not left open.  Both instances on this board that read back
        // correctly -- SUN2 and BLKT -- drive a real wire here, and this one did
        // not; with it open the probe returned a fixed ...0001 whatever was

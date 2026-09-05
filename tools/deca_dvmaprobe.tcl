@@ -36,7 +36,7 @@ set raw [read_probe_data -instance_index $idx]
 
 # Anchor to the end: the tool pads the returned string up to a convenient
 # multiple, and indexing from the front is only right when it happens not to.
-set W 286
+set W 382
 if {[string length $raw] > $W} {
     set raw [string range $raw [expr {[string length $raw] - $W}] end]
 }
@@ -58,6 +58,12 @@ set wv_bad      [field $raw 176 16]
 set rr_adr      [field $raw 192 30]
 set rr_v1       [field $raw 222 32]
 set rr_v2       [field $raw 254 32]
+set pat_sectors [field $raw 286 16]
+set pat_bad     [field $raw 302 16]
+set pat_lba     [field $raw 318 32]
+set pat_off     [field $raw 350 16]
+set pat_exp     [field $raw 366 8]
+set pat_got     [field $raw 374 8]
 set seen        0
 
 puts [format "heartbeat    %6d (mod 65536)  -- free-running; 0 means the probe is dead" $n_clk]
@@ -75,6 +81,20 @@ puts        "                          with no request to answer, which the next
 puts        "                          read could take as its own"
 puts [format "  wrong lane     %6d   -- the 32-bit quarter of the 128-bit line" $lane_bad]
 puts        "                          changed between issue and response"
+puts ""
+puts "Pattern check, in flight at the block seam (tools/patwr -u)"
+puts [format "  sectors seen   %6d" $pat_sectors]
+puts [format "  bytes wrong    %6d" $pat_bad]
+if {$pat_bad > 0} {
+    puts [format "  first: LBA %08x byte %d, wanted %02x got %02x" \
+              $pat_lba $pat_off $pat_exp $pat_got]
+    puts        "  ^ the data was ALREADY wrong when it reached the card"
+    puts        "    interface, so the fault is upstream of blk_sd and the SD"
+    puts        "    bus entirely."
+} elseif {$pat_sectors > 0} {
+    puts        "  every pattern sector reached the card interface intact, so"
+    puts        "  anything wrong on the medium happened below this point."
+}
 puts ""
 puts "Write verify (every write read straight back and compared)"
 puts [format "  writes wrong   %6d" $wv_bad]

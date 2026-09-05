@@ -69,7 +69,26 @@ module sun2_blktrace #(
     input  wire                  rd_half,   // 0: {we, lba}; 1: signature
     output wire [31:0]           rd_data,
     output wire [15:0]           wr_ptr,    // next entry to be written
-    output wire [15:0]           n_xfer     // transfers seen, mod 65536
+    output wire [15:0]           n_xfer,    // transfers seen, mod 65536
+
+    // ---- the pattern checker ---------------------------------------------
+    // tools/patwr -u writes the same pattern into every sector: halfword i is
+    // 0x8000 | i, so byte 2i is 0x80 and byte 2i+1 is i.  That is predictable
+    // from the buffer address alone, with no knowledge of files or LBAs, so the
+    // last point inside the FPGA before the card can check it -- and say
+    // whether the data was *already* wrong when it arrived, which no checksum
+    // taken after a reboot can distinguish.
+    //
+    // A sector is only checked if its first two bytes are 0x80 0x00, so
+    // ordinary traffic is ignored rather than reported as corrupt.  That gate
+    // is one in 65536 for random data, and every sector patwr writes passes it
+    // by construction.
+    output wire [15:0]           pat_sectors,  // sectors that looked like ours
+    output wire [15:0]           pat_bad,      // bytes that did not match
+    output wire [31:0]           pat_first_lba,
+    output wire [8:0]            pat_first_off,
+    output wire [7:0]            pat_first_exp,
+    output wire [7:0]            pat_first_got
 );
 
    localparam integer DEPTH = (1 << DEPTH_LOG2);
@@ -182,6 +201,60 @@ module sun2_blktrace #(
          end
       end
    end
+
+   // ------------------------------------------------------------------
+   // The pattern checker
+   // ------------------------------------------------------------------
+   // **The byte belongs to `last_addr', not to blk_buf_addr.**  blk_sd consumes
+   // the byte for address A in the clock it sets A+1, so when a change is seen
+   // the data on blk_buf_rdata is still answering the address before it -- the
+   // same one-cycle relationship the signature above folds on, and the same one
+   // that made this module's first signature a byte-rotated fold of the wrong
+   // sequence.  Computing the expected byte from blk_buf_addr instead reports
+   // every sector as corrupt, which is how this was caught.
+   wire [7:0] pat_expect = last_addr[0] ? last_addr[8:1] : 8'h80;
+
+   reg [15:0] p_sectors, p_bad;
+   reg [31:0] p_lba;
+   reg [8:0]  p_off;
+   reg [7:0]  p_exp, p_got;
+   reg        p_seen, p_armed, p_b0ok;
+
+   always @(posedge clk) begin
+      if (rst) begin
+         p_sectors <= 16'd0; p_bad <= 16'd0;
+         p_seen    <= 1'b0;  p_armed <= 1'b0; p_b0ok <= 1'b0;
+      end else begin
+         if (blk_start) begin p_armed <= 1'b0; p_b0ok <= 1'b0; end
+
+         if (wr_seen) begin
+            // Bytes 0 and 1 decide whether this sector is one of ours.
+            if (last_addr == 9'd0) p_b0ok <= (blk_buf_rdata == 8'h80);
+            else if (last_addr == 9'd1) begin
+               if (p_b0ok && blk_buf_rdata == 8'h00) begin
+                  p_armed   <= 1'b1;
+                  p_sectors <= p_sectors + 16'd1;
+               end
+            end else if (p_armed && blk_buf_rdata != pat_expect) begin
+               p_bad <= p_bad + 16'd1;
+               if (!p_seen) begin
+                  p_seen <= 1'b1;
+                  p_lba  <= cur_key[30:0];
+                  p_off  <= last_addr;
+                  p_exp  <= pat_expect;
+                  p_got  <= blk_buf_rdata;
+               end
+            end
+         end
+      end
+   end
+
+   assign pat_sectors   = p_sectors;
+   assign pat_bad       = p_bad;
+   assign pat_first_lba = {1'b0, p_lba[30:0]};
+   assign pat_first_off = p_off;
+   assign pat_first_exp = p_exp;
+   assign pat_first_got = p_got;
 
    assign rd_data = rd_half ? {16'h0000, t_sig[rd_addr]} : t_key[rd_addr];
    assign wr_ptr  = {{(16 - DEPTH_LOG2){1'b0}}, wp};
