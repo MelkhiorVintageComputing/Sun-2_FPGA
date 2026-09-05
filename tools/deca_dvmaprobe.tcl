@@ -36,34 +36,39 @@ set raw [read_probe_data -instance_index $idx]
 
 # Anchor to the end: the tool pads the returned string up to a convenient
 # multiple, and indexing from the front is only right when it happens not to.
-set W 382
+set W 469
 if {[string length $raw] > $W} {
     set raw [string range $raw [expr {[string length $raw] - $W}] end]
 }
 proc field {raw off len} { return [b2i [string range $raw $off [expr {$off + $len - 1}]]] }
 
-set n_half_bad  [field $raw  0 16]
-set n_clk       [field $raw 16 16]
-set n_latch     [field $raw 32 16]
-set n_no_load   [field $raw 48 16]
-set n_late_load [field $raw 64 16]
-set n_load      [field $raw 80 16]
+set pat_a       [field $raw   0 16]
+set pat_b       [field $raw  16 16]
+set pat_bad     [field $raw  32 16]
+set pat_first   [field $raw  48 16]
+set pat_faddr   [field $raw  64 23]
+set n_half_bad  [field $raw  87 16]
+set n_clk       [field $raw 103 16]
+set n_latch     [field $raw 119 16]
+set n_no_load   [field $raw 135 16]
+set n_late_load [field $raw 151 16]
+set n_load      [field $raw 167 16]
 # Appended below dvma_probe, so the offsets above are unchanged.
-set rd_unexp    [field $raw  96 16]
-set rd_ready    [field $raw 112 16]
-set rd_issued   [field $raw 128 16]
-set lane_bad    [field $raw 144 16]
-set reread_bad  [field $raw 160 16]
-set wv_bad      [field $raw 176 16]
-set rr_adr      [field $raw 192 30]
-set rr_v1       [field $raw 222 32]
-set rr_v2       [field $raw 254 32]
-set pat_sectors [field $raw 286 16]
-set pat_bad     [field $raw 302 16]
-set pat_lba     [field $raw 318 32]
-set pat_off     [field $raw 350 16]
-set pat_exp     [field $raw 366 8]
-set pat_got     [field $raw 374 8]
+set rd_unexp    [field $raw  183 16]
+set rd_ready    [field $raw 199 16]
+set rd_issued   [field $raw 215 16]
+set lane_bad    [field $raw 231 16]
+set reread_bad  [field $raw 247 16]
+set wv_bad      [field $raw 263 16]
+set rr_adr      [field $raw 279 30]
+set rr_v1       [field $raw 309 32]
+set rr_v2       [field $raw 341 32]
+set pat_sectors [field $raw 373 16]
+set pat_bad     [field $raw 389 16]
+set pat_lba     [field $raw 405 32]
+set pat_off     [field $raw 437 16]
+set pat_exp     [field $raw 453 8]
+set pat_got     [field $raw 461 8]
 set seen        0
 
 puts [format "heartbeat    %6d (mod 65536)  -- free-running; 0 means the probe is dead" $n_clk]
@@ -72,6 +77,19 @@ puts [format "captures     %6d (mod 65536)" $n_latch]
 puts [format "no_load      %6d   -- captured with nothing loaded the clock before" $n_no_load]
 puts [format "late_load    %6d   -- more than one load inside one cycle" $n_late_load]
 puts [format "wrong half   %6d   -- load took the other 16 bits of the 32-bit word" $n_half_bad]
+puts ""
+puts ""
+puts "Pattern check at the master's capture (tools/patwr -u)"
+puts [format "  matches        %6d  (other byte order: %d)" $pat_a $pat_b]
+puts [format "  wrong words    %6d" $pat_bad]
+if {$pat_bad > 0} {
+    puts [format "  first: word address %06x took %04x" [expr {$pat_faddr * 2}] $pat_first]
+    puts        "  ^ already wrong when the master captured it, so the fault is"
+    puts        "    at or below DDR3 -- not in sun2_dvma or the sector buffer."
+} elseif {$pat_a > 1000} {
+    puts        "  the master captured every pattern word correctly, so the"
+    puts        "  corruption seen at the card happened after this point."
+}
 puts ""
 puts "DDR3 adapter (cmd_clk domain, counts may tear on a read; zero is still zero)"
 puts [format "  reads issued   %6d" $rd_issued]

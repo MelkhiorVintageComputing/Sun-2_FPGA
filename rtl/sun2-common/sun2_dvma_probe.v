@@ -72,6 +72,29 @@ module sun2_dvma_probe (
     // neighbouring word -- which is the exact granule of the corruption being
     // chased, and something the one-load-per-cycle check above cannot see.
     output wire [15:0] n_half_bad,
+
+    // ---- the pattern check, at the master's capture ----------------------
+    // The same check sun2_blktrace does at the card, moved to the *other* end
+    // of the span still under suspicion.  tools/patwr -u's pattern repeats
+    // every sector, and a buffer-cache block is at least 512-byte aligned, so
+    // the halfword index within a sector is dvma_a[8:1] and the expected word
+    // is 0x8000 | that.  If a word is already wrong here, the fault is at or
+    // below DDR3; if it is right here and wrong at the card, it is in
+    // sun2_dvma's assembly or the controller's sector buffer.
+    //
+    // **It arms itself on four consecutive matches** rather than being switched
+    // on by the host.  Ordinary traffic cannot arm it (2^-32), the pattern arms
+    // it after four words, and it needs no clear, no extra port and no
+    // interaction that would have to share the JTAG chain with the console.
+    //
+    // Both byte orders are counted because the bridge crosses lanes and getting
+    // it wrong would cost a build to discover: whichever counter is large says
+    // which order the master sees, and only that one's bad count means anything.
+    output wire [15:0] n_pat_a,      // matches, {80, idx}
+    output wire [15:0] n_pat_b,      // matches, {idx, 80}  (the other order)
+    output wire [15:0] n_pat_bad,    // armed, and did not match
+    output wire [15:0] n_pat_first,  // the first wrong word
+    output wire [22:0] n_pat_faddr,
     output wire [23:1] first_a,
     output wire [15:0] first_d,
     output wire        seen
@@ -81,6 +104,17 @@ module sun2_dvma_probe (
 
    reg [15:0] latches, no_load, late_load, loads;
    reg [15:0] heartbeat, half_bad;
+   reg [15:0] pat_a, pat_b, pat_bad, pat_first;
+   reg [22:0] pat_faddr;
+   reg [2:0]  pat_run;
+   reg        pat_seen, pat_pend;
+   reg [15:0] pend_d;
+   reg [22:0] pend_a;
+
+   wire [15:0] pat_exp_a = {8'h80, dvma_a[8:1]};
+   wire [15:0] pat_exp_b = {dvma_a[8:1], 8'h80};
+   wire        pat_hit_a = (dvma_din == pat_exp_a);
+   wire        pat_hit_b = (dvma_din == pat_exp_b);
    reg        load_half;
    reg [23:1] f_a;
    reg [15:0] f_d;
@@ -117,6 +151,8 @@ module sun2_dvma_probe (
          loads     <= 16'd0;
          heartbeat <= 16'd0;
          half_bad  <= 16'd0;
+         pat_a     <= 16'd0; pat_b <= 16'd0; pat_bad <= 16'd0;
+         pat_run   <= 3'd0;  pat_seen <= 1'b0; pat_pend <= 1'b0;
          loads_this_cycle <= 4'd0;
          f_seen    <= 1'b0;
       end else begin
@@ -140,6 +176,44 @@ module sun2_dvma_probe (
                                half_bad  <= half_bad  + 16'd1;
             if (bad_late_load) late_load <= late_load + 16'd1;
 
+            // The pattern check, counting only an **isolated** miss -- a word
+            // that does not match with matching words on both sides.
+            //
+            // The first version armed on a run of four and then counted every
+            // miss, which on the board gave 1018: the master reads plenty that
+            // is not the pattern (metadata, the zero fill, other files), and
+            // once armed all of it was flagged.  A real corruption is one wrong
+            // word inside a sector that otherwise matches, so requiring a match
+            // *after* the miss separates the two without needing to know where
+            // sectors begin.
+            //
+            // pend holds the candidate for one capture: if the next word
+            // matches it was isolated and counts; if it does not, this is
+            // ordinary traffic and the check disarms.
+            if (pat_hit_a) begin
+               pat_a <= pat_a + 16'd1;
+               if (pat_run != 3'd4) pat_run <= pat_run + 3'd1;
+               if (pat_pend) begin
+                  pat_pend <= 1'b0;
+                  pat_bad  <= pat_bad + 16'd1;
+                  if (!pat_seen) begin
+                     pat_seen  <= 1'b1;
+                     pat_first <= pend_d;
+                     pat_faddr <= pend_a;
+                  end
+               end
+            end else begin
+               if (pat_run == 3'd4 && !pat_pend) begin
+                  pat_pend <= 1'b1;          // candidate, not yet counted
+                  pend_d   <= dvma_din;
+                  pend_a   <= dvma_a;
+               end else begin
+                  pat_pend <= 1'b0;          // two misses: not the pattern
+                  pat_run  <= 3'd0;
+               end
+            end
+            if (pat_hit_b) pat_b <= pat_b + 16'd1;
+
             // The first one only: a later violation cannot overwrite the
             // evidence of the first, which is the one with a clean history
             // behind it.
@@ -158,6 +232,11 @@ module sun2_dvma_probe (
    assign n_load      = loads;
    assign n_clk       = heartbeat;
    assign n_half_bad  = half_bad;
+   assign n_pat_a     = pat_a;
+   assign n_pat_b     = pat_b;
+   assign n_pat_bad   = pat_bad;
+   assign n_pat_first = pat_first;
+   assign n_pat_faddr = pat_faddr;
    assign first_a     = f_a;
    assign first_d     = f_d;
    assign seen        = f_seen;

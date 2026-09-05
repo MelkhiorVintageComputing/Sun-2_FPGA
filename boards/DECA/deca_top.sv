@@ -300,7 +300,7 @@ module deca_top #(
    // expression (1 bits) it drives; bit(s) dvma_probe[79..1] have no fanout".
    // From the JTAG side it looked like a healthy machine with every counter at
    // zero, because bit 0 was the only bit with a path.
-   wire [95:0]  dvma_probe;
+   wire [182:0] dvma_probe;
    // The DDR3 adapter's read accounting, appended *below* dvma_probe in the
    // ISSP word so every existing offset in tools/deca_dvmaprobe.tcl stays put.
    wire [15:0]  ddr3_rd_issued, ddr3_rd_ready, ddr3_rd_unexpected, ddr3_lane_bad;
@@ -1000,12 +1000,12 @@ module deca_top #(
        .sld_auto_instance_index ("YES"),
        .instance_id             ("DVMP"),
        .source_initial_value    ("0"),
-       .probe_width             (382),
+       .probe_width             (469),
        .source_width            (1),
        .enable_metastability    ("YES")
    ) u_dvmaprobe_issp (
        .source_clk (cpu_clk),
-       // 286 + 16 + 16 + 32 + 16 + 8 + 8 = **382**.  Count it every time: the
+       // 183 + 16+16+16+16 + 16+16+30+32+32 + 16+16+32+16+8+8 = **469**.  Count it every time: the
        // first version of this line said 366, having dropped the two 8-bit
        // fields, and a probe narrower than its concatenation truncates in
        // silence -- every field shifts and the readout is plausible nonsense

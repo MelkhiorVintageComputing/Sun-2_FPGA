@@ -21,6 +21,7 @@ module tb_dvma_probe;
    reg  [23:1] dvma_a   = 0;
 
    wire [15:0] n_latch, n_no_load, n_late_load, first_d, n_half_bad;
+   wire [15:0] n_pat_a, n_pat_bad, n_pat_first;
    wire [23:1] first_a;
    wire        seen;
 
@@ -31,6 +32,8 @@ module tb_dvma_probe;
        .dvma_din(dvma_din), .dvma_a(dvma_a),
        .n_latch(n_latch), .n_no_load(n_no_load), .n_late_load(n_late_load),
        .n_clk(), .n_load(), .n_half_bad(n_half_bad),
+       .n_pat_a(n_pat_a), .n_pat_b(), .n_pat_bad(n_pat_bad),
+       .n_pat_first(n_pat_first), .n_pat_faddr(),
        .first_a(first_a), .first_d(first_d), .seen(seen));
 
    integer checks = 0, errors = 0;
@@ -92,6 +95,34 @@ module tb_dvma_probe;
    // straight after the @(posedge) that produced them reads the value from
    // before the edge.  Settle first, every time.
    task settle; begin @(posedge clk); #1; end endtask
+
+   // One capture carrying the pattern word for its address, and one carrying
+   // rubbish, so the check can be armed and then tripped.
+   task healthy_pat(input [23:1] a);
+      begin
+         dvma_a <= a;
+         @(posedge clk); dvma_busy <= 1'b1;
+         @(posedge clk); brg_load  <= 1'b1; brg_half <= a[1];
+         @(posedge clk); brg_load  <= 1'b0;
+         repeat (2) @(posedge clk);
+         dvma_latch <= 1'b1; dvma_din <= {8'h80, a[8:1]};
+         @(posedge clk); dvma_latch <= 1'b0; dvma_busy <= 1'b0;
+         @(posedge clk);
+      end
+   endtask
+
+   task healthy_bad(input [23:1] a);
+      begin
+         dvma_a <= a;
+         @(posedge clk); dvma_busy <= 1'b1;
+         @(posedge clk); brg_load  <= 1'b1; brg_half <= a[1];
+         @(posedge clk); brg_load  <= 1'b0;
+         repeat (2) @(posedge clk);
+         dvma_latch <= 1'b1; dvma_din <= 16'hDEAD;
+         @(posedge clk); dvma_latch <= 1'b0; dvma_busy <= 1'b0;
+         @(posedge clk);
+      end
+   endtask
 
    integer i;
 
@@ -161,6 +192,36 @@ module tb_dvma_probe;
       ck(n_no_load == 2 && n_late_load == 1,
          "healthy traffic after a violation adds nothing");
 
+      // ---- the pattern check at the capture ----
+      // Four consecutive matches arm it; a later word that does not match is
+      // then flagged.  The run requirement is what stops ordinary traffic
+      // arming it, so it is checked both ways: a short run must NOT arm, and a
+      // long one must.
+      begin
+         integer k;
+         for (k = 0; k < 3; k = k + 1) healthy_pat(23'h001000 + k[22:0]);
+         healthy_bad(23'h001003);
+         settle;
+         ck(n_pat_bad == 0, "a short run does not arm the pattern check");
+
+         for (k = 0; k < 6; k = k + 1) healthy_pat(23'h002000 + k[22:0]);
+         settle;
+         ck(n_pat_a >= 6, "matching pattern words are counted");
+         // An isolated miss, closed by a matching word, is a real corruption.
+         healthy_bad(23'h002006);
+         healthy_pat(23'h002007);
+         settle;
+         ck(n_pat_bad == 1, "an isolated wrong word is caught");
+         settle;
+         ck(n_pat_first == 16'hDEAD, "with the word the master actually took");
+
+         // A run of non-pattern words is ordinary traffic, not corruption.
+         // Without this the board reported 1018 of them as bad.
+         for (k = 0; k < 8; k = k + 1) healthy_bad(23'h003000 + k[22:0]);
+         settle;
+         ck(n_pat_bad == 1, "a run of non-pattern words is not counted");
+      end
+
       // ---- a load with no capture is not a violation ----
       // The CPU's own reads load P_DATA_OUT constantly and the master is not
       // involved; counting those would drown the signal.
@@ -168,7 +229,7 @@ module tb_dvma_probe;
       repeat (5) @(posedge clk);
       brg_load <= 1'b0; @(posedge clk);
       settle;
-      ck(n_latch == 34 && n_no_load == 2 && n_late_load == 1,
+      ck(n_latch == 54 && n_no_load == 2 && n_late_load == 1,
          "bridge loads without a capture are ignored");
 
       $display("=== %0d checks, %0d failures ===", checks, errors);

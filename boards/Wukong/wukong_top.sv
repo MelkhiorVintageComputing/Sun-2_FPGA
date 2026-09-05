@@ -331,7 +331,7 @@ module wukong_top #(
    // this board has no In-System Sources and Probes, and an unconnected port
    // is how `fb_video_en' reached a bitstream dead for the life of the frame
    // buffer -- so it is connected to a named wire rather than left off.
-   wire [95:0]  dvma_probe;
+   wire [182:0] dvma_probe;
 
    // Named wires rather than slices straight into the core, because the
    // Hardware Manager names a probe after the net it is driven from -- and

@@ -25,7 +25,7 @@ module top(input         cpu_clk,
 	   // DECA does not define it -- that guard is for the Wukong's Xilinx
 	   // ILA -- and this probe has to exist on the board where the fault it
 	   // watches for actually happens.
-	   output [95:0]  dvma_probe,
+	   output [182:0] dvma_probe,
 
 	   /* Ethernet diagnostics, for the board top to surface: a PHY that
 	    holds carrier sense asserted stops transmission dead, and it is the
@@ -255,6 +255,14 @@ module top(input         cpu_clk,
        // first-event capture came out while the readout itself was in doubt:
        // an instrument whose numbers cannot be trusted should carry as few
        // fields as possible until they can.
+       // 96 + 16+16+16+16+23 = 183.  Widths added up and checked against the
+       // port: a probe narrower than what feeds it truncates in silence and
+       // shifts every field, which cost a build once already.
+       .n_pat_a(dvma_probe[182:167]),
+       .n_pat_b(dvma_probe[166:151]),
+       .n_pat_bad(dvma_probe[150:135]),
+       .n_pat_first(dvma_probe[134:119]),
+       .n_pat_faddr(dvma_probe[118:96]),
        .n_half_bad(dvma_probe[95:80]),
        .n_clk(dvma_probe[79:64]),
        .n_latch(dvma_probe[63:48]),

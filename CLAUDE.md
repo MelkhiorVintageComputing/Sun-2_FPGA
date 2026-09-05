@@ -1026,10 +1026,34 @@ because it is already present at the last point inside the FPGA before them.
 halfword, so the damaged byte is the high half of a 16-bit word, and `0x53` is
 neither a neighbouring pattern byte nor zero.
 
-Note what this does **not** yet separate: the data passes through DDR3, the
-bridge, `sun2_dvma` and the controller's sector buffer before reaching this
-check, and it was correct in memory when the CPU wrote it. The same checker
-placed at `dvma_din` would split that span in two.
+**The same check at the master's capture closes the span.** `sun2_dvma_probe`
+predicts the pattern from `dvma_a[8:1]` -- a buffer-cache block is 512-byte
+aligned, so the halfword index within a sector is in the address -- and counts
+only an *isolated* miss, one with matching words on both sides. On the same run:
+
+```
+  at the master's capture   wrong words 4, first took 53d2 (wanted 80xx)
+  at the card interface     byte 432, wanted 80 got 53
+```
+
+**`0x53` replacing `0x80` at both ends.** So the word is already wrong when the
+master captures it from the bridge, and `sun2_dvma`, the SCSI engine, the sector
+buffer, `blk_sd` and the card are all downstream of the damage. The fault is at
+or below DDR3.
+
+**And that is not retention, because the same memory is provably good when
+written.** `WRITE_VERIFY` reads every write straight back and finds 0 wrong;
+`DOUBLE_READ` finds the controller self-consistent; `memdwell` finds no decay in
+600 s of idle. What is left is a value that changes between the write and a
+later read **while other traffic is in flight** -- disturbance under load rather
+than decay at rest, which is why every quiet test passes. `0x80` to `0x53` is
+five bits, so it is not a bit flip; it is a different byte, from somewhere else.
+
+Two things about reading these counters. `matches` is 16 bits and a 512-sector
+pass is 131,072 words, so it wraps: the first run of this check read `matches 0`
+and looked dead when it was exactly two wraps. And the check must count only
+isolated misses -- the first version armed on a run and then flagged everything,
+reporting 1018, because a master reads plenty that is not the pattern.
 
 **The gap that remains is the write *data* path above the adapter.** Everything
 built so far checks reads, or checks a write against `req_dat` -- what the
