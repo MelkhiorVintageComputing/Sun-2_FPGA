@@ -304,6 +304,9 @@ module deca_top #(
    // The DDR3 adapter's read accounting, appended *below* dvma_probe in the
    // ISSP word so every existing offset in tools/deca_dvmaprobe.tcl stays put.
    wire [15:0]  ddr3_rd_issued, ddr3_rd_ready, ddr3_rd_unexpected, ddr3_lane_bad;
+   wire [15:0]  ddr3_reread_bad;
+   wire [29:0]  ddr3_rr_adr;
+   wire [31:0]  ddr3_rr_v1, ddr3_rr_v2;
    wire         dvmp_src;   // the ISSP's source, unused but connected
 
    top machine (
@@ -427,7 +430,17 @@ module deca_top #(
    assign cmd_wdata_a[0]     = w_cmd_wdata;
    assign cmd_wmask_a[0]     = w_cmd_wmask;
 
-   deca_wb_to_ddr3 #(.PORT_ADDR_SIZE(PORT_ADDR_SIZE),
+   // Every read issued twice and compared, in the BLKTRACE bitstream only:
+   // it halves DVMA read bandwidth, which the disk path can spare and an
+   // ordinary build should not pay.
+`ifdef SUN2_BLKTRACE
+   localparam bit DDR3_DOUBLE_READ = 1'b1;
+`else
+   localparam bit DDR3_DOUBLE_READ = 1'b0;
+`endif
+
+   deca_wb_to_ddr3 #(.DOUBLE_READ(DDR3_DOUBLE_READ),
+                     .PORT_ADDR_SIZE(PORT_ADDR_SIZE),
                      .PORT_CACHE_BITS(PORT_CACHE_BITS)) memif (
        .clk_wb   (cpu_clk),
        .rst_wb   (sys_reset),
@@ -454,6 +467,10 @@ module deca_top #(
        .dbg_rd_ready      (ddr3_rd_ready),
        .dbg_rd_unexpected (ddr3_rd_unexpected),
        .dbg_lane_bad      (ddr3_lane_bad),
+       .dbg_reread_bad    (ddr3_reread_bad),
+       .dbg_rr_adr        (ddr3_rr_adr),
+       .dbg_rr_v1         (ddr3_rr_v1),
+       .dbg_rr_v2         (ddr3_rr_v2),
        .CMD_read_data  (cmd_rdata_a[0])
    );
 
@@ -965,13 +982,16 @@ module deca_top #(
        .sld_auto_instance_index ("YES"),
        .instance_id             ("DVMP"),
        .source_initial_value    ("0"),
-       .probe_width             (160),
+       .probe_width             (270),
        .source_width            (1),
        .enable_metastability    ("YES")
    ) u_dvmaprobe_issp (
        .source_clk (cpu_clk),
+       // 96+16+16+16+16 +16+30+32+32 = 270.  Appended at the end, so every
+       // offset tools/deca_dvmaprobe.tcl already decodes is unchanged.
        .probe      ({dvma_probe, ddr3_rd_unexpected,
-                    ddr3_rd_ready, ddr3_rd_issued, ddr3_lane_bad}),
+                    ddr3_rd_ready, ddr3_rd_issued, ddr3_lane_bad,
+                    ddr3_reread_bad, ddr3_rr_adr, ddr3_rr_v1, ddr3_rr_v2}),
        // Connected, not left open.  Both instances on this board that read back
        // correctly -- SUN2 and BLKT -- drive a real wire here, and this one did
        // not; with it open the probe returned a fixed ...0001 whatever was

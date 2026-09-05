@@ -940,7 +940,44 @@ That is the instrument checked against ground truth rather than trusted.
   may then never negate BG, leaving the flag clear for ever. Holding BR negated
   is what makes the CPU withdraw the grant.
 
-**The asymmetry is real, and it was worth measuring rather than assuming.** The
+**Both directions corrupt, and the read side had been wrongly cleared.** A file
+pristine on the medium came back wrong *in memory*, and a file correct in memory
+landed wrong on the medium, in the same session:
+
+```
+                       on disk (cold)   in memory (warm)
+  /usr/bin/adb            50905            55306
+  /usr/bin/csh            34435            34435
+  /za  (copy of csh)      49861            34435
+  /zb  (copy of adb)      01370            55306
+```
+
+`/usr/bin/adb` is byte-perfect on the card and was read into the buffer cache
+wrong; `/za` was correct in the buffer cache and reached the card wrong. So this
+is not a memory-to-device transfer bug, and the paragraph below -- which
+concluded reads were clean from `dd if=/dev/rsd0a | sum` agreeing twice -- was
+measuring the *raw* path, which bypasses the buffer cache, and does not
+generalise.
+
+**That reframes the whole search, and suggests one mechanism for all of it.**
+Data is correct when written and wrong when read back later, in both directions,
+while every handshake, response and lane check in between reads zero and a
+double read of the same address agrees with itself. What fits all of that is
+data decaying *while resident in DDR3* -- a refresh or retention problem in
+`Inputs/BrianHG-DDR3` -- rather than anything about the transfer. It would also
+explain why `test/deca_ddr3` passes (it writes and reads straight back, with no
+dwell) and why the CPU survives (its text pages are re-read from disk, and a
+decayed instruction shows up as the `lpd` cores and `ld` SIGILLs this file
+already records).
+
+**The measurement that would settle it** is a dwell test: fill a large span of
+memory with a known pattern, leave it untouched for minutes, read it back, and
+see whether errors accumulate with *time* rather than with traffic. That is the
+one variable no test here has ever varied.
+
+**The asymmetry claim below is therefore withdrawn.**
+
+**The asymmetry was measured and interpreted too narrowly.** The
 suspicion here used to be that it was observational -- writes are verifiable
 because the source is in hand, reads are not, and a corrupted word arriving in a
 page read from disk is invisible until it is executed, which this machine does

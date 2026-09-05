@@ -36,7 +36,7 @@ set raw [read_probe_data -instance_index $idx]
 
 # Anchor to the end: the tool pads the returned string up to a convenient
 # multiple, and indexing from the front is only right when it happens not to.
-set W 160
+set W 270
 if {[string length $raw] > $W} {
     set raw [string range $raw [expr {[string length $raw] - $W}] end]
 }
@@ -53,6 +53,10 @@ set rd_unexp    [field $raw  96 16]
 set rd_ready    [field $raw 112 16]
 set rd_issued   [field $raw 128 16]
 set lane_bad    [field $raw 144 16]
+set reread_bad  [field $raw 160 16]
+set rr_adr      [field $raw 176 30]
+set rr_v1       [field $raw 206 32]
+set rr_v2       [field $raw 238 32]
 set seen        0
 
 puts [format "heartbeat    %6d (mod 65536)  -- free-running; 0 means the probe is dead" $n_clk]
@@ -70,6 +74,17 @@ puts        "                          with no request to answer, which the next
 puts        "                          read could take as its own"
 puts [format "  wrong lane     %6d   -- the 32-bit quarter of the 128-bit line" $lane_bad]
 puts        "                          changed between issue and response"
+puts ""
+puts "Double read (every read issued twice and the answers compared)"
+puts [format "  disagreements  %6d" $reread_bad]
+if {$reread_bad > 0} {
+    puts [format "  first at word address %08x: %08x then %08x  (xor %08x)" \
+              $rr_adr $rr_v1 $rr_v2 [expr {$rr_v1 ^ $rr_v2}]]
+    puts        "  ^ the controller answered the same address two different ways."
+} else {
+    puts        "  none -- but a zero here only means something if the run that"
+    puts        "  produced it still corrupted; reading twice changes timing."
+}
 if {$n_latch == 0} {
     if {$n_load == 0} {
         puts "             and no bridge loads either -- the probe or its readout is dead"

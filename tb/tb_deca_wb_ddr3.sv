@@ -45,7 +45,18 @@ module tb_deca_wb_ddr3;
    wire [CB-1:0]       CMD_wdata, CMD_read_data;
    wire [CB/8-1:0]     CMD_wmask;
 
-   deca_wb_to_ddr3 #(.PORT_ADDR_SIZE(AW), .PORT_CACHE_BITS(CB)) dut (
+   // DOUBLE_READ is set from a plusarg so the same testbench covers both
+   // arms: with it on every read is issued twice and the answers compared, and
+   // the checks below must still pass unchanged -- the machine is handed the
+   // first answer either way, so nothing about the Wishbone side may differ.
+   //   make -C sim decaddr3                 (the ordinary adapter)
+   //   make -C sim decaddr3 XSIMARGS=...    (see run_unit.sh: both are run)
+   parameter bit DOUBLE_READ = 1'b0;
+
+   wire [15:0] dbg_reread_bad;
+
+   deca_wb_to_ddr3 #(.DOUBLE_READ(DOUBLE_READ),
+                     .PORT_ADDR_SIZE(AW), .PORT_CACHE_BITS(CB)) dut (
        .clk_wb (clk_wb), .rst_wb (rst),
        .wb_cyc_i (wb_cyc), .wb_stb_i (wb_stb), .wb_adr_i (wb_adr),
        .wb_dat_i (wb_dat), .wb_sel_i (wb_sel), .wb_we_i (wb_we),
@@ -54,7 +65,10 @@ module tb_deca_wb_ddr3;
        .CMD_busy (CMD_busy), .CMD_ena (CMD_ena),
        .CMD_write_ena (CMD_write_ena), .CMD_addr (CMD_addr),
        .CMD_wdata (CMD_wdata), .CMD_wmask (CMD_wmask),
-       .CMD_read_ready (CMD_read_ready), .CMD_read_data (CMD_read_data)
+       .CMD_read_ready (CMD_read_ready), .CMD_read_data (CMD_read_data),
+       .dbg_rd_issued (), .dbg_rd_ready (), .dbg_rd_unexpected (),
+       .dbg_lane_bad (), .dbg_reread_bad (dbg_reread_bad),
+       .dbg_rr_adr (), .dbg_rr_v1 (), .dbg_rr_v2 ()
    );
 
    // ------------------------------------------------- the controller model
@@ -73,6 +87,7 @@ module tb_deca_wb_ddr3;
    reg [CB-1:0] rdata_r;
 
    assign CMD_busy       = busy_r;
+   bit flaky = 1'b0, flaky_tgl = 1'b0;
    assign CMD_read_ready = rr;
    assign CMD_read_data  = rdata_r;
 
@@ -105,6 +120,16 @@ module tb_deca_wb_ddr3;
          if (rd_delay == 0) begin
             for (int b = 0; b < CB/8; b++)
               rdata_r[b*8 +: 8] <= mem.exists(rd_addr + b) ? mem[rd_addr + b] : 8'h00;
+           // With `flaky' set, every second response to the same address comes
+           // back altered.  This is what proves the double-read check can
+           // *see* a disagreement: a checker that cannot detect an injected
+           // fault makes a zero reading meaningless, which is the trap this
+           // project has already hit with an instrument watching an undriven
+           // wire.
+           if (flaky) begin
+              flaky_tgl <= ~flaky_tgl;
+              if (flaky_tgl) rdata_r[7:0] <= 8'hA5;
+           end
             rr         <= 1'b1;
             rd_pending <= 1'b0;
          end else
@@ -220,6 +245,17 @@ module tb_deca_wb_ddr3;
          if (got !== (~n & 32'hFFFFFFFF)) errs++;
       end
       check("64 interleaved write/read pairs", errs == 0);
+
+      // 6. Does the double-read check see a controller that disagrees with
+      //    itself?  A zero from it on the board means nothing unless an
+      //    injected fault makes it non-zero here.
+      if (DOUBLE_READ) begin
+         check("no disagreements on healthy traffic", dbg_reread_bad == 0);
+         flaky = 1'b1;
+         for (n = 0; n < 8; n++) wb_read(64 + n, got);
+         flaky = 1'b0;
+         check("an injected disagreement is caught", dbg_reread_bad != 0);
+      end
 
       $display("=== deca_wb_ddr3: %0d checks, %0d passed, %0d failed ===",
                pass + fail, pass, fail);
