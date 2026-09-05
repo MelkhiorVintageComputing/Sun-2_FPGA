@@ -992,10 +992,32 @@ address twice back to back and compares; if a write has not landed, both reads
 return the same stale value and agree. Every counter stays zero. So the zero it
 reported is consistent with this and never excluded it.
 
-**The measurement that would settle it** is the write-side mirror of the double
-read: after every write, read the same address straight back and compare against
-what was written, counting mismatches in hardware. That tests visibility rather
-than the handshake, which is the one thing nothing here has tested.
+**Measured, and writes are visible.** `WRITE_VERIFY` in `deca_wb_to_ddr3` reads
+every write straight back and compares it against what was written, byte-masked
+by `wb_sel`, with `PORT_CACHE_SMART` held at 0 so the read-back cannot be
+answered out of the write cache and confirm itself. `tb_deca_wb_ddr3` runs the
+arm and injects a dropped write to prove the check can see one. On the board,
+across a boot: **0 wrong**. The counter is demonstrably live -- responses exceed
+`reads issued` by about 19,895, which are the read-backs themselves, since that
+counter only counts `CMD_ena && !req_we`.
+
+**So every layer this project owns is now measured clean, and the fault is still
+there.** Handshake, response accounting, lane, half, capture, read consistency
+and write visibility all read zero on runs that corrupt.
+
+**The gap that remains is the write *data* path above the adapter.** Everything
+built so far checks reads, or checks a write against `req_dat` -- what the
+adapter was handed. Nothing checks that `req_dat` is what the CPU or the master
+actually put on the bus. `sun2_wishbone_bridge`'s write path
+(`P_DATA_IN` -> `wb_dat_o`) and `sun2_dvma`'s write staging have never been
+instrumented, and a word corrupted there would satisfy every check listed above:
+the adapter would faithfully store, and faithfully read back, the wrong value.
+
+**A caution about the machine as an instrument.** After many corrupting runs the
+2560 MiB filesystem degraded to the point where `/usr/bin/adb` and
+`/usr/bin/csh` both read wrong on a *cold* boot (54248 and 61295 against 50905
+and 34435), and `ld` began failing deterministically until a reboot. Rewrite the
+card before any run whose conclusion depends on a source being pristine.
 
 **The asymmetry claim below is therefore withdrawn.**
 

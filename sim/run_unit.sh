@@ -281,6 +281,10 @@ decaddr3)
 		work.tb_deca_wb_ddr3 -s decaddr3_2r_sim
 	echo "--- DOUBLE_READ=1 ---"
 	xsim decaddr3_2r_sim -R | grep -E '===|PASS|FAIL|ok:'
+	step xelab -debug off --timescale 1ns/1ps -generic_top "WRITE_VERIFY=1" \
+		work.tb_deca_wb_ddr3 -s decaddr3_wv_sim
+	echo "--- WRITE_VERIFY=1 ---"
+	xsim decaddr3_wv_sim -R | grep -E '===|PASS|FAIL|ok:'
 	;;
 
 decaconsole)

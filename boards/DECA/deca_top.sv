@@ -74,7 +74,7 @@ module deca_top #(
     // default and closes the read-after-write window described at the
     // instantiation below; 0 is what this board shipped with.  Not related to
     // the two cache *timeouts*, which stay at zero either way.
-    parameter bit DDR3_SMART = 1'b1
+    parameter bit DDR3_SMART = 1'b0
 ) (
     input  wire        MAX10_CLK1_50,   // PIN_M8,  2.5 V
     input  wire [1:0]  KEY,             // H21 H22, 1.5 V Schmitt, active low
@@ -304,7 +304,7 @@ module deca_top #(
    // The DDR3 adapter's read accounting, appended *below* dvma_probe in the
    // ISSP word so every existing offset in tools/deca_dvmaprobe.tcl stays put.
    wire [15:0]  ddr3_rd_issued, ddr3_rd_ready, ddr3_rd_unexpected, ddr3_lane_bad;
-   wire [15:0]  ddr3_reread_bad;
+   wire [15:0]  ddr3_reread_bad, ddr3_wv_bad;
    wire [29:0]  ddr3_rr_adr;
    wire [31:0]  ddr3_rr_v1, ddr3_rr_v2;
    wire         dvmp_src;   // the ISSP's source, unused but connected
@@ -434,12 +434,19 @@ module deca_top #(
    // it halves DVMA read bandwidth, which the disk path can spare and an
    // ordinary build should not pay.
 `ifdef SUN2_BLKTRACE
-   localparam bit DDR3_DOUBLE_READ = 1'b1;
+   // The double read is off: it asks whether the controller is self-consistent,
+   // and a write that has not landed makes both of its reads agree, so it can
+   // never see the fault now suspected.  The write verify asks the question
+   // that is left -- is a write there afterwards.
+   localparam bit DDR3_DOUBLE_READ  = 1'b0;
+   localparam bit DDR3_WRITE_VERIFY = 1'b1;
 `else
-   localparam bit DDR3_DOUBLE_READ = 1'b0;
+   localparam bit DDR3_DOUBLE_READ  = 1'b0;
+   localparam bit DDR3_WRITE_VERIFY = 1'b0;
 `endif
 
    deca_wb_to_ddr3 #(.DOUBLE_READ(DDR3_DOUBLE_READ),
+                     .WRITE_VERIFY(DDR3_WRITE_VERIFY),
                      .PORT_ADDR_SIZE(PORT_ADDR_SIZE),
                      .PORT_CACHE_BITS(PORT_CACHE_BITS)) memif (
        .clk_wb   (cpu_clk),
@@ -468,6 +475,7 @@ module deca_top #(
        .dbg_rd_unexpected (ddr3_rd_unexpected),
        .dbg_lane_bad      (ddr3_lane_bad),
        .dbg_reread_bad    (ddr3_reread_bad),
+       .dbg_wv_bad        (ddr3_wv_bad),
        .dbg_rr_adr        (ddr3_rr_adr),
        .dbg_rr_v1         (ddr3_rr_v1),
        .dbg_rr_v2         (ddr3_rr_v2),
@@ -982,16 +990,17 @@ module deca_top #(
        .sld_auto_instance_index ("YES"),
        .instance_id             ("DVMP"),
        .source_initial_value    ("0"),
-       .probe_width             (270),
+       .probe_width             (286),
        .source_width            (1),
        .enable_metastability    ("YES")
    ) u_dvmaprobe_issp (
        .source_clk (cpu_clk),
-       // 96+16+16+16+16 +16+30+32+32 = 270.  Appended at the end, so every
+       // 96+16+16+16+16 +16+16+30+32+32 = 286.  Appended at the end, so every
        // offset tools/deca_dvmaprobe.tcl already decodes is unchanged.
        .probe      ({dvma_probe, ddr3_rd_unexpected,
                     ddr3_rd_ready, ddr3_rd_issued, ddr3_lane_bad,
-                    ddr3_reread_bad, ddr3_rr_adr, ddr3_rr_v1, ddr3_rr_v2}),
+                    ddr3_reread_bad, ddr3_wv_bad,
+                    ddr3_rr_adr, ddr3_rr_v1, ddr3_rr_v2}),
        // Connected, not left open.  Both instances on this board that read back
        // correctly -- SUN2 and BLKT -- drive a real wire here, and this one did
        // not; with it open the probe returned a fixed ...0001 whatever was

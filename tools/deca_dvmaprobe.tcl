@@ -36,7 +36,7 @@ set raw [read_probe_data -instance_index $idx]
 
 # Anchor to the end: the tool pads the returned string up to a convenient
 # multiple, and indexing from the front is only right when it happens not to.
-set W 270
+set W 286
 if {[string length $raw] > $W} {
     set raw [string range $raw [expr {[string length $raw] - $W}] end]
 }
@@ -54,9 +54,10 @@ set rd_ready    [field $raw 112 16]
 set rd_issued   [field $raw 128 16]
 set lane_bad    [field $raw 144 16]
 set reread_bad  [field $raw 160 16]
-set rr_adr      [field $raw 176 30]
-set rr_v1       [field $raw 206 32]
-set rr_v2       [field $raw 238 32]
+set wv_bad      [field $raw 176 16]
+set rr_adr      [field $raw 192 30]
+set rr_v1       [field $raw 222 32]
+set rr_v2       [field $raw 254 32]
 set seen        0
 
 puts [format "heartbeat    %6d (mod 65536)  -- free-running; 0 means the probe is dead" $n_clk]
@@ -74,6 +75,18 @@ puts        "                          with no request to answer, which the next
 puts        "                          read could take as its own"
 puts [format "  wrong lane     %6d   -- the 32-bit quarter of the 128-bit line" $lane_bad]
 puts        "                          changed between issue and response"
+puts ""
+puts "Write verify (every write read straight back and compared)"
+puts [format "  writes wrong   %6d" $wv_bad]
+if {$wv_bad > 0} {
+    puts [format "  first at word address %08x: wrote %08x, read back %08x  (xor %08x)" \
+              $rr_adr $rr_v1 $rr_v2 [expr {$rr_v1 ^ $rr_v2}]]
+    puts        "  ^ a write was not visible to the read that followed it."
+} else {
+    puts        "  none.  Meaningful only if this run still corrupted, and only"
+    puts        "  with PORT_CACHE_SMART off -- with it on the read-back is"
+    puts        "  answered from the write cache and confirms itself."
+}
 puts ""
 puts "Double read (every read issued twice and the answers compared)"
 puts [format "  disagreements  %6d" $reread_bad]

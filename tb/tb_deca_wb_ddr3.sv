@@ -52,10 +52,11 @@ module tb_deca_wb_ddr3;
    //   make -C sim decaddr3                 (the ordinary adapter)
    //   make -C sim decaddr3 XSIMARGS=...    (see run_unit.sh: both are run)
    parameter bit DOUBLE_READ = 1'b0;
+   parameter bit WRITE_VERIFY = 1'b0;
 
-   wire [15:0] dbg_reread_bad;
+   wire [15:0] dbg_reread_bad, dbg_wv_bad;
 
-   deca_wb_to_ddr3 #(.DOUBLE_READ(DOUBLE_READ),
+   deca_wb_to_ddr3 #(.DOUBLE_READ(DOUBLE_READ), .WRITE_VERIFY(WRITE_VERIFY),
                      .PORT_ADDR_SIZE(AW), .PORT_CACHE_BITS(CB)) dut (
        .clk_wb (clk_wb), .rst_wb (rst),
        .wb_cyc_i (wb_cyc), .wb_stb_i (wb_stb), .wb_adr_i (wb_adr),
@@ -68,6 +69,7 @@ module tb_deca_wb_ddr3;
        .CMD_read_ready (CMD_read_ready), .CMD_read_data (CMD_read_data),
        .dbg_rd_issued (), .dbg_rd_ready (), .dbg_rd_unexpected (),
        .dbg_lane_bad (), .dbg_reread_bad (dbg_reread_bad),
+       .dbg_wv_bad (dbg_wv_bad),
        .dbg_rr_adr (), .dbg_rr_v1 (), .dbg_rr_v2 ()
    );
 
@@ -88,6 +90,7 @@ module tb_deca_wb_ddr3;
 
    assign CMD_busy       = busy_r;
    bit flaky = 1'b0, flaky_tgl = 1'b0;
+   bit dropwr = 1'b0;
    assign CMD_read_ready = rr;
    assign CMD_read_data  = rdata_r;
 
@@ -108,7 +111,12 @@ module tb_deca_wb_ddr3;
       if (CMD_ena) begin
          if (CMD_write_ena) begin
             for (int b = 0; b < CB/8; b++)
-              if (CMD_wmask[b]) mem[CMD_addr + b] = CMD_wdata[b*8 +: 8];
+              // `dropwr' makes the model accept a write and not store it --
+              // a write that is acknowledged and never becomes visible, which
+              // is precisely the fault WRITE_VERIFY exists to catch.  Without
+              // being able to inject it, a zero from that counter on the board
+              // would mean nothing.
+              if (CMD_wmask[b] && !dropwr) mem[CMD_addr + b] = CMD_wdata[b*8 +: 8];
          end else begin
             rd_pending <= 1'b1;
             rd_addr    <= CMD_addr;
@@ -249,6 +257,14 @@ module tb_deca_wb_ddr3;
       // 6. Does the double-read check see a controller that disagrees with
       //    itself?  A zero from it on the board means nothing unless an
       //    injected fault makes it non-zero here.
+      if (WRITE_VERIFY) begin
+         check("no write-verify errors on healthy traffic", dbg_wv_bad == 0);
+         dropwr = 1'b1;
+         for (n = 0; n < 4; n++) wb_write(200 + n, 32'hDEADBEEF, 4'hF);
+         dropwr = 1'b0;
+         check("a write that never lands is caught", dbg_wv_bad != 0);
+      end
+
       if (DOUBLE_READ) begin
          check("no disagreements on healthy traffic", dbg_reread_bad == 0);
          flaky = 1'b1;
