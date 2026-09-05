@@ -141,6 +141,13 @@ set P(data) $byport(8)
 set P(ctx)  $byport(9)
 set P(cx)   $byport(10)
 set P(dvma) $byport(11)
+set P(irq)  $byport(12)
+# The adapter's clock-crossing check, probes 13..15.  See wb_to_mig_ui.sv:
+# xchk_bad is high on a transaction whose word matched tools/patwr -u's pattern
+# in the MIG clock domain and did not after crossing into the CPU's.
+set P(xbad) $byport(13)
+set P(xgot) $byport(14)
+set P(xexp) $byport(15)
 foreach k {addr fc hand cs smap ps ma verd data ctx cx} {
     puts "== probe $k: [get_property NAME $P($k)] port [get_property PROBE_PORT $P($k)] width [get_property WIDTH $P($k)] =="
 }
@@ -165,6 +172,29 @@ foreach k [array names P] {
 # hand = {AS RW UDS LDS DTACK BERR}, all active low, so AS asserted is bit 5 = 0
 switch -- $mode {
     err  { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd) }
+    xpat { # A pattern word crossing at all -- the control for `xchk'.
+           #
+           # `xchk' can only fire on a word that matched the pattern *before*
+           # the crossing, so a run of it that never triggers proves nothing
+           # unless pattern words are known to cross in the first place.  This
+           # triggers on the shape alone, 0x80xx80xx, which is what tools/patwr
+           # -u puts in every 32-bit word.  No trigger here means the check
+           # never sees the pattern and any verdict from `xchk' is void.
+           set_property TRIGGER_COMPARE_VALUE \
+               eq32'b10000000XXXXXXXX10000000XXXXXXXX $P(xgot)
+         }
+    xchk { # The Wishbone/MIG clock crossing corrupting a word.
+           #
+           # Self-gating, and that is the whole reason this mode is cheap to
+           # trust: xchk_bad can only be high for a word that *was* the pattern
+           # before the crossing, so ordinary traffic cannot trigger it.  If a
+           # run of tools/patwr -u reports bad words in software and this never
+           # triggers, the crossing is clean and the fault is below the adapter.
+           #
+           # Run patwr on the machine while this is armed; a 512 KiB pass takes
+           # a few minutes and produces a handful of bad words at most.
+           set_property TRIGGER_COMPARE_VALUE eq1'b1 $P(xbad)
+         }
     illegal { # the 68010 fetching the illegal-instruction vector.
             # Vector 4 lives at 0x10, so A[23:1] is 0x000008, and the fetch is
             # a supervisor data read.  Nothing else reads that word, so this
@@ -523,7 +553,7 @@ switch -- $mode {
     fc1  { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
            set_property TRIGGER_COMPARE_VALUE eq3'b001   $P(fc) }
     as   { set_property TRIGGER_COMPARE_VALUE eq6'b0XXXXX $P(hand) }
-    default { puts "ERROR: MODE must be err, fc1, as, supw, scc, ether, etherseq, caseq, caclk, wildptr, lateerr, dvma, dvmaseq, iack, iackseq, illegal, vecfetch, scp, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz, fbprobe or reset, not '$mode'"; exit 1 }
+    default { puts "ERROR: MODE must be err, xchk, xpat, fc1, as, supw, scc, ether, etherseq, caseq, caclk, wildptr, lateerr, dvma, dvmaseq, iack, iackseq, illegal, vecfetch, scp, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz, fbprobe or reset, not '$mode'"; exit 1 }
 }
 
 # Capture control: keep bus cycles, drop the idle clocks between them.  4096

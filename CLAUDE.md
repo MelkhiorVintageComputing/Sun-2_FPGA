@@ -2257,6 +2257,31 @@ counter reads 0 because that is correct.
 
 ## Traps that have already cost time
 
+* **An ILA capture window is 205 us and a disk workload is minutes, so the
+  trigger has to do all the work -- and a trigger nobody has validated is worth
+  nothing.** The crossing check in `wb_to_mig_ui` (`xchk_bad`, ILA mode `xchk`)
+  fires only on a word that matched `tools/patwr -u`'s pattern *before* the
+  crossing and not after, which is elegantly self-gating and useless until you
+  can show it ever sees the pattern at all. It never triggered over 14 minutes
+  and four passes -- and the control (`xpat`, trigger on the pattern's shape
+  alone) shows why that proves nothing: of 293 captured transactions, 292 were
+  CPU instruction fetches (`4e75`, `206f`, `226f`) and the one pattern-shaped
+  word was `80008000`, both halves index 0, which the encoding cannot produce.
+  A coincidence, not the pattern.
+
+  Two further ways the same experiment was void before that. **Vivado takes
+  about 90 seconds to start and arm, and a `patwr` pass takes 60**, so the first
+  two captures armed *after* the run they were meant to watch had finished; a
+  long pass (`patwr ... 8`) is needed so the workload outlives the arming. And
+  `xchk_exp` is computed for every transaction, so it looks pattern-shaped
+  beside data that is plainly 68010 code -- it means nothing unless the
+  transaction really was reading the pattern.
+
+  The instrument this wants is a **counter read once at the end**, not a
+  capture: the DECA's In-System Sources and Probes did exactly that, and the
+  Wukong equivalent is a VIO, which this tree does not yet have. An ILA cannot
+  count.
+
 * **A probe narrower than its concatenation truncates in silence, and the
   arithmetic is easy to get wrong.** `probe_width` was set to 366 for a
   concatenation of 382 bits -- two 8-bit fields forgotten in the sum -- and

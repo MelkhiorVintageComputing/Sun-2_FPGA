@@ -69,7 +69,30 @@ module wb_to_mig_ui #(
     output wire [APP_MASK_WIDTH-1:0] c_wmask,
     output wire                      c_req,           // held until c_done
     input  wire                      c_done,          // one cycle; rdata valid with it
-    input  wire [APP_DATA_WIDTH-1:0] c_rdata
+    input  wire [APP_DATA_WIDTH-1:0] c_rdata,
+
+    // ---- the crossing check -----------------------------------------------
+    // rd_lane is written in ui_clk and read in clk_wb, an unsynchronised 32-bit
+    // payload carried by a toggle handshake.  It is the one hop in this whole
+    // path that nothing has ever tested: every adapter check compares values
+    // *within* ui_clk (WRITE_VERIFY against req_dat, DOUBLE_READ against
+    // another read), and every bridge check is in clk_wb and assumes wb_dat_i
+    // arrived intact.
+    //
+    // tools/patwr -u writes a pattern that repeats every sector, so both sides
+    // can predict it from the address they already hold -- 32 bits at word
+    // address A covers halfword indices 2A and 2A+1, modulo 256.  The check is
+    // computed separately in each domain and only the verdict crosses:
+    //
+    //   xchk_bad   the word matched the pattern before the crossing and did
+    //              not after.  Self-gating: traffic that is not the pattern
+    //              never sets pre_ok, so it cannot trigger.
+    //
+    // Both byte orders are accepted, because getting the lane order wrong here
+    // would cost a build to discover and the order is not what is being tested.
+    output wire                      xchk_bad,
+    output wire [31:0]               xchk_got,
+    output wire [31:0]               xchk_exp
 );
 
    // ------------------------------------------------------------------
@@ -83,12 +106,24 @@ module wb_to_mig_ui #(
    reg [3:0]  req_sel;
    reg        req_we;
    reg [31:0] rd_lane;
+   reg        pre_ok;
 
    reg        req_tgl;      // toggles to launch a transaction   (clk_wb)
    reg        ack_tgl;      // toggles when one completes        (ui_clk)
    reg        busy;
 
    wire [1:0] lane = req_adr[1:0];
+
+   // The pattern word this address should hold, in both lane orders.
+   function automatic logic [31:0] pat_for(input logic [29:0] a, input bit swap);
+      logic [7:0] i0, i1;
+      begin
+         i0 = 8'((a << 1)      & 30'hFF);   // halfword index 2A
+         i1 = 8'(((a << 1) + 1) & 30'hFF);  // and 2A+1
+         pat_for = swap ? {8'h80, i0, 8'h80, i1}
+                        : {8'h80, i1, 8'h80, i0};
+      end
+   endfunction
 
    // app_wdf_mask is active high: a 1 means "do not write this byte".  Mask
    // everything except the bytes wb_sel asks for, in the addressed lane.
@@ -105,6 +140,9 @@ module wb_to_mig_ui #(
    // ------------------------------------------------------------------
    // Wishbone side: capture the request, hand it over, wait for the answer
    // ------------------------------------------------------------------
+   reg        xb_q;
+   reg [31:0] xg_q, xe_q;
+
    reg  ack_tgl_s1, ack_tgl_s2, ack_tgl_s3;
    wire ack_pulse = ack_tgl_s2 ^ ack_tgl_s3;
 
@@ -126,6 +164,7 @@ module wb_to_mig_ui #(
          req_tgl  <= 1'b0;
          wb_ack_o <= 1'b0;
          wb_dat_o <= 32'h0;
+         xb_q     <= 1'b0;
          req_adr  <= 30'h0;
          req_dat  <= 32'h0;
          req_sel  <= 4'h0;
@@ -144,6 +183,12 @@ module wb_to_mig_ui #(
             end
          end else if (ack_pulse) begin
             wb_dat_o <= rd_lane;   // written before ack_tgl flipped, stable now
+            // The same question asked again on this side of the crossing, of
+            // the value clk_wb actually sampled.
+            xb_q     <= pre_ok && !((rd_lane == pat_for(req_adr, 1'b0)) ||
+                                    (rd_lane == pat_for(req_adr, 1'b1)));
+            xg_q     <= rd_lane;
+            xe_q     <= pat_for(req_adr, 1'b0);
             wb_ack_o <= 1'b1;
             busy     <= 1'b0;
          end
@@ -201,10 +246,18 @@ module wb_to_mig_ui #(
 
          if (c_done) begin
             rd_lane <= c_rdata[lane*32 +: 32];
+            // The verdict for this word, decided here in ui_clk where the data
+            // is native, and carried across with it.
+            pre_ok  <= (c_rdata[lane*32 +: 32] == pat_for(req_adr, 1'b0)) ||
+                       (c_rdata[lane*32 +: 32] == pat_for(req_adr, 1'b1));
             waiting <= 1'b0;
             ack_tgl <= ~ack_tgl;
          end
       end
    end
+
+   assign xchk_bad = xb_q;
+   assign xchk_got = xg_q;
+   assign xchk_exp = xe_q;
 
 endmodule

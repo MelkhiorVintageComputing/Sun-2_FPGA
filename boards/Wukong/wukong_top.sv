@@ -333,6 +333,13 @@ module wukong_top #(
    // buffer -- so it is connected to a named wire rather than left off.
    wire [182:0] dvma_probe;
 
+   // The adapter's clock-crossing check.  Declared here, above the ILA, because
+   // the adapter is instantiated further down and xvlog rejects a wire used
+   // before it is declared -- the same rule that has caught a dead term in this
+   // file before.
+   wire        xchk_bad;
+   wire [31:0] xchk_got, xchk_exp;
+
 `ifdef SUN2_ILA
    // Named wires rather than slices straight into the core, because the
    // Hardware Manager names a probe after the net it is driven from -- and
@@ -372,7 +379,10 @@ module wukong_top #(
        .probe9 (dbg_ctx),
        .probe10(dbg_cx),
        .probe11(dbg_dvma),
-       .probe12(dbg_irq)
+       .probe12(dbg_irq),
+       .probe13(xchk_bad),
+       .probe14(xchk_got),
+       .probe15(xchk_exp)
    );
 `endif
 
@@ -599,7 +609,10 @@ module wukong_top #(
        .ui_clk (ui_clk), .ui_rst (ui_clk_sync_rst),
 
        .c_addr (c0_addr), .c_we (c0_we), .c_wdata (c0_wdata), .c_wmask (c0_wmask),
-       .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata)
+       .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata),
+       .xchk_bad (xchk_bad),
+       .xchk_got (xchk_got),
+       .xchk_exp (xchk_exp)
    );
 
    mig_arb arbiter (
