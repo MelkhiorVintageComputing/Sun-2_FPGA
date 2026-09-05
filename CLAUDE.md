@@ -970,10 +970,32 @@ dwell) and why the CPU survives (its text pages are re-read from disk, and a
 decayed instruction shows up as the `lpd` cores and `ld` SIGILLs this file
 already records).
 
-**The measurement that would settle it** is a dwell test: fill a large span of
-memory with a known pattern, leave it untouched for minutes, read it back, and
-see whether errors accumulate with *time* rather than with traffic. That is the
-one variable no test here has ever varied.
+**Retention was measured and it is not that.** `tools/memdwell` fills memory
+with a self-describing pattern, leaves it alone, and reads it back; on 2 MiB in
+single user, three dwells of 600 s each plus a zero-dwell control gave **0 wrong
+of 3,145,728 halfwords**. Idle memory does not rot, so the decay story is dead
+as stated.
+
+**What fits instead is a write that a later read does not see, and it explains
+both directions with one mechanism.** A disk write is: the CPU writes the buffer
+into DDR3, then DVMA reads that buffer out. If the CPU's write has not become
+visible when the master reads, the card gets the *previous* contents while a
+later CPU read sees the landed write -- which is exactly `/za`, correct in
+memory at 34435 and wrong on the card at 49861. A disk read is the mirror: DVMA
+writes the buffer, the CPU reads it, and a write not yet visible gives the CPU
+stale data while the card holds the truth -- exactly `/usr/bin/adb`, 50905 on
+the card and 55306 in memory. `patwr`'s bad word decoding to *old-generation
+content from another position* is the same thing seen a third way.
+
+**And the double read cannot see it, by construction.** It issues the same
+address twice back to back and compares; if a write has not landed, both reads
+return the same stale value and agree. Every counter stays zero. So the zero it
+reported is consistent with this and never excluded it.
+
+**The measurement that would settle it** is the write-side mirror of the double
+read: after every write, read the same address straight back and compare against
+what was written, counting mismatches in hardware. That tests visibility rather
+than the handshake, which is the one thing nothing here has tested.
 
 **The asymmetry claim below is therefore withdrawn.**
 
