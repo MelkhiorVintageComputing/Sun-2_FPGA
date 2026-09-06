@@ -46,6 +46,10 @@ module top(input         cpu_clk,
 	   output [31:0]  xy_n_drop,
 	   output [31:0]  xy_n_rd,
 	   output [31:0]  xy_n_rd_bad,
+	   // sun2_dvma request-stability, the device-to-memory direction.
+	   output [31:0]  dv_n_xact,
+	   output [31:0]  dv_n_adr_move,
+	   output [31:0]  dv_n_dat_move,
 
 	   /* Ethernet diagnostics, for the board top to surface: a PHY that
 	    holds carrier sense asserted stops transmission dead, and it is the
@@ -1085,6 +1089,10 @@ module top(input         cpu_clk,
 		     .dbg_latch(dvma_latch),
 		     .dbg_busy(dvma_busy),
 		     .dvma_a(dvma_a),
+		     .dbg_n_xact(dv_n_xact),
+		     .dbg_n_adr_move(dv_n_adr_move),
+		     .dbg_n_dat_move(dv_n_dat_move),
+		     
 		     .dvma_fc(dvma_fc),
 		     .dvma_as_n(dvma_as_n),
 		     .dvma_rw_n(dvma_rw_n),
@@ -1230,6 +1238,9 @@ module top(input         cpu_clk,
    assign xy_n_drop      = 32'h0;
    assign xy_n_rd        = 32'h0;
    assign xy_n_rd_bad    = 32'h0;
+   assign dv_n_xact      = 32'h0;
+   assign dv_n_adr_move  = 32'h0;
+   assign dv_n_dat_move  = 32'h0;
  `endif
 
  `ifndef SUN2_MB_SCSI

@@ -79,6 +79,11 @@ puts "ARMED BY POSITION: was the word already wrong when it arrived?"
 puts [format "  in a run    %s   <- the control" [rd $vio dv_n_arm32]]
 puts [format "  ARRIVED BAD %s   <- wrong before it entered the disk path" [rd $vio dv_n_arm32_bad]]
 puts ""
+puts "does the disk controller hold its DVMA request still?"
+puts [format "  transactions %s   <- the control" [rd $vio dv_n_xact]]
+puts [format "  ADDR MOVED   %s   <- wb_adr_i changed mid-transaction" [rd $vio dv_n_adr_move]]
+puts [format "  DATA MOVED   %s   <- wb_dat_i changed mid-write" [rd $vio dv_n_dat_move]]
+puts ""
 puts "the sector buffer: what the disk controller stored"
 puts [format "  bytes       %s   <- the control" [rd $vio xy_n_sb]]
 puts [format "  wrong raw   %s   (includes runs: metadata, not the pattern)" [rd $vio xy_n_sb_bad]]

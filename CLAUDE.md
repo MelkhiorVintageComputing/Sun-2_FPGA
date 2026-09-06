@@ -1326,7 +1326,31 @@ crossing says the CPU's write landed, the bridge says the response matches the
 address it was requested for, and the master says it read that address and got
 `584f`. Something wrote into that DDR3 location between the two.
 
-**And on this build there is only one other writer: the disk itself.** A
+**The controller holds its request perfectly still, so that is not it either.**
+`sun2_dvma` now latches `wb_adr_i` and `wb_dat_i` when a transaction is taken
+and compares them for as long as it runs -- `dvma_a` is `{wb_adr_i, half}`,
+combinational with no latch of its own, so a moving `wb_adr_i` would put the
+access on a different page:
+
+```
+  transactions  728,901
+  ADDR MOVED          0
+  DATA MOVED          0
+  ARRIVED BAD         7   (same run, so the fault was present)
+```
+
+**What that leaves is the address the *bridge* asks DDR3 for.** Every address
+check so far compares a signal with itself at two moments: the bridge's
+`P_ADR_IN` at issue against `P_ADR_IN` at load, and now `wb_adr_i` at issue
+against `wb_adr_i` during. **Nothing checks `P_ADR_IN -> wb_adr_o`** -- the
+translation from the 68010 address to the Wishbone word address the adapter
+actually fetches. A read that goes to the wrong DDR3 word returns another
+page's contents faithfully, satisfies every self-consistency check in the path,
+and hands the master program text. That is the one link in the chain where the
+address is *transformed* rather than merely held, and it is the only untested
+one left.
+
+**On this build there is only one other writer: the disk itself.** A
 MultiBus XY450 machine has the CPU and one DVMA master. During a *disk write*
 the master only reads -- but the kernel interleaves disk *reads*, and a DVMA
 write is disk content going into memory. Disk content on this card is binaries,

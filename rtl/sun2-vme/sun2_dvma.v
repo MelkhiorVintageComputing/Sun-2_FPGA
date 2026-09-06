@@ -81,6 +81,22 @@ module sun2_dvma(input             CLK,
 		 // capture is the wrong thing to look at.
 		 output 	   dbg_busy,
 		 output [23:1] 	   dvma_a,
+
+		 // Does the controller hold its request still?
+		 //
+		 // dvma_a is `{wb_adr_i, half}' -- combinational, with no latch
+		 // of its own -- so the address on the bus is correct by
+		 // construction *provided wb_adr_i does not move*.  If it does,
+		 // mid-cycle, the access lands somewhere else entirely, and one
+		 // word of whatever the controller was doing goes to a wrong
+		 // page.  The same holds for wb_dat_i on a write.
+		 //
+		 // This is the device-to-memory direction, which every
+		 // instrument in this tree so far has ignored: they all watched
+		 // memory-to-device.
+		 output reg [31:0]  dbg_n_xact,
+		 output reg [31:0]  dbg_n_adr_move,
+		 output reg [31:0]  dbg_n_dat_move,
 		 output [2:0] 	   dvma_fc,
 		 output 	   dvma_as_n,
 		 output 	   dvma_rw_n,
@@ -150,6 +166,8 @@ module sun2_dvma(input             CLK,
 
    reg [2:0] 			   state;
    reg 				   half;   // which 16-bit half we are on
+   reg [21:0] 			   adr_lat;
+   reg [31:0] 			   dat_lat;
    reg 				   hi_todo; // the high half still needs a cycle
    reg 				   err_cyc; // this access took a bus error
    reg [15:0] 			   rd_lo, rd_hi;
@@ -244,6 +262,8 @@ module sun2_dvma(input             CLK,
 	     rd_lo    <= 16'h0;
 	     rd_hi    <= 16'h0;
 	     dvma_err <= 1'b0;
+	     adr_lat  <= 22'h0; dat_lat <= 32'h0;
+	     dbg_n_xact <= 32'd0; dbg_n_adr_move <= 32'd0; dbg_n_dat_move <= 32'd0;
 	  end
 	else
 	  begin
@@ -253,6 +273,20 @@ module sun2_dvma(input             CLK,
 	     // The error latch clears only on Ethernet reset, never by itself.
 	     if (ether_reset)
 	       dvma_err <= 1'b0;
+
+	     // Latched at the moment the request is taken, compared for as long
+	     // as the transaction runs.
+	     if (state == S_IDLE) begin
+		if (wb_cyc_i & wb_stb_i & ~wb_ack_o & ~wb_err_o) begin
+		   adr_lat    <= wb_adr_i;
+		   dat_lat    <= wb_dat_i;
+		   dbg_n_xact <= dbg_n_xact + 32'd1;
+		end
+	     end else begin
+		if (wb_adr_i != adr_lat) dbg_n_adr_move <= dbg_n_adr_move + 32'd1;
+		if (wb_we_i && (wb_dat_i != dat_lat))
+		  dbg_n_dat_move <= dbg_n_dat_move + 32'd1;
+	     end
 
 	     case (state)
 	       S_IDLE:

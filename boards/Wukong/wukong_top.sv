@@ -348,6 +348,7 @@ module wukong_top #(
    wire [31:0] dv_n_mux, dv_n_mux_bad, dv_n_pat32, dv_n_pat32_bad;
    wire [31:0] dv_n_arm32, dv_n_arm32_bad;
    wire [31:0] xy_n_sb, xy_n_sb_bad, xy_n_sb_iso, xy_n_drop, xy_n_rd, xy_n_rd_bad;
+   wire [31:0] dv_n_xact, dv_n_adr_move, dv_n_dat_move;
 
 `ifdef SUN2_ILA
    // Named wires rather than slices straight into the core, because the
@@ -402,7 +403,10 @@ module wukong_top #(
        .probe_in19 (xy_n_rd),
        .probe_in20 (xy_n_rd_bad),
        .probe_in21 (dv_n_arm32),
-       .probe_in22 (dv_n_arm32_bad)
+       .probe_in22 (dv_n_arm32_bad),
+       .probe_in23 (dv_n_xact),
+       .probe_in24 (dv_n_adr_move),
+       .probe_in25 (dv_n_dat_move)
    );
 
    sun2_ila u_ila (
@@ -569,6 +573,9 @@ module wukong_top #(
        .xy_n_drop      (xy_n_drop),
        .xy_n_rd        (xy_n_rd),
        .xy_n_rd_bad    (xy_n_rd_bad),
+       .dv_n_xact      (dv_n_xact),
+       .dv_n_adr_move  (dv_n_adr_move),
+       .dv_n_dat_move  (dv_n_dat_move),
 
 
        .eth_crs_stuck (eth_crs_stuck),
