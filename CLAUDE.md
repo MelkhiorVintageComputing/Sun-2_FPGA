@@ -1266,9 +1266,44 @@ both boards show it while sitting near their limits; and it is rare,
 single-byte, and placement-sensitive. This build meets timing at **WNS 0.039
 ns**.
 
-**The discriminator needs no instrument: change the clock.** If the rate falls
-or vanishes at a lower `CPU_DIV` with the same RTL, it is timing; if it is
-unchanged, this account is wrong and the fault is logical after all.
+**The clock was changed and the account above is wrong.** Same RTL at
+`CPU_DIV=80` -- 12.5 MHz, WNS **1.228 ns** against 0.039, thirty-one times the
+margin -- corrupts at exactly the same rate: 3 of 262,144, where 20 MHz gave 1,
+2, 3, 3 and 5 across runs. **It is not a setup-time glitch**, and the neat
+story about `spi_tx` and `crc16` sampling a glitching net is retracted.
+
+**The wrong values are 68010 instructions, and that is the lead.** They were
+read here as ASCII -- `2e2e` as `..`, `584f` as `XO`, `2f2d` as `/-` -- and that
+was wrong. Searched in context on the card:
+
+```
+  584f   101,968 occurrences   addqw #4,%sp     -- stack cleanup after a call
+  2f2d    14,529               movel %a5@(d16),%sp@-
+  2e2e    10,250
+```
+
+`584f` is one of the most common words in any compiled 68010 program. So the
+corrupting source is **program text**, the same few opcodes every time because
+those are the commonest ones, appearing at random positions.
+
+**And that explains why every check in the disk path reads zero, by
+construction.** `n_pat32` counts a word only when `brg_dout` already matched the
+pattern; `xchk_n_wpat` counts a write only when it was the pattern in the
+Wishbone domain; the `sbuf` checks arm on a sector whose byte 0 is `0x80`. A
+word that is *already wrong in memory* matches none of those conditions, so it
+is never counted -- the whole instrumented path faithfully carries a word that
+was corrupt before it started.
+
+So the suspicion moves off the disk path entirely and onto the buffer-cache page
+in DDR3: something is putting program text into it between the CPU's write and
+the master's read. `patwr`'s own read-back is clean, but it reads from the
+buffer cache and runs *before* the kernel flushes, so it cannot see a page
+contaminated after that.
+
+**The instrument this wants is the inverse of the ones built so far**: count
+words in an *armed pattern sector* that do **not** match, rather than counting
+matches. Every counter here was built to catch a good word going bad in flight,
+and the evidence now says the word was already bad.
 
 **The old question about the read direction is closed by the host read.**
 The two identical cold reads above were read as proof that the medium is wrong.
