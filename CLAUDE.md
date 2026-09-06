@@ -1125,6 +1125,48 @@ file and reported 5531 bad words. A run of consecutive `got 0000` is that, or an
 interrupted write; the single-word fault is always isolated. Read the banner --
 it says which mode actually ran.
 
+**The mux is clean, the master's capture is correct, and that moves the fault
+*downstream* of everything instrumented so far.** On a run that corrupted 2 of
+262,144 words:
+
+```
+  mem reads   585,496   the master's memory captures
+  mux wrong         0   P_DOUT was always the bridge's registered word
+  pattern     524,283   ... of which were the pattern
+  pattern bad       0   ... and every one of them was right
+```
+
+So `sun2_fpga`'s 20-way `P_DOUT` mux and the CPU/DVMA routing are exonerated,
+and -- the stronger half -- **the word `sun2_dvma` captures is correct**. The
+damage happens after the capture.
+
+**That contradicts the DECA's earlier reading, and the Wukong's is the one to
+believe.** `sun2_dvma_probe`'s original check predicted the pattern from
+`dvma_a[8:1]` and counted *isolated misses* after arming on a run -- a heuristic
+that had already produced 1018 false positives once and needed rewriting. The
+check here compares `dvma_din` against `brg_dout`, the bridge's own registered
+word, on the capture edge: a direct comparison with no arming and no
+prediction, with a 585,496 control on a corrupting run. Where a heuristic and a
+direct comparison disagree, the direct one wins.
+
+**Which leaves `sun2_dvma`'s assembly, and it fits the evidence exactly.**
+`sun2_dvma.v:379` builds the Wishbone word from two halves latched in
+*different* 68010 bus cycles:
+
+```verilog
+   wb_dat_o <= {rd_hi[7:0], rd_hi[15:8], rd_lo[7:0], rd_lo[15:8]};
+```
+
+If one cycle's latch is missed, that half keeps the **previous transaction's**
+value and the assembly writes it out -- one wrong 16-bit word at an even offset,
+carrying content from somewhere else entirely. That is the whole signature, and
+`2e2e` (`..`) and `2f2d` (`/-`) are what a stale half from an earlier sector
+looks like. It is also below the point where the XY450 and the SCSI card
+diverge, which is why both corrupt identically.
+
+The check is a flag per half, cleared when a transaction starts and set at each
+`S_LATCH`: count any assembly where both were not set.
+
 **The gap that remains is the write *data* path above the adapter.** Everything
 built so far checks reads, or checks a write against `req_dat` -- what the
 adapter was handed. Nothing checks that `req_dat` is what the CPU or the master

@@ -49,6 +49,26 @@ module sun2_dvma_probe (
     input  wire [15:0] dvma_din,    // what it is capturing
     input  wire [23:1] dvma_a,      // and for which address
 
+    // The last unchecked span.  dvma_din is sun2_fpga's P_DOUT: a 20-way
+    // combinational priority mux whose MATCH_MEM arm carries the bridge's
+    // registered P_DATA_OUT.  Nothing has ever checked that a DVMA memory read
+    // actually comes out of that arm -- and a wide combinational mux sampled by
+    // a register is exactly the shape that gives one wrong word, rarely,
+    // placement-sensitively, and invisibly in simulation, where zero-delay
+    // logic cannot glitch.
+    //
+    // The wrong values say the same: 2f2d is "/-" and 2e2e is "..", string
+    // bytes of the kind another mux source supplies, not a damaged pattern.
+    input  wire [15:0] brg_dout,    // wishbone_out, the MATCH_MEM arm
+    input  wire        match_mem,   // ... and whether it should be selected
+
+    // 32-bit, because the 16-bit ones wrap and a control that wraps bounds
+    // nothing: see the VIO counters in wb_to_mig_ui.
+    output reg  [31:0] n_mux,       // memory reads the master captured
+    output reg  [31:0] n_mux_bad,   // ... where P_DOUT was not the bridge's word
+    output reg  [31:0] n_pat32,     // ... whose word was the pattern
+    output reg  [31:0] n_pat32_bad, // ... and was not
+
     // ---- readout ---------------------------------------------------------
     output wire [15:0] n_latch,     // captures seen, mod 65536
     output wire [15:0] n_no_load,   // ... with no load in the clock before
@@ -139,6 +159,24 @@ module sun2_dvma_probe (
    // P_DATA_OUT still held from an earlier transaction; more than one means a
    // second load overwrote this cycle's data before it was read.
    reg [3:0] loads_this_cycle;
+
+   // The mux check.  Compared on the capture edge, against the value the bridge
+   // is holding -- so this is the mux and the routing, nothing above them.
+   wire [15:0] pat_word = {8'h80, dvma_a[8:1]};
+   always @(posedge clk)
+     if (rst) begin
+        n_mux <= 32'd0;  n_mux_bad <= 32'd0;
+        n_pat32 <= 32'd0; n_pat32_bad <= 32'd0;
+     end else if (dvma_latch && match_mem) begin
+        n_mux <= n_mux + 32'd1;
+        if (dvma_din != brg_dout) n_mux_bad <= n_mux_bad + 32'd1;
+        // The pattern arm is its own control: it counts only words that look
+        // like tools/patwr -u's, so it says whether the check saw any.
+        if (brg_dout == pat_word) begin
+           n_pat32 <= n_pat32 + 32'd1;
+           if (dvma_din != pat_word) n_pat32_bad <= n_pat32_bad + 32'd1;
+        end
+     end
    wire bad_no_load   = dvma_latch & (loads_this_cycle == 4'd0);
    wire bad_late_load = dvma_latch & (loads_this_cycle >  4'd1);
 

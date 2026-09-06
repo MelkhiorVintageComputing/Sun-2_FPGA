@@ -69,6 +69,12 @@ puts [format "  wrong addr  %s" [rd $vio wb_n_adrbad]]
 puts [format "  half pat    %s   <- control for the line below" [rd $vio wb_n_outpat]]
 puts [format "  wrong half  %s" [rd $vio wb_n_outbad]]
 puts ""
+puts "the last span: bridge word -> P_DOUT mux -> master capture"
+puts [format "  mem reads   %s   <- the control" [rd $vio dv_n_mux]]
+puts [format "  mux wrong   %s   <- P_DOUT was not the bridge word" [rd $vio dv_n_mux_bad]]
+puts [format "  pattern     %s   <- ... of which were the pattern" [rd $vio dv_n_pat32]]
+puts [format "  pattern bad %s" [rd $vio dv_n_pat32_bad]]
+puts ""
 puts "P_DATA_OUT is latched with the current P_ADR_IN, not the address the"
 puts "request went out with.  Every pattern check predicts the expected word"
 puts "FROM the address, so a response matched to the wrong address satisfies"

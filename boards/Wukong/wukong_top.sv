@@ -345,6 +345,7 @@ module wukong_top #(
    // can cover: they all predict the expected word from the address.
    wire [31:0] wb_n_load, wb_n_adrbad;
    wire [31:0] wb_n_outpat, wb_n_outbad;
+   wire [31:0] dv_n_mux, dv_n_mux_bad, dv_n_pat32, dv_n_pat32_bad;
 
 `ifdef SUN2_ILA
    // Named wires rather than slices straight into the core, because the
@@ -387,7 +388,11 @@ module wukong_top #(
        .probe_in7  (wb_n_load),
        .probe_in8  (wb_n_adrbad),
        .probe_in9  (wb_n_outpat),
-       .probe_in10 (wb_n_outbad)
+       .probe_in10 (wb_n_outbad),
+       .probe_in11 (dv_n_mux),
+       .probe_in12 (dv_n_mux_bad),
+       .probe_in13 (dv_n_pat32),
+       .probe_in14 (dv_n_pat32_bad)
    );
 
    sun2_ila u_ila (
@@ -542,6 +547,10 @@ module wukong_top #(
        .wb_n_adrbad    (wb_n_adrbad),
        .wb_n_outpat    (wb_n_outpat),
        .wb_n_outbad    (wb_n_outbad),
+       .dv_n_mux       (dv_n_mux),
+       .dv_n_mux_bad   (dv_n_mux_bad),
+       .dv_n_pat32     (dv_n_pat32),
+       .dv_n_pat32_bad (dv_n_pat32_bad),
 
 
        .eth_crs_stuck (eth_crs_stuck),

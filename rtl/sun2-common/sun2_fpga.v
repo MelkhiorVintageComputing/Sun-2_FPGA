@@ -159,6 +159,11 @@ module sun2_fpga(input         cpu_clk,
 		 output [31:0]   dbg_wb_n_adrbad,
 		 output [31:0]   dbg_wb_n_outpat,
 		 output [31:0]   dbg_wb_n_outbad,
+		 // The MATCH_MEM arm of the P_DOUT mux, and whether it is the
+		 // one selected: sun2_dvma_probe compares what the master
+		 // actually captured against it.
+		 output [15:0]   dbg_wb_dout,
+		 output          dbg_match_mem,
 		 /* wishbone */
 		 output        wb_cyc_o,
 		 output        wb_stb_o,
@@ -1593,6 +1598,9 @@ module sun2_fpga(input         cpu_clk,
 
    // Answering the CPU
    // bus muxer. CPU has priority via DATA_EN, otherwise whomever is matched own the bus
+   assign dbg_wb_dout   = wishbone_out;
+   assign dbg_match_mem = MATCH_MEM;
+
    assign P_DOUT = DATA_EN         ? P_DIN : // loopback
 		   MATCH_CTX       ? ctx_out :
 		   MATCH_SMAP      ? {8'h0, ia_smap2pmap} :

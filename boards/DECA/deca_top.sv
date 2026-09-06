@@ -306,6 +306,7 @@ module deca_top #(
    // the tools to prune on this board; the Wukong reads them over its VIO.
    wire [31:0] wb_n_load, wb_n_adrbad;
    wire [31:0] wb_n_outpat, wb_n_outbad;
+   wire [31:0] dv_n_mux, dv_n_mux_bad, dv_n_pat32, dv_n_pat32_bad;
 
    // The DDR3 adapter's read accounting, appended *below* dvma_probe in the
    // ISSP word so every existing offset in tools/deca_dvmaprobe.tcl stays put.
@@ -341,6 +342,10 @@ module deca_top #(
        .wb_n_adrbad    (wb_n_adrbad),
        .wb_n_outpat    (wb_n_outpat),
        .wb_n_outbad    (wb_n_outbad),
+       .dv_n_mux       (dv_n_mux),
+       .dv_n_mux_bad   (dv_n_mux_bad),
+       .dv_n_pat32     (dv_n_pat32),
+       .dv_n_pat32_bad (dv_n_pat32_bad),
 
        .eth_crs_stuck  (eth_crs_stuck),
        .fb_video_en    (fb_video_en),

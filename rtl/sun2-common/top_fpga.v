@@ -31,6 +31,12 @@ module top(input         cpu_clk,
 	   output [31:0]  wb_n_adrbad,
 	   output [31:0]  wb_n_outpat,
 	   output [31:0]  wb_n_outbad,
+	   // sun2_dvma_probe's mux check: the last span between the bridge's
+	   // registered word and what the master captures.
+	   output [31:0]  dv_n_mux,
+	   output [31:0]  dv_n_mux_bad,
+	   output [31:0]  dv_n_pat32,
+	   output [31:0]  dv_n_pat32_bad,
 
 	   /* Ethernet diagnostics, for the board top to surface: a PHY that
 	    holds carrier sense asserted stops transmission dead, and it is the
@@ -226,6 +232,8 @@ module top(input         cpu_clk,
    // probe then counts nothing, which is the honest reading of a machine that
    // never masters the bus.
    wire        dbg_wb_load;
+   wire [15:0] dbg_wb_dout;
+   wire        dbg_match_mem;
    wire        dbg_wb_load_half;
    wire        dvma_latch;
    wire        dvma_busy;
@@ -255,6 +263,12 @@ module top(input         cpu_clk,
        .dvma_latch(dvma_latch),
        .dvma_din(P_DOUT),
        .dvma_a(dvma_a),
+       .brg_dout(dbg_wb_dout),
+       .match_mem(dbg_match_mem),
+       .n_mux(dv_n_mux),
+       .n_mux_bad(dv_n_mux_bad),
+       .n_pat32(dv_n_pat32),
+       .n_pat32_bad(dv_n_pat32_bad),
        // Four counters and nothing else, 64 bits -- the same width as the
        // block trace's probe, which is known to read back correctly.  The
        // first-event capture came out while the readout itself was in doubt:
@@ -390,6 +404,8 @@ module top(input         cpu_clk,
 		  .dbg_wb_n_adrbad(wb_n_adrbad),
 		  .dbg_wb_n_outpat(wb_n_outpat),
 		  .dbg_wb_n_outbad(wb_n_outbad),
+		  .dbg_wb_dout(dbg_wb_dout),
+		  .dbg_match_mem(dbg_match_mem),
 		  .dbg_wb_load_half(dbg_wb_load_half),
 				
 		  // wishbone
