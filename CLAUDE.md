@@ -1228,7 +1228,49 @@ byte damaged after that point would go out with a CRC that does not match it,
 and the card would reject the block rather than store it wrong. A whole sector
 would keep its old contents, not one word.
 
-**Which puts a question back on the read direction, and it is not yet closed.**
+**The card was read on a host and it settles it: the medium is wrong, and the
+three damaged sectors are exactly the three the machine reported.** 400 MiB
+dumped from the card and scanned for `patwr -u`'s pattern, which is
+unmistakable (`80 00 80 01 80 02 ...`) and needs no filesystem walk:
+
+```
+  pattern sectors 1040   clean 1037   damaged 3
+  LBA  2405 byte  4   want 80 02   got 2e 2e     (file sector 101 word  2)
+  LBA 30678 byte 28   want 80 0e   got 2e 2e     (file sector 358 word 14)
+  LBA 31285 byte 76   want 80 26   got 58 4f     (file sector 661 word 38)
+```
+
+The machine's own cold verify named those three word indices with those three
+values. So the read path is faithful -- it reported exactly what is on the card
+-- and the damage happened on the way out.
+
+**And that produces a contradiction which is itself the finding.** On the run
+that wrote them, the byte was measured correct entering the sector buffer
+(1,048,776, none wrong, none dropped) and correct leaving it (1,048,778, none
+wrong). `blk_sd` loads `spi_tx` **and** `crc16` from that same `buf_rdata` in
+the same clock, so a byte damaged after the CRC was computed would go out with a
+CRC that does not match and the card would **reject the block** -- losing a
+whole sector, not two bytes. No logic fault after the buffer fits.
+
+**What fits is a glitch on `buf_rdata` at the capture edge.** Both `spi_tx` and
+`crc16` sample that net, so both take the same wrong value: the CRC agrees with
+the corrupted data, the card accepts it, and one byte is wrong on the medium.
+The checker in `sun2_xy450` reads the same *logical* net through different
+*physical* routing, so a marginal path to one load and not the other is
+invisible to it by construction.
+
+That makes this a timing problem rather than an RTL one, and it accounts for
+every property this investigation has recorded: **simulation can never reproduce
+it**, because zero-delay logic cannot glitch; every RTL-level check reads zero;
+both boards show it while sitting near their limits; and it is rare,
+single-byte, and placement-sensitive. This build meets timing at **WNS 0.039
+ns**.
+
+**The discriminator needs no instrument: change the clock.** If the rate falls
+or vanishes at a lower `CPU_DIV` with the same RTL, it is timing; if it is
+unchanged, this account is wrong and the fault is logical after all.
+
+**The old question about the read direction is closed by the host read.**
 The two identical cold reads above were read as proof that the medium is wrong.
 That inference assumed a read-path fault would be *random*; a deterministic one
 -- the same address mangled the same way every time -- fits the evidence
