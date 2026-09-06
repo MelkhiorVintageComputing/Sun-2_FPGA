@@ -1224,6 +1224,35 @@ Recorded because the alternative was to report 2046 as a finding, and it is the
 same shape as the 214 that turned out to be metadata runs and the 1018 that
 turned out to be non-pattern traffic.
 
+**The medium really is wrong, so the read path is not the corrupter.** That had
+never been established on the Wukong: `patwr -v` proves only that a file written
+and read back differs, and the in-flight evidence at the card interface came
+from the DECA's `sun2_blktrace` -- on the SCSI card, not this one. Two cold
+reads of the same file, each after its own reboot so nothing is served from the
+buffer cache, name **the same three sectors with the same three wrong values**:
+
+```
+  sector 277 word  38   want 8026  got 584f
+  sector 329 word 154   want 809a  got 2f2d
+  sector 805 word  24   want 8018  got 2e2e
+```
+
+A read path that corrupted would give a different list each time. So the damage
+happened once, on the way out, and is now on the card. It costs one reboot and
+it removes half the search space.
+
+**Which makes the remaining list short.** Every byte *offered* into the sector
+buffer is proven correct -- 1,048,776 of them, 0 isolated wrong, 0 dropped --
+and that covers `sun2_dvma`'s assembly, the Wishbone handoff and the XY450's
+staging transitively, because `dma_buf_wdata` is extracted from `rd_stage` which
+comes straight from `wb_dat_i`. What is left between a correct byte entering the
+buffer and a wrong byte on the card is only:
+
+* the `sbuf` RAM itself,
+* `buf_q`, its registered read port -- the check is written but counts per
+  clock rather than per byte, see the artefact above,
+* `blk_sd`'s SPI shift and CRC, uninstrumented on this board.
+
 **The gap that remains is the write *data* path above the adapter.** Everything
 built so far checks reads, or checks a write against `req_dat` -- what the
 adapter was handed. Nothing checks that `req_dat` is what the CPU or the master
