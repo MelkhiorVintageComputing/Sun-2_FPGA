@@ -78,6 +78,13 @@ module sun2_dvma_probe (
     output reg  [31:0] n_arm32,      // words in an armed run
     output reg  [31:0] n_arm32_bad,  // ... that did not match their address
 
+    // The same event as a one-clock pulse, for an ILA trigger.  Every earlier
+    // attempt to trigger on this fault used a condition nobody had shown could
+    // fire; this one is counted and anchored -- 2 and 7 on two runs whose cold
+    // verifies found the corruption -- so a capture that never triggers would
+    // itself be a finding.
+    output wire        arrived_bad,
+
     // ---- readout ---------------------------------------------------------
     output wire [15:0] n_latch,     // captures seen, mod 65536
     output wire [15:0] n_no_load,   // ... with no load in the clock before
@@ -167,6 +174,9 @@ module sun2_dvma_probe (
    // and the data being taken.  None means the master took whatever
    // P_DATA_OUT still held from an earlier transaction; more than one means a
    // second load overwrote this cycle's data before it was read.
+   // High for the clock the isolated-miss counter increments on.
+   assign arrived_bad = dvma_latch & pat_hit_a & pat_pend;
+
    reg [3:0] loads_this_cycle;
 
    // The mux check.  Compared on the capture edge, against the value the bridge

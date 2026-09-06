@@ -50,6 +50,7 @@ module top(input         cpu_clk,
 	   output [31:0]  dv_n_xact,
 	   output [31:0]  dv_n_adr_move,
 	   output [31:0]  dv_n_dat_move,
+	   output         dv_arrived_bad,
 
 	   /* Ethernet diagnostics, for the board top to surface: a PHY that
 	    holds carrier sense asserted stops transmission dead, and it is the
@@ -284,6 +285,7 @@ module top(input         cpu_clk,
        .n_pat32_bad(dv_n_pat32_bad),
        .n_arm32(dv_n_arm32),
        .n_arm32_bad(dv_n_arm32_bad),
+       .arrived_bad(dv_arrived_bad),
        // Four counters and nothing else, 64 bits -- the same width as the
        // block trace's probe, which is known to read back correctly.  The
        // first-event capture came out while the readout itself was in doubt:

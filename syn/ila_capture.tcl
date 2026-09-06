@@ -148,6 +148,8 @@ set P(irq)  $byport(12)
 set P(xbad) $byport(13)
 set P(xgot) $byport(14)
 set P(xexp) $byport(15)
+# The one event this whole investigation is chasing, as a validated trigger.
+set P(abad) $byport(16)
 foreach k {addr fc hand cs smap ps ma verd data ctx cx} {
     puts "== probe $k: [get_property NAME $P($k)] port [get_property PROBE_PORT $P($k)] width [get_property WIDTH $P($k)] =="
 }
@@ -172,6 +174,15 @@ foreach k [array names P] {
 # hand = {AS RW UDS LDS DTACK BERR}, all active low, so AS asserted is bit 5 = 0
 switch -- $mode {
     err  { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd) }
+    arrived { # A word that reached the master already wrong.
+              #
+              # Unlike every earlier trigger tried here, this one is known to
+              # fire: the counter behind it read 2 and 7 on runs whose cold
+              # verify found the corruption.  The 2048 samples before it are
+              # the point -- they hold the cycle that fetched the wrong word,
+              # with its address, function code and MMU verdict.
+              set_property TRIGGER_COMPARE_VALUE eq1'b1 $P(abad)
+            }
     xpat { # A pattern word crossing at all -- the control for `xchk'.
            #
            # `xchk' can only fire on a word that matched the pattern *before*
@@ -553,7 +564,7 @@ switch -- $mode {
     fc1  { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
            set_property TRIGGER_COMPARE_VALUE eq3'b001   $P(fc) }
     as   { set_property TRIGGER_COMPARE_VALUE eq6'b0XXXXX $P(hand) }
-    default { puts "ERROR: MODE must be err, xchk, xpat, fc1, as, supw, scc, ether, etherseq, caseq, caclk, wildptr, lateerr, dvma, dvmaseq, iack, iackseq, illegal, vecfetch, scp, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz, fbprobe or reset, not '$mode'"; exit 1 }
+    default { puts "ERROR: MODE must be err, arrived, xchk, xpat, fc1, as, supw, scc, ether, etherseq, caseq, caclk, wildptr, lateerr, dvma, dvmaseq, iack, iackseq, illegal, vecfetch, scp, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz, fbprobe or reset, not '$mode'"; exit 1 }
 }
 
 # Capture control: keep bus cycles, drop the idle clocks between them.  4096

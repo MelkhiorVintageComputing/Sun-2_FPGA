@@ -1339,7 +1339,52 @@ access on a different page:
   ARRIVED BAD         7   (same run, so the fault was present)
 ```
 
-**What that leaves is the address the *bridge* asks DDR3 for.** Every address
+**The ILA caught the failing cycle, and the address the bridge is given is
+built from a page-map output that lags.** With `arrived_bad` as the trigger --
+the first trigger in this investigation that was *known* to fire, because the
+counter behind it reads 2 and 7 on runs whose cold verify finds the corruption
+-- one capture shows the whole thing:
+
+```
+  -38  A=7815d3 FC=5 ps=f02  data=80d2  dvma=1
+  -27  A=7815d3 FC=5 ps=f02  data=80d3  dvma=1
+  -26  A=01235e FC=1 ps=d03  data=dead  dvma=0   <- a CPU cycle interleaves
+  -22  A=7815d4 FC=5 ps=d03  data=dead  dvma=1   <- ps is still the CPU's page
+  -20  A=7815d4 FC=5 ps=f02  data=80d3  dvma=1
+  -14  A=7815d4 FC=5 ps=f02  data=584f  dvma=1   <- the wrong word
+    0  A=7815d5 FC=5 ps=f02  data=80d5  dvma=1   <== trigger
+```
+
+Three consecutive addresses return `80d3`, **`584f`**, `80d5`: the wrong word
+sits exactly where `80d4` belongs, in an otherwise perfect run, and the cycle
+that fetched it **began carrying the previous CPU cycle's page-map entry**.
+
+**And the address handed to the bridge is made of that entry:**
+
+```verilog
+   .P_ADR_IN({1'h0, ma_pmap2devices[11:0], P_A[10:1]})   // full physical
+```
+
+`ma_pmap2devices` is the page map's registered read, so it is valid a cycle
+after the lookup; `MATCH_MEM` is `... & (ma_pmap2devices[11:0] < MEM_PAGES) &
+C_S6`, using it combinationally. A request issued while it still holds the
+previous cycle's page reads **the wrong physical page**, and DDR3 returns that
+page's contents perfectly -- which is why every check downstream is clean and
+why the wrong values are always common 68010 opcodes.
+
+It accounts for every property recorded here. The word is wrong before the
+master captures it; the bridge's own address check compares `P_ADR_IN` at issue
+against `P_ADR_IN` at load and they *agree*, because both are stale; the rate is
+unchanged by clock frequency, because it is a logic race and not a setup
+violation; it needs a CPU cycle interleaved with a DVMA cycle, which is why a
+disk transfer under load provokes it and a quiet memory test never does; and it
+is in `sun2_fpga.v`, shared by both boards.
+
+**What is not yet pinned down** is the exact window -- whether `C_S6` can be
+true for a cycle before the map output settles, or whether the bridge latches
+early -- and that is what the fix has to be built on.
+
+**The old note on the address the bridge asks DDR3 for.** Every address
 check so far compares a signal with itself at two moments: the bridge's
 `P_ADR_IN` at issue against `P_ADR_IN` at load, and now `wb_adr_i` at issue
 against `wb_adr_i` during. **Nothing checks `P_ADR_IN -> wb_adr_o`** -- the
