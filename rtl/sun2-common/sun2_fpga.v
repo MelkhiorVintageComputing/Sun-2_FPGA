@@ -151,6 +151,14 @@ module sun2_fpga(input         cpu_clk,
 		 output          dbg_wb_load,
 		 // ... and which half that load took.
 		 output          dbg_wb_load_half,
+		 // The bridge's own address-integrity counters.  See
+		 // sun2_wishbone_bridge.v: every pattern check predicts from the
+		 // address, so none of them can see a response matched to the
+		 // wrong one.
+		 output [31:0]   dbg_wb_n_load,
+		 output [31:0]   dbg_wb_n_adrbad,
+		 output [31:0]   dbg_wb_n_outpat,
+		 output [31:0]   dbg_wb_n_outbad,
 		 /* wishbone */
 		 output        wb_cyc_o,
 		 output        wb_stb_o,
@@ -1178,6 +1186,10 @@ module sun2_fpga(input         cpu_clk,
    sun2_wishbone_bridge #(.FB_WB_BASE(`FB_WB_BASE)) wbridge(.CLK(C100),
 							   .dbg_load(dbg_wb_load),
 							   .dbg_load_half(dbg_wb_load_half),
+							   .dbg_n_load(dbg_wb_n_load),
+							   .dbg_n_adrbad(dbg_wb_n_adrbad),
+							   .dbg_n_outpat(dbg_wb_n_outpat),
+							   .dbg_n_outbad(dbg_wb_n_outbad),
 				// Power-up state, not reset state.  ENABLE is armed
 				// when the monitor writes LED code 0x8F and gates
 				// wb_cyc/wb_stb, so while it is clear main memory

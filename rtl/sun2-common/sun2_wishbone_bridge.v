@@ -45,6 +45,32 @@ module sun2_wishbone_bridge #(
 			     // took, for sun2_dvma_probe.  Valid in the clock
 			     // dbg_load is high.
 			     output 	       dbg_load_half,
+
+			     // Address integrity across a transaction.
+			     //
+			     // Every pattern check in this tree predicts the
+			     // expected word *from the address*, so a response
+			     // matched to the wrong address satisfies all of
+			     // them while handing the master a word that
+			     // belongs somewhere else -- which is exactly what
+			     // tools/patwr decodes a bad word as ("OLD gen,
+			     // sector 0 word 150, -9532 words").  They are
+			     // blind to it by construction.
+			     //
+			     // P_DATA_OUT is latched with the *current*
+			     // P_ADR_IN, not the address the request went out
+			     // with.  These count how often those differ.
+			     output reg [31:0]  dbg_n_load,
+			     output reg [31:0]  dbg_n_adrbad,
+
+			     // The half-select and the latch, the last span
+			     // inside this module.  Not a tautology: the
+			     // expected half is computed independently of the
+			     // mux, and counted only when the 32-bit word
+			     // arriving was known-good for this address, so it
+			     // tests the selection against a clean input.
+			     output reg [31:0]  dbg_n_outpat,
+			     output reg [31:0]  dbg_n_outbad,
 			     
 			     // wishbone
 			     output 	       wb_cyc_o,
@@ -60,6 +86,7 @@ module sun2_wishbone_bridge #(
    /* this creates a wishbone master in CLK domain */
 
    reg 					   wb_ack_i_prev;
+   reg [23:1]                              adr_issued;    // address the request went out with
    reg 					   ENABLE;
    
    
@@ -154,6 +181,8 @@ module sun2_wishbone_bridge #(
 	end else begin
 	   if (wb_cyc_o)          issued <= 1'b1;
 	   if (wb_ack_i & issued) done   <= 1'b1;
+	   // Remember the address this cycle's request was issued with.
+	   if (wb_cyc_o & ~issued) adr_issued <= P_ADR_IN;
 	end
 
 	if (~RESET_n) ENABLE <= 1'b0;
@@ -175,6 +204,37 @@ module sun2_wishbone_bridge #(
 	  //  P_DATA_OUT <= 32'h2BAD0000;
 	  //else P_DATA_OUT[15:0] <= P_DATA_OUT[15:0] + 1;
 	
+     end
+
+   // tools/patwr -u's pattern for this address: halfword index within a
+   // 512-byte sector is P_ADR_IN[8:1], and the 32-bit word holds the pair.
+   wire [15:0] pat_lo  = {8'h80, P_ADR_IN[8:1]};
+   wire [15:0] pat_hi  = {8'h80, P_ADR_IN[8:1] + 8'd1};
+   wire        in_pat  = (wb_dat_i == {pat_hi, pat_lo});
+   wire [15:0] out_exp = P_ADR_IN[1] ? pat_hi : pat_lo;
+`ifdef WB_LITTLE_ENDIAN
+   wire [15:0] out_act = P_ADR_IN[1] ? { wb_dat_i[ 7: 0], wb_dat_i[15: 8] }
+                                     : { wb_dat_i[23:16], wb_dat_i[31:24] };
+`else
+   wire [15:0] out_act = P_ADR_IN[1] ? { wb_dat_i[31:24], wb_dat_i[23:16] }
+                                     : { wb_dat_i[15: 8], wb_dat_i[ 7: 0] };
+`endif
+
+   // Counted here rather than derived outside, because the address the request
+   // went out with exists only inside this module.
+   always @(posedge CLK)
+     if (~RESET_n) begin
+	dbg_n_load   <= 32'd0;
+	dbg_n_adrbad <= 32'd0;
+	dbg_n_outpat <= 32'd0;
+	dbg_n_outbad <= 32'd0;
+     end else if (ENABLE & wb_ack_i & issued & ~wb_we_o) begin
+	dbg_n_load <= dbg_n_load + 32'd1;
+	if (P_ADR_IN != adr_issued) dbg_n_adrbad <= dbg_n_adrbad + 32'd1;
+	if (in_pat) begin
+	   dbg_n_outpat <= dbg_n_outpat + 32'd1;
+	   if (out_act != out_exp) dbg_n_outbad <= dbg_n_outbad + 32'd1;
+	end
      end
 
    assign dbg_load = ENABLE & wb_ack_i & issued & ~wb_we_o;

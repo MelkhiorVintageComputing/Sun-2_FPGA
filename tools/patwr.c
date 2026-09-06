@@ -227,7 +227,7 @@ char **argv;
     long chunk = 64;                    /* sectors per I/O, 32 KiB */
     long off_bytes;
 
-    if (argc != 5 && argc != 6) {
+    if (argc < 5) {
         fprintf(stderr,
           "usage: %s <path> <startsec> <nsec> <passes> [-v|-f|-u]\n", argv[0]);
         fprintf(stderr,
@@ -238,15 +238,32 @@ char **argv;
           "          then a normal pass, then -v after a reboot\n");
         fprintf(stderr,
           "       -u sector-uniform pattern, which the FPGA can check itself\n");
+    fprintf(stderr,
+          "       flags combine: -u -v verifies a uniform file after a reboot\n");
         return 1;
     }
     dev    = argv[1];
     start  = atol(argv[2]);
     nsec   = atol(argv[3]);
     passes = atoi(argv[4]);
-    vonly   = (argc == 6 && argv[5][1] == 'v');
-    fill    = (argc == 6 && argv[5][1] == 'f');
-    uniform = (argc == 6 && argv[5][1] == 'u');
+    /* Initialise before the loop.  These are auto locals: the old code
+     * assigned them unconditionally, and replacing that with a loop that only
+     * assigns inside its branches left them holding garbage when no flag was
+     * given -- a plain write ran as "verify only" against a zero-filled file
+     * and reported 5531 bad words, which reads exactly like catastrophic
+     * corruption. */
+    vonly = 0; fill = 0; uniform = 0;
+
+    /* Flags combine.  They used to be exclusive, which made a -u file
+     * impossible to verify after a reboot: -u wrote the uniform pattern and
+     * -v verified the default one, so the cold check that anchors every
+     * hardware counter could not be run at all.  `-u -v' is the useful pair. */
+    for (i = 5; i < argc; i++) {
+        if      (argv[i][1] == 'v') vonly   = 1;
+        else if (argv[i][1] == 'f') fill    = 1;
+        else if (argv[i][1] == 'u') uniform = 1;
+        else { fprintf(stderr, "patwr: unknown flag %s\n", argv[i]); exit(2); }
+    }
 
     buf = (unsigned short *)malloc((unsigned)(chunk * SECSZ));
     if (buf == 0) { fprintf(stderr, "out of memory\n"); return 1; }

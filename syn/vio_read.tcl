@@ -63,4 +63,15 @@ puts "Run tools/patwr with -u: only the uniform pattern is predictable from"
 puts "the address alone.  Without it most words are not checkable and both"
 puts "pattern controls stay small, which makes a zero meaningless."
 puts ""
+puts "bridge address integrity (the span no pattern check can cover)"
+puts [format "  loads       %s   <- the control" [rd $vio wb_n_load]]
+puts [format "  wrong addr  %s" [rd $vio wb_n_adrbad]]
+puts [format "  half pat    %s   <- control for the line below" [rd $vio wb_n_outpat]]
+puts [format "  wrong half  %s" [rd $vio wb_n_outbad]]
+puts ""
+puts "P_DATA_OUT is latched with the current P_ADR_IN, not the address the"
+puts "request went out with.  Every pattern check predicts the expected word"
+puts "FROM the address, so a response matched to the wrong address satisfies"
+puts "all of them and still hands the master a word from somewhere else."
+puts ""
 close_hw_manager

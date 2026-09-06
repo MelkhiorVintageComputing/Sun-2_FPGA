@@ -26,6 +26,11 @@ module top(input         cpu_clk,
 	   // ILA -- and this probe has to exist on the board where the fault it
 	   // watches for actually happens.
 	   output [182:0] dvma_probe,
+	   // sun2_wishbone_bridge's address-integrity counters, straight out.
+	   output [31:0]  wb_n_load,
+	   output [31:0]  wb_n_adrbad,
+	   output [31:0]  wb_n_outpat,
+	   output [31:0]  wb_n_outbad,
 
 	   /* Ethernet diagnostics, for the board top to surface: a PHY that
 	    holds carrier sense asserted stops transmission dead, and it is the
@@ -381,6 +386,10 @@ module top(input         cpu_clk,
 		  // and the same pair one level up in top_fpga -- that each had
 		  // to be moved out before the probe saw a single bridge load.
 		  .dbg_wb_load(dbg_wb_load),
+		  .dbg_wb_n_load(wb_n_load),
+		  .dbg_wb_n_adrbad(wb_n_adrbad),
+		  .dbg_wb_n_outpat(wb_n_outpat),
+		  .dbg_wb_n_outbad(wb_n_outbad),
 		  .dbg_wb_load_half(dbg_wb_load_half),
 				
 		  // wishbone

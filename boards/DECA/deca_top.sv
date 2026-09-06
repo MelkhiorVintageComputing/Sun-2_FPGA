@@ -301,6 +301,12 @@ module deca_top #(
    // From the JTAG side it looked like a healthy machine with every counter at
    // zero, because bit 0 was the only bit with a path.
    wire [182:0] dvma_probe;
+
+   // sun2_wishbone_bridge's address-integrity counters.  Declared and left for
+   // the tools to prune on this board; the Wukong reads them over its VIO.
+   wire [31:0] wb_n_load, wb_n_adrbad;
+   wire [31:0] wb_n_outpat, wb_n_outbad;
+
    // The DDR3 adapter's read accounting, appended *below* dvma_probe in the
    // ISSP word so every existing offset in tools/deca_dvmaprobe.tcl stays put.
    wire [15:0]  ddr3_rd_issued, ddr3_rd_ready, ddr3_rd_unexpected, ddr3_lane_bad;
@@ -331,6 +337,10 @@ module deca_top #(
        // sun2_fpga, and both again here -- and each read back as a healthy
        // machine because an undriven wire is all zeros.
        .dvma_probe     (dvma_probe),
+       .wb_n_load      (wb_n_load),
+       .wb_n_adrbad    (wb_n_adrbad),
+       .wb_n_outpat    (wb_n_outpat),
+       .wb_n_outbad    (wb_n_outbad),
 
        .eth_crs_stuck  (eth_crs_stuck),
        .fb_video_en    (fb_video_en),

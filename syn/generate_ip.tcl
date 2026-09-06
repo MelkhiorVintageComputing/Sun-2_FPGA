@@ -197,7 +197,7 @@ puts "== sun2_ila: $got probes =="
 create_ip -name vio -vendor xilinx.com -library ip -module_name sun2_vio \
     -dir $ipdir -force
 set_property -dict [list \
-    CONFIG.C_NUM_PROBE_IN  {7} \
+    CONFIG.C_NUM_PROBE_IN  {11} \
     CONFIG.C_NUM_PROBE_OUT {0} \
     CONFIG.C_PROBE_IN0_WIDTH {32} \
     CONFIG.C_PROBE_IN1_WIDTH {32} \
@@ -206,9 +206,13 @@ set_property -dict [list \
     CONFIG.C_PROBE_IN4_WIDTH {32} \
     CONFIG.C_PROBE_IN5_WIDTH {32} \
     CONFIG.C_PROBE_IN6_WIDTH {32} \
+    CONFIG.C_PROBE_IN7_WIDTH {32} \
+    CONFIG.C_PROBE_IN8_WIDTH {32} \
+    CONFIG.C_PROBE_IN9_WIDTH {32} \
+    CONFIG.C_PROBE_IN10_WIDTH {32} \
 ] [get_ips sun2_vio]
 generate_target all [get_ips sun2_vio]
-puts "== sun2_vio: 7 input probes =="
+puts "== sun2_vio: 11 input probes =="
 
 generate_target {instantiation_template synthesis simulation} [get_ips sun2_ila]
 

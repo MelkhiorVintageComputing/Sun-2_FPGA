@@ -1084,6 +1084,47 @@ and looked dead when it was exactly two wraps. And the check must count only
 isolated misses -- the first version armed on a run and then flagged everything,
 reporting 1018, because a master reads plenty that is not the pattern.
 
+**Everything from DDR3 up to and including the bridge is now measured clean on
+a run that demonstrably corrupted.** That last clause is the whole point: the
+counters had read zero twice before on runs that turned out not to have
+corrupted at all, which proves nothing. A `patwr -u` pass followed by a reboot
+and a cold verify gave **5 of 262,144 words wrong**, the familiar signature, and
+the VIO on the same run read:
+
+```
+  read crossing    pattern 3,653,604     corrupted  0
+  write crossing   pattern 2,095,307     corrupted  0
+  bridge address   loads   741,868,089   wrong addr 0
+  bridge half      pattern 1,826,787     wrong half 0
+```
+
+So on a corrupting run, with controls in the millions: both adapter clock
+crossings are clean, every response is matched to the address its request went
+out with, and the half the bridge selects and latches is the right one. The
+fault is **not** in DDR3, not in either crossing, and not in the bridge.
+
+**The wrong values are ASCII, and that is the lead.** `2e2e` is `..`, `2f2d` is
+`/-` -- two characters of the bootloader's own `|/-\` spinner -- and `584f` is
+`XO`. Not decayed bits and not another position in the pattern: content from
+somewhere else entirely, which is what a stale bus value or a mux selecting the
+wrong source looks like.
+
+**Which leaves one span, and it is narrow.** `P_DATA_OUT` is proven correct as
+it is latched; the DECA measured `dvma_din` already wrong at the master's
+capture. Between them lie only `sun2_fpga`'s read mux onto `P_DOUT` and
+`top_fpga`'s muxing of CPU against DVMA -- both shared by the two boards, and
+neither instrumented.
+
+**Two traps from the tooling, both of which produced confident nonsense.**
+`tools/patwr`'s flags used to be mutually exclusive, so a `-u` file could not be
+verified after a reboot at all -- the cold check that anchors every hardware
+counter was impossible to run. Making them combine introduced the second: the
+new parsing loop assigned `vonly` and `fill` only inside its branches, and they
+are auto locals, so a plain write ran as **"verify only"** against a zero-filled
+file and reported 5531 bad words. A run of consecutive `got 0000` is that, or an
+interrupted write; the single-word fault is always isolated. Read the banner --
+it says which mode actually ran.
+
 **The gap that remains is the write *data* path above the adapter.** Everything
 built so far checks reads, or checks a write against `req_dat` -- what the
 adapter was handed. Nothing checks that `req_dat` is what the CPU or the master

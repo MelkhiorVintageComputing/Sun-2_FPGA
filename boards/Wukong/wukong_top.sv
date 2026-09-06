@@ -341,6 +341,10 @@ module wukong_top #(
    wire [31:0] xchk_got, xchk_exp;
    wire [31:0] xchk_n_read, xchk_n_pat, xchk_n_bad;
    wire [31:0] xchk_n_wpat, xchk_n_wbad;
+   // The bridge's address-integrity counters, the one span no pattern check
+   // can cover: they all predict the expected word from the address.
+   wire [31:0] wb_n_load, wb_n_adrbad;
+   wire [31:0] wb_n_outpat, wb_n_outbad;
 
 `ifdef SUN2_ILA
    // Named wires rather than slices straight into the core, because the
@@ -379,7 +383,11 @@ module wukong_top #(
        .probe_in3  (xchk_got),
        .probe_in4  (xchk_exp),
        .probe_in5  (xchk_n_wpat),
-       .probe_in6  (xchk_n_wbad)
+       .probe_in6  (xchk_n_wbad),
+       .probe_in7  (wb_n_load),
+       .probe_in8  (wb_n_adrbad),
+       .probe_in9  (wb_n_outpat),
+       .probe_in10 (wb_n_outbad)
    );
 
    sun2_ila u_ila (
@@ -530,6 +538,10 @@ module wukong_top #(
        // sun2_fpga, and both again here -- and each read back as a healthy
        // machine because an undriven wire is all zeros.
        .dvma_probe     (dvma_probe),
+       .wb_n_load      (wb_n_load),
+       .wb_n_adrbad    (wb_n_adrbad),
+       .wb_n_outpat    (wb_n_outpat),
+       .wb_n_outbad    (wb_n_outbad),
 
 
        .eth_crs_stuck (eth_crs_stuck),
