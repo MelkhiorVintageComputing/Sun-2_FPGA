@@ -185,6 +185,15 @@ module sun2_xy450 #(
     // stored.  E_IN_PUT's own comment argues the last write lands "so it
     // lands" -- this counts whether it does.
     output reg  [31:0] dbg_n_drop,
+
+    // The byte as it is read back OUT, checked against the same pattern.
+    // Written-correct is already measured; this is the other end, and having
+    // both on one board closes a bracket that until now spanned two: the
+    // Wukong proved the write side and the DECA the read side, on different
+    // cards.  buf_q answers the *previous* blk_buf_addr (block.md:58), so the
+    // expectation is computed from a registered copy of it.
+    output reg  [31:0] dbg_n_rd,
+    output reg  [31:0] dbg_n_rd_bad,
     input  wire        wb_ack_i,
     input  wire        wb_err_i,
     // sun2_dvma latches a bus error and refuses further cycles until this is
@@ -382,6 +391,35 @@ module sun2_xy450 #(
    end
 
    assign blk_buf_rdata = buf_q;
+
+   // One cycle late, so the address buf_q answers is the one held last clock.
+   reg [8:0]  rq_addr;
+   reg        rd_armed, rd_prev_ok, rd_pend;
+   wire [7:0] rd_exp = rq_addr[0] ? rq_addr[8:1] : 8'h80;
+   wire       rd_ok  = (buf_q == rd_exp);
+   always @(posedge CLK)
+     if (RESET) begin
+        rq_addr <= 9'd0; rd_armed <= 1'b0; rd_prev_ok <= 1'b0; rd_pend <= 1'b0;
+        dbg_n_rd <= 32'd0; dbg_n_rd_bad <= 32'd0;
+     end else begin
+        if (blk_busy) rq_addr <= blk_buf_addr;
+        if (blk_busy && blk_we) begin
+           if (rq_addr == 9'd0) rd_armed <= rd_ok;
+           if (rd_armed || rq_addr == 9'd0) begin
+              dbg_n_rd   <= dbg_n_rd + 32'd1;
+              rd_prev_ok <= rd_ok;
+              if (rd_ok) begin
+                 if (rd_pend) begin
+                    rd_pend      <= 1'b0;
+                    dbg_n_rd_bad <= dbg_n_rd_bad + 32'd1;
+                 end
+              end else if (rd_prev_ok && !rd_pend)
+                rd_pend <= 1'b1;
+              else
+                rd_pend <= 1'b0;
+           end
+        end
+     end
 
    // ==================================================================
    // The command engine

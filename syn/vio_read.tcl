@@ -81,6 +81,10 @@ puts [format "  wrong raw   %s   (includes runs: metadata, not the pattern)" [rd
 puts [format "  wrong iso   %s   <- isolated, the real corruptions" [rd $vio xy_n_sb_iso]]
 puts [format "  DROPPED     %s   <- DMA writes the buffer port threw away" [rd $vio xy_n_drop]]
 puts ""
+puts "the same buffer, read back OUT to the card"
+puts [format "  bytes       %s   <- the control" [rd $vio xy_n_rd]]
+puts [format "  wrong       %s   <- written right, read back wrong" [rd $vio xy_n_rd_bad]]
+puts ""
 puts "Wrong here indicts sun2_dvma's assembly and the Wishbone handoff, which"
 puts "the SCSI card shares.  Right here, with the card interface still wrong,"
 puts "puts it in the sector buffer or blk_sd."

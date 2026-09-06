@@ -1205,6 +1205,25 @@ the sector before. Counting only isolated misses takes it to zero and leaves the
 raw figure beside it for comparison. This is the third instrument in this file
 to need that rule; assume any new one does too.
 
+**The read-out check needs one more refinement before it says anything, and
+`2046` is why.** On a run that corrupted 3 words, the byte read back out of the
+sector buffer was flagged 2046 times against a control of 42,480,549 -- and
+1024 sectors x 2 passes is **2048**. One flag per sector write is a boundary
+artefact, not a fault, almost certainly the arming clock or the `blk_busy` edge
+being counted. The control is inflated the same way: it increments every clock
+while `blk_busy & blk_we`, and `blk_buf_addr` only moves once per SPI byte, so
+each byte is counted about forty times.
+
+Neither is fatal to the design of the check -- `rq_addr` and `buf_q` are both
+one clock behind `blk_buf_addr`, so they are aligned and the steady state does
+compare correctly -- but a number that lands within two of the sector count is
+an artefact until proven otherwise. **Count once per byte, on the clock
+`blk_buf_addr` changes, and exclude the first and last of a transfer.**
+
+Recorded because the alternative was to report 2046 as a finding, and it is the
+same shape as the 214 that turned out to be metadata runs and the 1018 that
+turned out to be non-pattern traffic.
+
 **The gap that remains is the write *data* path above the adapter.** Everything
 built so far checks reads, or checks a write against `req_dat` -- what the
 adapter was handed. Nothing checks that `req_dat` is what the CPU or the master

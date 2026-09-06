@@ -42,6 +42,8 @@ module top(input         cpu_clk,
 	   output [31:0]  xy_n_sb_bad,
 	   output [31:0]  xy_n_sb_iso,
 	   output [31:0]  xy_n_drop,
+	   output [31:0]  xy_n_rd,
+	   output [31:0]  xy_n_rd_bad,
 
 	   /* Ethernet diagnostics, for the board top to surface: a PHY that
 	    holds carrier sense asserted stops transmission dead, and it is the
@@ -1037,6 +1039,8 @@ module top(input         cpu_clk,
       .dbg_n_sb_bad(xy_n_sb_bad),
       .dbg_n_sb_iso(xy_n_sb_iso),
       .dbg_n_drop(xy_n_drop),
+      .dbg_n_rd(xy_n_rd),
+      .dbg_n_rd_bad(xy_n_rd_bad),
       .wb_ack_i(xy_wb_ack),
       .wb_err_i(xy_wb_err),
       .wb_clr_o(xy_wb_clr),
@@ -1220,6 +1224,8 @@ module top(input         cpu_clk,
    assign xy_n_sb_bad    = 32'h0;
    assign xy_n_sb_iso    = 32'h0;
    assign xy_n_drop      = 32'h0;
+   assign xy_n_rd        = 32'h0;
+   assign xy_n_rd_bad    = 32'h0;
  `endif
 
  `ifndef SUN2_MB_SCSI
