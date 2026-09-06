@@ -37,6 +37,11 @@ module top(input         cpu_clk,
 	   output [31:0]  dv_n_mux_bad,
 	   output [31:0]  dv_n_pat32,
 	   output [31:0]  dv_n_pat32_bad,
+	   // sun2_xy450's sector-buffer pattern check.
+	   output [31:0]  xy_n_sb,
+	   output [31:0]  xy_n_sb_bad,
+	   output [31:0]  xy_n_sb_iso,
+	   output [31:0]  xy_n_drop,
 
 	   /* Ethernet diagnostics, for the board top to surface: a PHY that
 	    holds carrier sense asserted stops transmission dead, and it is the
@@ -1028,6 +1033,10 @@ module top(input         cpu_clk,
       .wb_adr_o(xy_wb_adr),
       .wb_dat_o(xy_wb_dat_o),
       .wb_dat_i(xy_wb_dat_i),
+      .dbg_n_sb(xy_n_sb),
+      .dbg_n_sb_bad(xy_n_sb_bad),
+      .dbg_n_sb_iso(xy_n_sb_iso),
+      .dbg_n_drop(xy_n_drop),
       .wb_ack_i(xy_wb_ack),
       .wb_err_i(xy_wb_err),
       .wb_clr_o(xy_wb_clr),
@@ -1204,6 +1213,13 @@ module top(input         cpu_clk,
    assign blk_we         = 1'b0;
    assign blk_lba        = 32'h0;
    assign blk_buf_rdata  = 8'h0;
+
+   // Tied off rather than left undriven: an output with no driver is how
+   // fb_video_en reached a bitstream dead for the life of the frame buffer.
+   assign xy_n_sb        = 32'h0;
+   assign xy_n_sb_bad    = 32'h0;
+   assign xy_n_sb_iso    = 32'h0;
+   assign xy_n_drop      = 32'h0;
  `endif
 
  `ifndef SUN2_MB_SCSI

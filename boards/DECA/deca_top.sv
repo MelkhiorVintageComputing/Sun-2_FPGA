@@ -307,6 +307,7 @@ module deca_top #(
    wire [31:0] wb_n_load, wb_n_adrbad;
    wire [31:0] wb_n_outpat, wb_n_outbad;
    wire [31:0] dv_n_mux, dv_n_mux_bad, dv_n_pat32, dv_n_pat32_bad;
+   wire [31:0] xy_n_sb, xy_n_sb_bad, xy_n_sb_iso, xy_n_drop;
 
    // The DDR3 adapter's read accounting, appended *below* dvma_probe in the
    // ISSP word so every existing offset in tools/deca_dvmaprobe.tcl stays put.
@@ -346,6 +347,10 @@ module deca_top #(
        .dv_n_mux_bad   (dv_n_mux_bad),
        .dv_n_pat32     (dv_n_pat32),
        .dv_n_pat32_bad (dv_n_pat32_bad),
+       .xy_n_sb        (xy_n_sb),
+       .xy_n_sb_bad    (xy_n_sb_bad),
+       .xy_n_sb_iso    (xy_n_sb_iso),
+       .xy_n_drop      (xy_n_drop),
 
        .eth_crs_stuck  (eth_crs_stuck),
        .fb_video_en    (fb_video_en),

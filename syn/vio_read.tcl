@@ -75,6 +75,16 @@ puts [format "  mux wrong   %s   <- P_DOUT was not the bridge word" [rd $vio dv_
 puts [format "  pattern     %s   <- ... of which were the pattern" [rd $vio dv_n_pat32]]
 puts [format "  pattern bad %s" [rd $vio dv_n_pat32_bad]]
 puts ""
+puts "the sector buffer: what the disk controller stored"
+puts [format "  bytes       %s   <- the control" [rd $vio xy_n_sb]]
+puts [format "  wrong raw   %s   (includes runs: metadata, not the pattern)" [rd $vio xy_n_sb_bad]]
+puts [format "  wrong iso   %s   <- isolated, the real corruptions" [rd $vio xy_n_sb_iso]]
+puts [format "  DROPPED     %s   <- DMA writes the buffer port threw away" [rd $vio xy_n_drop]]
+puts ""
+puts "Wrong here indicts sun2_dvma's assembly and the Wishbone handoff, which"
+puts "the SCSI card shares.  Right here, with the card interface still wrong,"
+puts "puts it in the sector buffer or blk_sd."
+puts ""
 puts "P_DATA_OUT is latched with the current P_ADR_IN, not the address the"
 puts "request went out with.  Every pattern check predicts the expected word"
 puts "FROM the address, so a response matched to the wrong address satisfies"

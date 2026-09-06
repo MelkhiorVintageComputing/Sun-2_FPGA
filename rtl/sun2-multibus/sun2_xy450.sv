@@ -165,6 +165,26 @@ module sun2_xy450 #(
     output wire [21:0] wb_adr_o,       // word address; byte = {adr, 2'b00}
     output wire [31:0] wb_dat_o,
     input  wire [31:0] wb_dat_i,
+
+    // The byte going into the sector buffer, checked against tools/patwr -u's
+    // pattern.  This is the split that decides the last span: the master's
+    // capture is proven correct (sun2_dvma_probe's mux check) and the byte is
+    // proven wrong at the card (sun2_blktrace), so the damage is between them.
+    // Wrong here indicts sun2_dvma's assembly and the Wishbone handoff, which
+    // the SCSI card shares; right here puts it in the buffer or blk_sd.
+    output reg  [31:0] dbg_n_sb,
+    output reg  [31:0] dbg_n_sb_bad,     // every mismatch, including runs
+    output reg  [31:0] dbg_n_sb_iso,     // ... only the isolated ones
+
+    // Writes the buffer port silently threw away.  buf_we is
+    // `blk_busy ? blk_buf_we : dma_buf_we', so a DMA write offered while
+    // blk_sd holds the port does not happen at all -- and that byte keeps the
+    // PREVIOUS sector's value.  One wrong byte per sector, rarely, carrying
+    // old content, at whatever offset the race lands on: the whole signature.
+    // Invisible to dbg_n_sb, which checks the byte offered, not the byte
+    // stored.  E_IN_PUT's own comment argues the last write lands "so it
+    // lands" -- this counts whether it does.
+    output reg  [31:0] dbg_n_drop,
     input  wire        wb_ack_i,
     input  wire        wb_err_i,
     // sun2_dvma latches a bus error and refuses further cycles until this is
@@ -315,6 +335,46 @@ module sun2_xy450 #(
    wire       buf_we    = blk_busy ? blk_buf_we    : dma_buf_we;
    wire [8:0] buf_addr  = blk_busy ? blk_buf_addr  : dma_addr;
    wire [7:0] buf_wdata = blk_busy ? blk_buf_wdata : dma_buf_wdata;
+
+   // Armed by a sector whose byte 0 is 0x80, so ordinary traffic -- metadata,
+   // anything that is not the pattern -- cannot be counted.  Counting every
+   // byte without arming is the mistake that reported 1018 false positives on
+   // the DECA's first crossing check.
+   // Raw mismatches over-count badly: the first board run read 214 against a
+   // disk that took 5 wrong words, because a sector that is not the pattern --
+   // metadata, an indirect block -- keeps being checked while sb_armed is
+   // still set from the sector before.  A run of mismatches is ordinary
+   // traffic; a real corruption is one wrong byte with correct ones either
+   // side.  dbg_n_sb_iso counts only those, dbg_n_sb_bad keeps the raw figure
+   // so the two can be compared.
+   reg        sb_armed, sb_prev_ok, sb_pend;
+   wire [7:0] sb_exp = dma_addr[0] ? dma_addr[8:1] : 8'h80;
+   wire       sb_ok  = (dma_buf_wdata == sb_exp);
+   always @(posedge CLK)
+     if (RESET) begin
+        sb_armed <= 1'b0;  sb_prev_ok <= 1'b0;  sb_pend <= 1'b0;
+        dbg_n_sb <= 32'd0; dbg_n_sb_bad <= 32'd0; dbg_n_sb_iso <= 32'd0;
+        dbg_n_drop <= 32'd0;
+     end else begin
+        if (dma_buf_we && blk_busy) dbg_n_drop <= dbg_n_drop + 32'd1;
+        if (dma_buf_we) begin
+        if (dma_addr == 9'd0) sb_armed <= (dma_buf_wdata == 8'h80);
+        if (sb_armed || dma_addr == 9'd0) begin
+           dbg_n_sb   <= dbg_n_sb + 32'd1;
+           sb_prev_ok <= sb_ok;
+           if (!sb_ok) dbg_n_sb_bad <= dbg_n_sb_bad + 32'd1;
+           if (sb_ok) begin
+              if (sb_pend) begin        // a miss closed by a match: isolated
+                 sb_pend      <= 1'b0;
+                 dbg_n_sb_iso <= dbg_n_sb_iso + 32'd1;
+              end
+           end else if (sb_prev_ok && !sb_pend)
+             sb_pend <= 1'b1;           // candidate, not yet counted
+           else
+             sb_pend <= 1'b0;           // two in a row: not the pattern
+        end
+        end
+     end
 
    always @(posedge CLK) begin
       if (buf_we) sbuf[buf_addr] <= buf_wdata;

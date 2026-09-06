@@ -1167,6 +1167,44 @@ diverge, which is why both corrupt identically.
 The check is a flag per half, cleared when a transaction starts and set at each
 `S_LATCH`: count any assembly where both were not set.
 
+**The sector buffer is written correctly, nothing is dropped, and the fault is
+now inside one RAM.** Three runs, each anchored by a cold verify that the run
+really did corrupt (1, 3 and 5 wrong words):
+
+```
+  sbuf bytes offered   1,048,776   the control
+  wrong, isolated              0   every byte offered was the right one
+  DROPPED                      0   no DMA write lost to the buffer port
+```
+
+`sun2_xy450.sv`'s buffer is one port shared by two masters --
+`buf_we = blk_busy ? blk_buf_we : dma_buf_we` -- so a DMA write offered while
+`blk_sd` holds the port is discarded silently, and `E_IN_PUT`'s own comment
+argues from timing that the last one "lands". **It does: the counter is zero.**
+A good hypothesis, cheap to test, and wrong.
+
+So the byte is right when offered and right when stored, while `sun2_blktrace`
+on the DECA sees it wrong as it is *read out* at the `blk_*` seam. What is left
+between those two points is the `sbuf` RAM itself and its read port:
+
+```verilog
+   if (buf_we) sbuf[buf_addr] <= buf_wdata;
+   buf_q <= sbuf[buf_addr];
+```
+
+a single-port read-first RAM whose address is muxed by `blk_busy`, answering one
+cycle late (`Inputs/Wish5380/doc/block.md:58`). That is a very small piece of
+RTL, and it is shared with the SCSI card only through `blk_sd`'s side of the
+seam -- which is the part both cards do have in common.
+
+**The raw-versus-isolated split is what made the number readable.** The first
+board run of this check read **214 wrong bytes** against a disk that took 5
+wrong words -- forty times too many. Every one of them was a *run*: a sector
+that is not the pattern, still being checked because the arming flag was set by
+the sector before. Counting only isolated misses takes it to zero and leaves the
+raw figure beside it for comparison. This is the third instrument in this file
+to need that rule; assume any new one does too.
+
 **The gap that remains is the write *data* path above the adapter.** Everything
 built so far checks reads, or checks a write against `req_dat` -- what the
 adapter was handed. Nothing checks that `req_dat` is what the CPU or the master
