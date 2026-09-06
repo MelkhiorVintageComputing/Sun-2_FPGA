@@ -98,9 +98,18 @@ module wb_to_mig_ui #(
     // a count can.  n_pat is the control -- it is what makes n_bad meaningful,
     // because zero bad crossings means nothing unless pattern words were
     // crossing to begin with.
-    output wire [15:0]               xchk_n_read,   // read acks, mod 65536
-    output wire [15:0]               xchk_n_pat,    // ... that were the pattern
-    output wire [15:0]               xchk_n_bad
+    output wire [31:0]               xchk_n_read,   // read acks
+    output wire [31:0]               xchk_n_pat,    // ... that were the pattern
+    output wire [31:0]               xchk_n_bad,
+    // The write side, the mirror of the above.  req_dat is latched in the
+    // Wishbone domain and read combinationally in ui_clk, which is the other
+    // untested hop -- and the one that fits every observation, because a word
+    // corrupted here is stored faithfully and read back faithfully forever
+    // after: WRITE_VERIFY compares CMD_read_data against req_dat and would be
+    // comparing the corrupted value with itself.
+    output wire [31:0]               xchk_n_wpat,   // full writes that were the
+                                                    // pattern in the wb domain
+    output wire [31:0]               xchk_n_wbad
 );
 
    // ------------------------------------------------------------------
@@ -115,6 +124,7 @@ module wb_to_mig_ui #(
    reg        req_we;
    reg [31:0] rd_lane;
    reg        pre_ok;
+   reg [31:0] c_wpat, c_wbad;
 
    reg        req_tgl;      // toggles to launch a transaction   (clk_wb)
    reg        ack_tgl;      // toggles when one completes        (ui_clk)
@@ -130,6 +140,22 @@ module wb_to_mig_ui #(
          i1 = 8'(((a << 1) + 1) & 30'hFF);  // and 2A+1
          pat_for = swap ? {8'h80, i0, 8'h80, i1}
                         : {8'h80, i1, 8'h80, i0};
+      end
+   endfunction
+
+   // Does the half this access actually writes carry the pattern for its
+   // address?  Anything that is not a clean halfword write is not checkable
+   // and must not be counted either way.
+   function automatic bit half_ok(input logic [29:0] a, input logic [3:0] sel,
+                                  input logic [31:0] d);
+      logic [15:0] lo, hi;
+      begin
+         lo = {8'h80, 8'((a << 1)       & 30'hFF)};
+         hi = {8'h80, 8'(((a << 1) + 1) & 30'hFF)};
+         if      (sel == 4'b0011) half_ok = (d[15:0]  == lo);
+         else if (sel == 4'b1100) half_ok = (d[31:16] == hi);
+         else if (sel == 4'b1111) half_ok = (d == {hi, lo});
+         else                     half_ok = 1'b0;
       end
    endfunction
 
@@ -150,7 +176,8 @@ module wb_to_mig_ui #(
    // ------------------------------------------------------------------
    reg        xb_q;
    reg [31:0] xg_q, xe_q;
-   reg [15:0] c_read, c_pat, c_bad;
+   reg [31:0] c_read, c_pat, c_bad;
+   reg        req_pre_ok;   // set in clk_wb, consumed in ui_clk
 
    // The verdict on this side of the crossing, of the value clk_wb sampled.
    wire post_ok = (rd_lane == pat_for(req_adr, 1'b0)) ||
@@ -178,7 +205,7 @@ module wb_to_mig_ui #(
          wb_ack_o <= 1'b0;
          wb_dat_o <= 32'h0;
          xb_q     <= 1'b0;
-         c_read   <= 16'd0; c_pat <= 16'd0; c_bad <= 16'd0;
+         c_read   <= 32'd0; c_pat <= 32'd0; c_bad <= 32'd0;
          req_adr  <= 30'h0;
          req_dat  <= 32'h0;
          req_sel  <= 4'h0;
@@ -189,6 +216,15 @@ module wb_to_mig_ui #(
          if (!busy) begin
             if (wb_cyc_i && wb_stb_i && !wb_ack_o) begin
                req_adr <= wb_adr_i;
+               // Halfword, not word.  The 68010 is a 16-bit bus, so the
+               // bridge never issues a full 32-bit write and gating on
+               // wb_sel_i == 4'hF made this check dead: the board read the
+               // control as zero, which is exactly what it is there for.
+               //
+               // The read side confirms the lane mapping -- its expected word
+               // is {80,idx+1,80,idx}, so bits [15:0] carry the lower byte
+               // address and [31:16] the upper.
+               req_pre_ok <= wb_we_i && half_ok(wb_adr_i, wb_sel_i, wb_dat_i);
                req_dat <= wb_dat_i;
                req_sel <= wb_sel_i;
                req_we  <= wb_we_i;
@@ -201,9 +237,9 @@ module wb_to_mig_ui #(
             // the value clk_wb actually sampled.
             xb_q     <= pre_ok && !post_ok;
             if (!req_we) begin
-               c_read <= c_read + 16'd1;
-               if (pre_ok)             c_pat <= c_pat + 16'd1;
-               if (pre_ok && !post_ok) c_bad <= c_bad + 16'd1;
+               c_read <= c_read + 32'd1;
+               if (pre_ok)             c_pat <= c_pat + 32'd1;
+               if (pre_ok && !post_ok) c_bad <= c_bad + 32'd1;
             end
             xg_q     <= rd_lane;
             xe_q     <= pat_for(req_adr, 1'b0);
@@ -259,8 +295,16 @@ module wb_to_mig_ui #(
          waiting <= 1'b0;
          ack_tgl <= 1'b0;
          rd_lane <= 32'h0;
+         c_wpat  <= 32'd0; c_wbad <= 32'd0;
       end else begin
-         if (req_pulse)   waiting <= 1'b1;
+         if (req_pulse) begin
+            waiting <= 1'b1;
+            if (req_pre_ok) begin
+               c_wpat <= c_wpat + 32'd1;
+               if (!half_ok(req_adr, req_sel, req_dat))
+                 c_wbad <= c_wbad + 32'd1;
+            end
+         end
 
          if (c_done) begin
             rd_lane <= c_rdata[lane*32 +: 32];
@@ -280,5 +324,7 @@ module wb_to_mig_ui #(
    assign xchk_n_read = c_read;
    assign xchk_n_pat  = c_pat;
    assign xchk_n_bad  = c_bad;
+   assign xchk_n_wpat = c_wpat;
+   assign xchk_n_wbad = c_wbad;
 
 endmodule

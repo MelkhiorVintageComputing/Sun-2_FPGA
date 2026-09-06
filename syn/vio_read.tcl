@@ -55,4 +55,12 @@ puts [format "  pattern     %s   <- the control: must be large to believe the ne
 puts [format "  corrupted   %s" $b]
 puts [format "  last got    %s   exp %s" [rd $vio xchk_got] [rd $vio xchk_exp]]
 puts ""
+puts "the write crossing (req_dat latched in cpu_clk -> read in ui_clk)"
+puts [format "  pattern     %s   <- the control for the line below" [rd $vio xchk_n_wpat]]
+puts [format "  corrupted   %s" [rd $vio xchk_n_wbad]]
+puts ""
+puts "Run tools/patwr with -u: only the uniform pattern is predictable from"
+puts "the address alone.  Without it most words are not checkable and both"
+puts "pattern controls stay small, which makes a zero meaningless."
+puts ""
 close_hw_manager

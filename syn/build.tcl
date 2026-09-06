@@ -473,6 +473,13 @@ if {$ila == 1} {
         puts "ERROR: sun2_ila.xci did not load"
         exit 1
     }
+    # synth_ip refuses to overwrite its own .dcp, so a second bitstream build
+    # that does not regenerate the IP dies with "Overwrite of existing file
+    # isn't enabled".  Skipping it when the .dcp exists is the wrong fix -- the
+    # module is then never built into this project and synthesis fails with
+    # "module 'sun2_ila' not found".  Delete and re-synthesise; it costs
+    # seconds and is correct whatever state the IP directory is in.
+    file delete -force $ipdir/sun2_ila/sun2_ila.dcp
     synth_ip [get_ips sun2_ila]
     puts "== ILA fitted on the MMU debug bus =="
 
@@ -489,6 +496,7 @@ if {$ila == 1} {
         puts "ERROR: sun2_vio.xci did not load"
         exit 1
     }
+    file delete -force $ipdir/sun2_vio/sun2_vio.dcp
     synth_ip [get_ips sun2_vio]
     puts "== VIO fitted on the adapter's crossing counters =="
 }

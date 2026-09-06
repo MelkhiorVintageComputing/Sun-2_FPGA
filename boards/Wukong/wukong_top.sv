@@ -339,7 +339,8 @@ module wukong_top #(
    // file before.
    wire        xchk_bad;
    wire [31:0] xchk_got, xchk_exp;
-   wire [15:0] xchk_n_read, xchk_n_pat, xchk_n_bad;
+   wire [31:0] xchk_n_read, xchk_n_pat, xchk_n_bad;
+   wire [31:0] xchk_n_wpat, xchk_n_wbad;
 
 `ifdef SUN2_ILA
    // Named wires rather than slices straight into the core, because the
@@ -376,7 +377,9 @@ module wukong_top #(
        .probe_in1  (xchk_n_pat),
        .probe_in2  (xchk_n_bad),
        .probe_in3  (xchk_got),
-       .probe_in4  (xchk_exp)
+       .probe_in4  (xchk_exp),
+       .probe_in5  (xchk_n_wpat),
+       .probe_in6  (xchk_n_wbad)
    );
 
    sun2_ila u_ila (
@@ -628,6 +631,8 @@ module wukong_top #(
        .xchk_n_read (xchk_n_read),
        .xchk_n_pat (xchk_n_pat),
        .xchk_n_bad (xchk_n_bad),
+       .xchk_n_wpat (xchk_n_wpat),
+       .xchk_n_wbad (xchk_n_wbad),
        .xchk_got (xchk_got),
        .xchk_exp (xchk_exp)
    );

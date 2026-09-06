@@ -2263,9 +2263,9 @@ capture.** `syn/vio_read.tcl` reads the adapter's crossing counters over a VIO
 `ILA=1`. After two full `patwr` passes (1 MiB):
 
 ```
-  reads       0x3705      read acknowledgements
-  pattern     0x2000      ... whose word matched the pattern before crossing
-  corrupted   0x0000      ... and did not match after
+  reads       306,520,938   read acknowledgements
+  pattern       2,097,148   ... whose word matched the pattern before crossing
+  corrupted             0   ... and did not match after
 ```
 
 `pattern` is the control and it is large, so the check demonstrably sees the
@@ -2273,19 +2273,36 @@ pattern -- which is exactly what the ILA attempt could never show. Zero
 corrupted, on a workload that reliably produces bad words, clears
 `rd_lane -> wb_dat_o`.
 
-Read the counters knowing they are 16 bits and wrap: `pattern` is 8192 *modulo
-65536*, so it bounds nothing from above. What it does establish is that the
-check is live and that no word which was correct before the crossing was wrong
-after it.
-
-**Which moves the suspicion to the mirror image, the *write* crossing.**
+**And the write crossing is clean too, so both hops in the adapter are out.**
 `req_dat` is latched in the Wishbone domain and read combinationally in the
-memory clock domain, and nothing has tested it. A word corrupted there explains
-every observation at once: `WRITE_VERIFY` compares `CMD_read_data` against
-`req_dat` and would be comparing the corrupted value with itself; `DOUBLE_READ`
-finds DRAM self-consistent because DRAM faithfully holds the wrong word; the
-master's capture sees it already wrong; and both boards share the crossing by
-duplication while their controllers differ.
+memory clock domain -- the mirror of the above, and the one that fitted every
+observation, because a word corrupted there would be stored faithfully and read
+back faithfully for ever after. With the counters widened to 32 bits and four
+`patwr -u` passes (2 MiB):
+
+```
+  read crossing    pattern 2,097,148   corrupted 0
+  write crossing   pattern 1,056,836   corrupted 0
+```
+
+At the measured fault rate a million checked write words expects about sixteen
+corruptions. Zero, with a control that large, ends it: **neither clock crossing
+in the adapter is the fault.**
+
+Two mistakes the controls caught, and they are the reason the controls exist.
+The first write check gated on `wb_sel_i == 4'hF` -- but **the 68010 is a 16-bit
+bus**, so the bridge never issues a full 32-bit write and the check was dead,
+reporting `pattern 0` beside `corrupted 0`. The second read the control as
+`0x102f` and called it clean: 4143 words expects 0.13 hits and proves nothing,
+which is what forced the counters from 16 bits to 32. **A zero is worth exactly
+as much as the control beside it.**
+
+**What is left is the bridge itself.** `sun2_wishbone_bridge` is single-domain
+-- one clock, one `always` block, no synchronisers -- so it was never a CDC
+suspect, and its data path has still never been checked: `P_DATA_IN` ->
+`wb_dat_o` on a write, `wb_dat_i` -> `P_DATA_OUT` on a read. A word damaged
+there is invisible to every adapter counter above, because it arrives already
+wrong and so never sets `pre_ok`.
 
 * **An ILA capture window is 205 us and a disk workload is minutes, so the
   trigger has to do all the work -- and a trigger nobody has validated is worth
