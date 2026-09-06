@@ -37,6 +37,8 @@ module top(input         cpu_clk,
 	   output [31:0]  dv_n_mux_bad,
 	   output [31:0]  dv_n_pat32,
 	   output [31:0]  dv_n_pat32_bad,
+	   output [31:0]  dv_n_arm32,
+	   output [31:0]  dv_n_arm32_bad,
 	   // sun2_xy450's sector-buffer pattern check.
 	   output [31:0]  xy_n_sb,
 	   output [31:0]  xy_n_sb_bad,
@@ -276,6 +278,8 @@ module top(input         cpu_clk,
        .n_mux_bad(dv_n_mux_bad),
        .n_pat32(dv_n_pat32),
        .n_pat32_bad(dv_n_pat32_bad),
+       .n_arm32(dv_n_arm32),
+       .n_arm32_bad(dv_n_arm32_bad),
        // Four counters and nothing else, 64 bits -- the same width as the
        // block trace's probe, which is known to read back correctly.  The
        // first-event capture came out while the readout itself was in doubt:

@@ -69,6 +69,15 @@ module sun2_dvma_probe (
     output reg  [31:0] n_pat32,     // ... whose word was the pattern
     output reg  [31:0] n_pat32_bad, // ... and was not
 
+    // The inverse check, and the one the evidence now calls for.  Everything
+    // above gates on the word ALREADY being the pattern, so a word that was
+    // wrong before it entered the path satisfies no condition and is never
+    // counted.  These are armed by *position* instead -- a run of consecutive
+    // words matching what their address predicts -- so a word that arrives
+    // wrong is caught rather than skipped.  32-bit copies of pat_a/pat_bad.
+    output reg  [31:0] n_arm32,      // words in an armed run
+    output reg  [31:0] n_arm32_bad,  // ... that did not match their address
+
     // ---- readout ---------------------------------------------------------
     output wire [15:0] n_latch,     // captures seen, mod 65536
     output wire [15:0] n_no_load,   // ... with no load in the clock before
@@ -190,6 +199,7 @@ module sun2_dvma_probe (
          heartbeat <= 16'd0;
          half_bad  <= 16'd0;
          pat_a     <= 16'd0; pat_b <= 16'd0; pat_bad <= 16'd0;
+         n_arm32   <= 32'd0; n_arm32_bad <= 32'd0;
          pat_run   <= 3'd0;  pat_seen <= 1'b0; pat_pend <= 1'b0;
          loads_this_cycle <= 4'd0;
          f_seen    <= 1'b0;
@@ -230,10 +240,12 @@ module sun2_dvma_probe (
             // ordinary traffic and the check disarms.
             if (pat_hit_a) begin
                pat_a <= pat_a + 16'd1;
+               n_arm32 <= n_arm32 + 32'd1;
                if (pat_run != 3'd4) pat_run <= pat_run + 3'd1;
                if (pat_pend) begin
                   pat_pend <= 1'b0;
                   pat_bad  <= pat_bad + 16'd1;
+                  n_arm32_bad <= n_arm32_bad + 32'd1;
                   if (!pat_seen) begin
                      pat_seen  <= 1'b1;
                      pat_first <= pend_d;

@@ -1300,10 +1300,40 @@ the master's read. `patwr`'s own read-back is clean, but it reads from the
 buffer cache and runs *before* the kernel flushes, so it cannot see a page
 contaminated after that.
 
-**The instrument this wants is the inverse of the ones built so far**: count
-words in an *armed pattern sector* that do **not** match, rather than counting
-matches. Every counter here was built to catch a good word going bad in flight,
-and the evidence now says the word was already bad.
+**The inverse check was built and it is the first non-zero in the whole
+investigation.** `sun2_dvma_probe`'s original run-armed counters -- armed by a
+run of words matching what their *address* predicts, not by the word already
+being the pattern -- widened to 32 bits and put on the VIO:
+
+```
+  in a run     524,286   the control, essentially every pattern word
+  ARRIVED BAD        2   wrong before it entered the disk path
+```
+
+Two passes, two bad arrivals; the cold verify of the final state found **1**,
+which is the last pass's share. Consistent, and anchored.
+
+**So the word is already wrong when the master captures it from the bridge** --
+which is exactly what the DECA's `sun2_dvma_probe` said, and which this file
+retracted in favour of the content-gated check. **That retraction was wrong**:
+the content-gated comparison cannot see this fault by construction, and the
+heuristic it was said to beat was measuring the right thing all along. A direct
+comparison is not automatically better than a heuristic if it is gated on the
+very condition the fault violates.
+
+**Which means memory held program text where the pattern belonged.** The write
+crossing says the CPU's write landed, the bridge says the response matches the
+address it was requested for, and the master says it read that address and got
+`584f`. Something wrote into that DDR3 location between the two.
+
+**And on this build there is only one other writer: the disk itself.** A
+MultiBus XY450 machine has the CPU and one DVMA master. During a *disk write*
+the master only reads -- but the kernel interleaves disk *reads*, and a DVMA
+write is disk content going into memory. Disk content on this card is binaries,
+which is precisely what `584f` (`addqw #4,%sp`) and `2f2d` are. **A DVMA write
+landing one word outside its buffer would drop program text into the page being
+written.** That is a different code path from everything instrumented so far,
+all of which was the memory-to-device direction.
 
 **The old question about the read direction is closed by the host read.**
 The two identical cold reads above were read as proof that the medium is wrong.

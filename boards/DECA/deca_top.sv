@@ -307,6 +307,7 @@ module deca_top #(
    wire [31:0] wb_n_load, wb_n_adrbad;
    wire [31:0] wb_n_outpat, wb_n_outbad;
    wire [31:0] dv_n_mux, dv_n_mux_bad, dv_n_pat32, dv_n_pat32_bad;
+   wire [31:0] dv_n_arm32, dv_n_arm32_bad;
    wire [31:0] xy_n_sb, xy_n_sb_bad, xy_n_sb_iso, xy_n_drop, xy_n_rd, xy_n_rd_bad;
 
    // The DDR3 adapter's read accounting, appended *below* dvma_probe in the
@@ -347,6 +348,8 @@ module deca_top #(
        .dv_n_mux_bad   (dv_n_mux_bad),
        .dv_n_pat32     (dv_n_pat32),
        .dv_n_pat32_bad (dv_n_pat32_bad),
+       .dv_n_arm32     (dv_n_arm32),
+       .dv_n_arm32_bad (dv_n_arm32_bad),
        .xy_n_sb        (xy_n_sb),
        .xy_n_sb_bad    (xy_n_sb_bad),
        .xy_n_sb_iso    (xy_n_sb_iso),

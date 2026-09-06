@@ -75,6 +75,10 @@ puts [format "  mux wrong   %s   <- P_DOUT was not the bridge word" [rd $vio dv_
 puts [format "  pattern     %s   <- ... of which were the pattern" [rd $vio dv_n_pat32]]
 puts [format "  pattern bad %s" [rd $vio dv_n_pat32_bad]]
 puts ""
+puts "ARMED BY POSITION: was the word already wrong when it arrived?"
+puts [format "  in a run    %s   <- the control" [rd $vio dv_n_arm32]]
+puts [format "  ARRIVED BAD %s   <- wrong before it entered the disk path" [rd $vio dv_n_arm32_bad]]
+puts ""
 puts "the sector buffer: what the disk controller stored"
 puts [format "  bytes       %s   <- the control" [rd $vio xy_n_sb]]
 puts [format "  wrong raw   %s   (includes runs: metadata, not the pattern)" [rd $vio xy_n_sb_bad]]
