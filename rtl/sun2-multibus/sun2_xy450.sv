@@ -392,23 +392,35 @@ module sun2_xy450 #(
 
    assign blk_buf_rdata = buf_q;
 
-   // One cycle late, so the address buf_q answers is the one held last clock.
-   reg [8:0]  rq_addr;
-   reg        rd_armed, rd_prev_ok, rd_pend;
+   // One cycle late, so the address buf_q answers is the one held last clock:
+   // rq_addr and buf_q lag blk_buf_addr by the same clock, so they align.
+   //
+   // Counted **once per byte**, not once per clock.  blk_buf_addr moves only
+   // when blk_sd consumes a byte -- one per SPI byte, every eight-odd clocks --
+   // so counting every clock inflated the control forty-fold and made the flag
+   // fire once per sector: 2046 against 1024 sectors x 2 passes = 2048.  The
+   // sample taken is the comparison registered on the clock *before* the
+   // address moves, which is the last and most settled one for that byte.
+   reg [8:0]  rq_addr, addr_q;
+   reg        rd_armed, rd_prev_ok, rd_pend, ok_q;
    wire [7:0] rd_exp = rq_addr[0] ? rq_addr[8:1] : 8'h80;
    wire       rd_ok  = (buf_q == rd_exp);
+   wire       byte_done = blk_busy && blk_we && (blk_buf_addr != addr_q);
    always @(posedge CLK)
      if (RESET) begin
-        rq_addr <= 9'd0; rd_armed <= 1'b0; rd_prev_ok <= 1'b0; rd_pend <= 1'b0;
+        rq_addr <= 9'd0; addr_q <= 9'd0; ok_q <= 1'b0;
+        rd_armed <= 1'b0; rd_prev_ok <= 1'b0; rd_pend <= 1'b0;
         dbg_n_rd <= 32'd0; dbg_n_rd_bad <= 32'd0;
      end else begin
         if (blk_busy) rq_addr <= blk_buf_addr;
-        if (blk_busy && blk_we) begin
-           if (rq_addr == 9'd0) rd_armed <= rd_ok;
-           if (rd_armed || rq_addr == 9'd0) begin
+        addr_q <= blk_buf_addr;
+        ok_q   <= rd_ok;
+        if (byte_done) begin
+           if (addr_q == 9'd0) rd_armed <= ok_q;
+           if (rd_armed || addr_q == 9'd0) begin
               dbg_n_rd   <= dbg_n_rd + 32'd1;
-              rd_prev_ok <= rd_ok;
-              if (rd_ok) begin
+              rd_prev_ok <= ok_q;
+              if (ok_q) begin
                  if (rd_pend) begin
                     rd_pend      <= 1'b0;
                     dbg_n_rd_bad <= dbg_n_rd_bad + 32'd1;

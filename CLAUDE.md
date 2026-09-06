@@ -1205,8 +1205,40 @@ the sector before. Counting only isolated misses takes it to zero and leaves the
 raw figure beside it for comparison. This is the third instrument in this file
 to need that rule; assume any new one does too.
 
-**The read-out check needs one more refinement before it says anything, and
-`2046` is why.** On a run that corrupted 3 words, the byte read back out of the
+**The byte is correct entering the sector buffer and correct leaving it.** With
+the check counting once per byte -- on the clock `blk_buf_addr` moves, which is
+when `blk_sd` loads `spi_tx` and `crc16` from the same expression -- the control
+lands within two of the write side, which is what says the instrument is right:
+
+```
+  offered into the buffer   1,048,776   wrong 0   dropped 0
+  read back out of it       1,048,778   wrong 0
+```
+
+on a run whose cold verify found 3 of 262,144 words wrong. So the buffer stores
+and returns exactly what it was given, and the sample taken is provably the byte
+`blk_sd` consumed: `byte_done` is high the clock after the address moves, and
+`ok_q` is the comparison registered from the clock before, which is the value
+that was on `buf_rdata` when it was captured.
+
+**What is left is very small, and one part of it argues against itself.**
+Between `spi_tx` and the card there is only the SPI shifter and the wire -- but
+`crc16` is computed from the *same* `blk_i.buf_rdata` in the *same* clock, so a
+byte damaged after that point would go out with a CRC that does not match it,
+and the card would reject the block rather than store it wrong. A whole sector
+would keep its old contents, not one word.
+
+**Which puts a question back on the read direction, and it is not yet closed.**
+The two identical cold reads above were read as proof that the medium is wrong.
+That inference assumed a read-path fault would be *random*; a deterministic one
+-- the same address mangled the same way every time -- fits the evidence
+equally. The disk-to-memory direction is uninstrumented on this board, and it
+shares the same `sbuf`, with `blk_sd` writing and the DMA reading. **The
+decisive test needs no bitstream: read the card on a host and compare the
+sectors against the pattern.** If the card is right, everything above is
+correct and the fault is in the read path.
+
+**The refinement that got there, and why `2046` was not a finding.** On a run that corrupted 3 words, the byte read back out of the
 sector buffer was flagged 2046 times against a control of 42,480,549 -- and
 1024 sectors x 2 passes is **2048**. One flag per sector write is a boundary
 artefact, not a fault, almost certainly the arming clock or the `blk_busy` edge
