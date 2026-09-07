@@ -1409,6 +1409,28 @@ Three things came out of it that narrow the search rather than widen it:
   the workload -- `patwr` is a user program, so interleaved CPU cycles are
   user-mode as a matter of course -- and not the mechanism.
 
+**And the physical page is correct at the moment the request is issued.**
+Reading `ma_pmap2devices` at the clock `C_S6` rises, in all three captures:
+
+```
+  ev1  C_S6 at -20: A=781674 FC=5 dvma=1  ma=b26
+  ev2  C_S6 at -20: A=78152a FC=5 dvma=1  ma=aca
+  ev3  C_S6 at -20: A=78152e FC=5 dvma=1  ma=b6e
+```
+
+Every one is the right page for that cycle. `MATCH_MEM` is gated on `C_S6`, so
+that is the value the bridge uses -- the transient has settled several clocks
+earlier. **The stale-page-map account is dead**, and the `S_SETTLE` null result
+was telling us so before this confirmed it.
+
+So the master issues a correct physical address and gets another page's contents
+back, while the read crossing, the lane select, the half select, the response
+matching and the double read all read clean. The one reading that is *not*
+consistent with that is `patwr`'s own read-back from the buffer cache, which is
+clean on every run: at that moment memory holds the right word. Something has to
+give between those two facts, and finding which is the next step rather than
+another guess.
+
 **What is not yet pinned down** is the exact window -- whether `C_S6` can be
 true for a cycle before the map output settles, or whether the bridge latches
 early -- and that is what the fix has to be built on.
