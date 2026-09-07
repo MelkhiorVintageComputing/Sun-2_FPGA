@@ -1472,7 +1472,38 @@ Rebuilt with `Strict`, confirmed as `ORDERING = "STRICT"` in the generated
 So the controller is not reordering a read ahead of a write. Reverted to
 `Normal`.
 
-**And that sharpens the conclusion rather than weakening it.** The adapter is
+**The contradiction was an artefact of file size, and the account built on it is
+withdrawn.** `patwr`'s in-pass read-back is ordinary buffered I/O -- `write()`
+then `read()` on the same descriptor -- so with a 512 KiB file on a 7 MiB
+machine it is served entirely from the pages the CPU just wrote. It compared
+memory against memory and could not fail. The tool's own header says exactly
+this and prescribes the fix ("make the file far larger than the cache"), and
+512 KiB does not meet it.
+
+Rerun at **8 MiB**, larger than RAM, the read-back misses the cache and reports
+the corruption **in the same pass, with no reboot**:
+
+```
+  BAD  sector 217 word 172  want 80ac  got 584f
+  BAD  sector 361 word 126  want 807e  got 2e2e
+  BAD  sector 783 word  20  want 8014  got 2f2d
+```
+
+So there was never any evidence that memory held the right word at the master's
+address. Everything is consistent with the simplest reading: **memory holds
+program text there, and always did.** The master reads it faithfully
+(`ARRIVED BAD`), the controller agrees with itself (`DISAGREED 0` over 205
+million pairs), strict ordering changes nothing because there is nothing to
+reorder, and the disk gets what memory held.
+
+**Which moves the fault to the CPU's write.** A word the CPU wrote into the
+buffer never reached that location. The write-side crossing check counts writes
+that *arrived at the adapter* carrying the right data and finds none wrong -- it
+cannot see a write that never reached the bridge, or one issued to a different
+address. That is the mirror of every instrument built so far, and it is where
+this now points.
+
+**The old note, kept because the reasoning was sound given what was believed:** The adapter is
 single-transaction-in-flight and is the only client on this build, so every
 request reaches MIG in the order the machine issued it; with `Strict` they are
 also *executed* in that order. A read that still returns the location's previous
