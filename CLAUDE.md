@@ -1380,6 +1380,35 @@ violation; it needs a CPU cycle interleaved with a DVMA cycle, which is why a
 disk transfer under load provokes it and a quiet memory test never does; and it
 is in `sun2_fpga.v`, shared by both boards.
 
+**An extra settling cycle before AS was tried and does not fix it.** The
+hypothesis was that the MMU chain is a cycle late when `FC[2]` changes, because
+the context register selects a different half and everything downstream shifts.
+`sun2_dvma` grew an `S_SETTLE` state between `S_ADDR` and `S_STROBE`, giving the
+address and function code **two** clocks before AS instead of one. Measured:
+
+```
+  in a run     524,282
+  ARRIVED BAD        6      unchanged
+```
+
+with the MultiBus fingerprint still 22/274, so the change was harmless and
+useless. It has been reverted.
+
+Three things came out of it that narrow the search rather than widen it:
+
+* **The chain really is two clocks.** `smap_sram` is synchronous, so
+  `ia_smap2pmap` is valid a clock after `P_A` and `cx` move; `pmap_sram` indexes
+  on *that*, so `ma_pmap2devices` is valid a clock later again. `S_SETTLE`
+  supplied exactly the missing clock, and the fault did not move.
+* **So the transient is not what reaches the bridge.** `MATCH_MEM` is gated on
+  `C_S6`, which the captures show arriving several clocks after the map has
+  settled -- the `048 -> 045 -> aca` transient is real but has gone by then.
+* **The context register is not involved at all.** In all three captures both
+  halves held the same value and `cx` never moved, so no context selection
+  changed. The user-mode-precedes-fault correlation (3 of 3) is a property of
+  the workload -- `patwr` is a user program, so interleaved CPU cycles are
+  user-mode as a matter of course -- and not the mechanism.
+
 **What is not yet pinned down** is the exact window -- whether `C_S6` can be
 true for a cycle before the map output settles, or whether the bridge latches
 early -- and that is what the fix has to be built on.
