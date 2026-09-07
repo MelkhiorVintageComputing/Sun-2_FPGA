@@ -71,6 +71,23 @@ module sun2_wishbone_bridge #(
 			     // tests the selection against a clean input.
 			     output reg [31:0]  dbg_n_outpat,
 			     output reg [31:0]  dbg_n_outbad,
+
+			     // Are any of the CPU's writes missing?
+			     //
+			     // Counting cannot answer it: the pattern-write
+			     // counter already exceeds the file it wrote, by
+			     // rewrites and other traffic, so a shortfall of
+			     // six in half a million is invisible.  This tests
+			     // *completeness* instead.  tools/patwr -u makes
+			     // every write self-identifying -- the halfword at
+			     // offset i is 0x8000|i -- so one bit per offset
+			     // records that the word was written, and a block
+			     // that was nearly all written but not quite is a
+			     // missing write, with the offset to prove it.
+			     output reg [31:0]  dbg_n_blk,     // blocks checked
+			     output reg [31:0]  dbg_n_blk_bad, // ... incomplete
+			     output reg [8:0]   dbg_blk_off,   // first missing
+			     output reg [22:0]  dbg_blk_adr,
 			     
 			     // wishbone
 			     output 	       wb_cyc_o,
@@ -219,6 +236,62 @@ module sun2_wishbone_bridge #(
    wire [15:0] out_act = P_ADR_IN[1] ? { wb_dat_i[31:24], wb_dat_i[23:16] }
                                      : { wb_dat_i[15: 8], wb_dat_i[ 7: 0] };
 `endif
+
+   // ---- write coverage -----------------------------------------------------
+   // A CPU write of pattern data: 16 bits, data equal to what its address
+   // predicts.  wb_we_o is ~P_RW_n, and the bridge issues one Wishbone cycle
+   // per 68010 cycle, so one strobe per halfword.
+   // The instant the write request goes out, which is where adr_issued is
+   // captured too.  MATCH_MEM already carries C_S6; the bridge has no such
+   // input of its own.
+   wire        wr_fire  = wb_cyc_o & ~issued & wb_we_o & MATCH_MEM;
+   wire [15:0] wr_pat   = {8'h80, P_ADR_IN[8:1]};
+   wire        wr_is_pat = (P_DATA_IN == wr_pat);
+   wire [13:0] blk_now  = P_ADR_IN[22:9];      // the 512-byte block
+   reg  [13:0] blk_cur;
+   reg  [255:0] blk_seen;
+   reg          blk_any;
+
+   // Popcount of the bitmap, computed only when a block closes.  256 bits is
+   // a wide sum but it is evaluated once per block, not per clock.
+   integer bi;
+   reg [8:0] blk_cnt;
+   reg [8:0] blk_first;
+   always @* begin
+      blk_cnt   = 9'd0;
+      blk_first = 9'd0;
+      for (bi = 255; bi >= 0; bi = bi - 1)
+	if (blk_seen[bi]) blk_cnt = blk_cnt + 9'd1;
+	else              blk_first = bi[8:0];
+   end
+
+   always @(posedge CLK)
+     if (~RESET_n) begin
+	blk_cur <= 14'h0; blk_seen <= 256'h0; blk_any <= 1'b0;
+	dbg_n_blk <= 32'd0; dbg_n_blk_bad <= 32'd0;
+	dbg_blk_off <= 9'd0; dbg_blk_adr <= 23'd0;
+     end else if (wr_fire) begin
+	if (blk_now != blk_cur) begin
+	   // The block just closed.  A block that was nearly all written but
+	   // not quite is the thing being looked for; the threshold keeps
+	   // ordinary traffic, which sets a handful of bits at most, out.
+	   if (blk_any && (blk_cnt >= 9'd200)) begin
+	      dbg_n_blk <= dbg_n_blk + 32'd1;
+	      if (blk_cnt != 9'd256) begin
+		 dbg_n_blk_bad <= dbg_n_blk_bad + 32'd1;
+		 dbg_blk_off   <= blk_first;
+		 dbg_blk_adr   <= {blk_cur, 9'h0};
+	      end
+	   end
+	   blk_cur  <= blk_now;
+	   blk_seen <= 256'h0;
+	   blk_any  <= 1'b0;
+	end
+	if (wr_is_pat) begin
+	   blk_seen[P_ADR_IN[8:1]] <= 1'b1;
+	   blk_any <= 1'b1;
+	end
+     end
 
    // Counted here rather than derived outside, because the address the request
    // went out with exists only inside this module.

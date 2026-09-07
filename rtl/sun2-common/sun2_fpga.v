@@ -164,6 +164,11 @@ module sun2_fpga(input         cpu_clk,
 		 // actually captured against it.
 		 output [15:0]   dbg_wb_dout,
 		 output          dbg_match_mem,
+		 // the bridge's write-coverage check
+		 output [31:0]   dbg_wb_n_blk,
+		 output [31:0]   dbg_wb_n_blk_bad,
+		 output [8:0]    dbg_wb_blk_off,
+		 output [22:0]   dbg_wb_blk_adr,
 		 /* wishbone */
 		 output        wb_cyc_o,
 		 output        wb_stb_o,
@@ -1195,6 +1200,10 @@ module sun2_fpga(input         cpu_clk,
 							   .dbg_n_adrbad(dbg_wb_n_adrbad),
 							   .dbg_n_outpat(dbg_wb_n_outpat),
 							   .dbg_n_outbad(dbg_wb_n_outbad),
+							   .dbg_n_blk(dbg_wb_n_blk),
+							   .dbg_n_blk_bad(dbg_wb_n_blk_bad),
+							   .dbg_blk_off(dbg_wb_blk_off),
+							   .dbg_blk_adr(dbg_wb_blk_adr),
 				// Power-up state, not reset state.  ENABLE is armed
 				// when the monitor writes LED code 0x8F and gates
 				// wb_cyc/wb_stb, so while it is clear main memory

@@ -345,6 +345,9 @@ module wukong_top #(
    // can cover: they all predict the expected word from the address.
    wire [31:0] wb_n_load, wb_n_adrbad;
    wire [31:0] wb_n_outpat, wb_n_outbad;
+   wire [31:0] wb_n_blk, wb_n_blk_bad;
+   wire [8:0]  wb_blk_off;
+   wire [22:0] wb_blk_adr;
    wire [31:0] dv_n_mux, dv_n_mux_bad, dv_n_pat32, dv_n_pat32_bad;
    wire [31:0] dv_n_arm32, dv_n_arm32_bad;
    wire [31:0] xy_n_sb, xy_n_sb_bad, xy_n_sb_iso, xy_n_drop, xy_n_rd, xy_n_rd_bad;
@@ -410,7 +413,11 @@ module wukong_top #(
        .probe_in24 (dv_n_adr_move),
        .probe_in25 (dv_n_dat_move),
        .probe_in26 (rr_n),
-       .probe_in27 (rr_bad)
+       .probe_in27 (rr_bad),
+       .probe_in28 (wb_n_blk),
+       .probe_in29 (wb_n_blk_bad),
+       .probe_in30 ({23'd0, wb_blk_off}),
+       .probe_in31 ({9'd0, wb_blk_adr})
    );
 
    sun2_ila u_ila (
@@ -566,6 +573,10 @@ module wukong_top #(
        .wb_n_adrbad    (wb_n_adrbad),
        .wb_n_outpat    (wb_n_outpat),
        .wb_n_outbad    (wb_n_outbad),
+       .wb_n_blk       (wb_n_blk),
+       .wb_n_blk_bad   (wb_n_blk_bad),
+       .wb_blk_off     (wb_blk_off),
+       .wb_blk_adr     (wb_blk_adr),
        .dv_n_mux       (dv_n_mux),
        .dv_n_mux_bad   (dv_n_mux_bad),
        .dv_n_pat32     (dv_n_pat32),

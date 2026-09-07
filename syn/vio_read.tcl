@@ -88,6 +88,15 @@ puts "DOUBLE READ: every read issued twice, the two answers compared"
 puts [format "  compared     %s   <- the control" [rd $vio rr_n]]
 puts [format "  DISAGREED    %s" [rd $vio rr_bad]]
 puts ""
+puts "WRITE COVERAGE: did every word of a buffer get written?"
+puts [format "  blocks       %s   <- the control: near-full pattern blocks" [rd $vio wb_n_blk]]
+puts [format "  INCOMPLETE   %s   <- a block missing at least one write" [rd $vio wb_n_blk_bad]]
+puts [format "  first miss   offset %s  at %s" [rd $vio wb_blk_off] [rd $vio wb_blk_adr]]
+puts ""
+puts "Non-zero INCOMPLETE means a CPU write never reached memory, and the"
+puts "offset should match one the disk shows corrupted.  Zero, with blocks"
+puts "large, means every word was written and something overwrote it after."
+puts ""
 puts "Zero here, with ARRIVED BAD non-zero, means memory really did hold that"
 puts "word at that moment and the right value arrived later -- a visibility or"
 puts "ordering fault, not a read-path one.  Non-zero means the read path."

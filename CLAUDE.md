@@ -1496,6 +1496,37 @@ program text there, and always did.** The master reads it faithfully
 million pairs), strict ordering changes nothing because there is nothing to
 reorder, and the disk gets what memory held.
 
+**A write-coverage check on the CPU's side, and its first reading needs
+refining.** `tools/patwr -u` makes every write self-identifying, so
+`sun2_wishbone_bridge` keeps 256 bits -- one per halfword offset -- for the
+512-byte block being written, and when the address moves to another block asks
+whether every bit was set. Counting could never answer this: the pattern-write
+counter already *exceeds* the file it wrote, so a shortfall of six in half a
+million is invisible. Completeness can.
+
+On an 8 MiB pass, with the read-back now missing the cache and reporting the
+corruption in-pass:
+
+```
+  in a run     4,194,221   = the 4,194,304 halfwords in the file
+  ARRIVED BAD         83
+  blocks          15,448   near-full pattern blocks closed
+  INCOMPLETE       1,191   ... missing at least one write
+```
+
+The two controls are as good as they get -- both land on the workload's own
+size. **`INCOMPLETE` does not**: 1,191 is 7.7% of blocks against a corruption
+rate near 0.5%, fourteen times too many, and `first miss offset 0` is the
+signature of a block closed before it was filled rather than a lost write. The
+kernel interleaves metadata and writeback with the copy, so a block is left and
+returned to, and every such departure closes it early.
+
+**The refinement is to count the shape of the miss, not the fact of it.** A lost
+write leaves a block missing *exactly one* halfword; an interleaved block is
+missing many. Counting only blocks with 255 of 256 bits set separates them, and
+the latched offset can then be compared against the offsets the disk shows
+corrupted -- which is the check that would close the chain end to end.
+
 **Which moves the fault to the CPU's write.** A word the CPU wrote into the
 buffer never reached that location. The write-side crossing check counts writes
 that *arrived at the adapter* carrying the right data and finds none wrong -- it
