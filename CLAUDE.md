@@ -1456,6 +1456,31 @@ together, which is exactly a disk flush of a buffer the CPU has just written and
 nothing a quiet memory test ever does. `WRITE_VERIFY` passes because it reads
 back through the same port, which *is* ordered against its own write.
 
+**MIG's strict ordering does not fix it, and that matters.** `syn/mig/sun2_mig.prj`
+carried `<Ordering>Normal</Ordering>` -- the mode that explicitly lets the
+controller reorder for efficiency -- which looked like the whole answer.
+Rebuilt with `Strict`, confirmed as `ORDERING = "STRICT"` in the generated
+`sun2_mig_mig.v`:
+
+```
+  in a run     524,282
+  ARRIVED BAD        6      unchanged
+  compared 205,049,131
+  DISAGREED          0
+```
+
+So the controller is not reordering a read ahead of a write. Reverted to
+`Normal`.
+
+**And that sharpens the conclusion rather than weakening it.** The adapter is
+single-transaction-in-flight and is the only client on this build, so every
+request reaches MIG in the order the machine issued it; with `Strict` they are
+also *executed* in that order. A read that still returns the location's previous
+contents therefore had its write issued **after** it, in real time -- not
+reordered underneath. The question is no longer "did the controller reorder?"
+but "why was that word not yet written when the master read it?", and that is a
+question about the machine above the adapter, not about DDR3.
+
 **What it predicts, and how to test it without a rebuild:** anything that
 separates the CPU's write from the master's read in time should suppress it.
 The cheapest is `sync` between filling and flushing; the real fix is to make the
