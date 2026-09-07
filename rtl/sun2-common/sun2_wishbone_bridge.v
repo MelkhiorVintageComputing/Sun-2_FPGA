@@ -275,13 +275,22 @@ module sun2_wishbone_bridge #(
 	   // The block just closed.  A block that was nearly all written but
 	   // not quite is the thing being looked for; the threshold keeps
 	   // ordinary traffic, which sets a handful of bits at most, out.
-	   if (blk_any && (blk_cnt >= 9'd200)) begin
-	      dbg_n_blk <= dbg_n_blk + 32'd1;
-	      if (blk_cnt != 9'd256) begin
-		 dbg_n_blk_bad <= dbg_n_blk_bad + 32'd1;
-		 dbg_blk_off   <= blk_first;
-		 dbg_blk_adr   <= {blk_cur, 9'h0};
-	      end
+	   // Count the *shape* of the miss, not the fact of it.  The first
+	   // board run of this check read 1,191 incomplete blocks of 15,448
+	   // against a corruption rate near 0.5% -- fourteen times too many --
+	   // because the kernel interleaves metadata and writeback with the
+	   // copy, so a block is departed and returned to and every departure
+	   // closes it early.  A *lost write* leaves a block missing exactly
+	   // one halfword; an interleaved one misses many.  255 of 256
+	   // separates them, and blk_first then names the offset to match
+	   // against what the disk shows corrupted.
+	   if (blk_any && (blk_cnt == 9'd256)) begin
+	      dbg_n_blk <= dbg_n_blk + 32'd1;          // complete, the control
+	   end else if (blk_any && (blk_cnt == 9'd255)) begin
+	      dbg_n_blk     <= dbg_n_blk + 32'd1;
+	      dbg_n_blk_bad <= dbg_n_blk_bad + 32'd1;  // exactly one missing
+	      dbg_blk_off   <= blk_first;
+	      dbg_blk_adr   <= {blk_cur, 9'h0};
 	   end
 	   blk_cur  <= blk_now;
 	   blk_seen <= 256'h0;

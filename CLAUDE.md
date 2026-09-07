@@ -1521,11 +1521,30 @@ signature of a block closed before it was filled rather than a lost write. The
 kernel interleaves metadata and writeback with the copy, so a block is left and
 returned to, and every such departure closes it early.
 
-**The refinement is to count the shape of the miss, not the fact of it.** A lost
-write leaves a block missing *exactly one* halfword; an interleaved block is
-missing many. Counting only blocks with 255 of 256 bits set separates them, and
-the latched offset can then be compared against the offsets the disk shows
-corrupted -- which is the check that would close the chain end to end.
+**Counting the shape of the miss rather than the fact of it answers the
+question: the CPU's writes are not missing.** A lost write leaves a block
+missing *exactly one* halfword; an interleaved block misses many. Gated on 255
+of 256:
+
+```
+  in a run     4,194,211   control = the file's halfwords
+  ARRIVED BAD         93
+  blocks          14,289   control
+  INCOMPLETE           1   one block, missing one write
+```
+
+**One, against ninety-three corrupted words.** So a missing CPU write accounts
+for at most one of them and is not the mechanism -- and the single hit may
+itself be a boundary artefact of the same kind the unrefined check produced in
+quantity.
+
+**And `ARRIVED BAD` is now calibrated one-for-one against the fault.** `patwr`
+reported **93 of 4,194,304 words wrong** on that same run, in-pass, against the
+detector's 93. The two are measured at opposite ends of the machine -- one in
+the bridge's clock domain, the other by software reading the file back from
+disk -- and they agree exactly. That is the strongest validation any instrument
+in this investigation has had, and it means a hypothesis can now be tested
+against a count that *is* the corruption rather than a proxy for it.
 
 **Which moves the fault to the CPU's write.** A word the CPU wrote into the
 buffer never reached that location. The write-side crossing check counts writes
