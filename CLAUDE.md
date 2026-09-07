@@ -1546,6 +1546,37 @@ disk -- and they agree exactly. That is the strongest validation any instrument
 in this investigation has had, and it means a hypothesis can now be tested
 against a count that *is* the corruption rather than a proxy for it.
 
+**And the DVMA side is clean too, so the last writer of memory is exonerated.**
+The mirror check watches every data access the disk controller makes and asks
+whether it lands inside the sector it is moving. On an 8 MiB pass:
+
+```
+  ARRIVED BAD          92      patwr: 92 of 4,194,304 -- exact, a second time
+  blocks           14,266
+  INCOMPLETE            0      every CPU write present
+  DVMA accesses 6,867,712
+  OUTSIDE               0      none outside its sector
+```
+
+`INCOMPLETE 0` also retires the single hit the previous run showed: it was the
+boundary artefact it looked like, not a lost write.
+
+**So both writers of memory are now measured clean on a run that corrupted 92
+words.** The CPU writes every word of every buffer; the disk controller never
+addresses outside the sector it is moving; memory is self-consistent across 205
+million read-pairs; nothing is reordered; the physical page is right at `C_S6`;
+and the read path from DDR3 to the card is clean end to end. The corruption
+persists at exactly the same rate through all of it.
+
+**What has not been compared, and is the only pairing left:** the *physical*
+address of a failing read against the physical addresses the CPU actually wrote.
+Every check here predicts from the address it is handed -- the coverage check
+proves *a* block was fully written, and `ARRIVED BAD` proves *a* read came back
+wrong, and nothing establishes that the two are the same block. A 2 KiB mapping
+error cannot produce an isolated word, so that is excluded; what is not excluded
+is a block written at one physical address and read from another for reasons
+that are not the page map.
+
 **Which moves the fault to the CPU's write.** A word the CPU wrote into the
 buffer never reached that location. The write-side crossing check counts writes
 that *arrived at the adapter* carrying the right data and finds none wrong -- it

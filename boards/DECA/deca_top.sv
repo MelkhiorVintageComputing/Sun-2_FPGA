@@ -312,6 +312,8 @@ module deca_top #(
    wire [31:0] dv_n_mux, dv_n_mux_bad, dv_n_pat32, dv_n_pat32_bad;
    wire [31:0] dv_n_arm32, dv_n_arm32_bad;
    wire [31:0] xy_n_sb, xy_n_sb_bad, xy_n_sb_iso, xy_n_drop, xy_n_rd, xy_n_rd_bad;
+   wire [31:0] xy_n_dva, xy_n_dva_bad;
+   wire [23:0] xy_dva_adr;
    wire [31:0] dv_n_xact, dv_n_adr_move, dv_n_dat_move;
    wire        dv_arrived_bad;
 
@@ -365,6 +367,9 @@ module deca_top #(
        .xy_n_drop      (xy_n_drop),
        .xy_n_rd        (xy_n_rd),
        .xy_n_rd_bad    (xy_n_rd_bad),
+       .xy_n_dva       (xy_n_dva),
+       .xy_n_dva_bad   (xy_n_dva_bad),
+       .xy_dva_adr     (xy_dva_adr),
        .dv_n_xact      (dv_n_xact),
        .dv_n_adr_move  (dv_n_adr_move),
        .dv_n_dat_move  (dv_n_dat_move),

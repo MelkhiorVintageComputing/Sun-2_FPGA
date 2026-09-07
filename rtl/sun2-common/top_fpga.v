@@ -50,6 +50,9 @@ module top(input         cpu_clk,
 	   output [31:0]  xy_n_drop,
 	   output [31:0]  xy_n_rd,
 	   output [31:0]  xy_n_rd_bad,
+	   output [31:0]  xy_n_dva,
+	   output [31:0]  xy_n_dva_bad,
+	   output [23:0]  xy_dva_adr,
 	   // sun2_dvma request-stability, the device-to-memory direction.
 	   output [31:0]  dv_n_xact,
 	   output [31:0]  dv_n_adr_move,
@@ -1059,6 +1062,9 @@ module top(input         cpu_clk,
       .dbg_n_drop(xy_n_drop),
       .dbg_n_rd(xy_n_rd),
       .dbg_n_rd_bad(xy_n_rd_bad),
+      .dbg_n_dva(xy_n_dva),
+      .dbg_n_dva_bad(xy_n_dva_bad),
+      .dbg_dva_adr(xy_dva_adr),
       .wb_ack_i(xy_wb_ack),
       .wb_err_i(xy_wb_err),
       .wb_clr_o(xy_wb_clr),
@@ -1248,6 +1254,9 @@ module top(input         cpu_clk,
    assign xy_n_drop      = 32'h0;
    assign xy_n_rd        = 32'h0;
    assign xy_n_rd_bad    = 32'h0;
+   assign xy_n_dva       = 32'h0;
+   assign xy_n_dva_bad   = 32'h0;
+   assign xy_dva_adr     = 24'h0;
    assign dv_n_xact      = 32'h0;
    assign dv_n_adr_move  = 32'h0;
    assign dv_n_dat_move  = 32'h0;

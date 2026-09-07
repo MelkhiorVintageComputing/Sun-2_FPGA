@@ -351,6 +351,8 @@ module wukong_top #(
    wire [31:0] dv_n_mux, dv_n_mux_bad, dv_n_pat32, dv_n_pat32_bad;
    wire [31:0] dv_n_arm32, dv_n_arm32_bad;
    wire [31:0] xy_n_sb, xy_n_sb_bad, xy_n_sb_iso, xy_n_drop, xy_n_rd, xy_n_rd_bad;
+   wire [31:0] xy_n_dva, xy_n_dva_bad;
+   wire [23:0] xy_dva_adr;
    wire [31:0] dv_n_xact, dv_n_adr_move, dv_n_dat_move;
    wire [31:0] rr_n, rr_bad, rr_v1, rr_v2;
    wire        dv_arrived_bad;
@@ -417,7 +419,10 @@ module wukong_top #(
        .probe_in28 (wb_n_blk),
        .probe_in29 (wb_n_blk_bad),
        .probe_in30 ({23'd0, wb_blk_off}),
-       .probe_in31 ({9'd0, wb_blk_adr})
+       .probe_in31 ({9'd0, wb_blk_adr}),
+       .probe_in32 (xy_n_dva),
+       .probe_in33 (xy_n_dva_bad),
+       .probe_in34 ({8'd0, xy_dva_adr})
    );
 
    sun2_ila u_ila (
@@ -589,6 +594,9 @@ module wukong_top #(
        .xy_n_drop      (xy_n_drop),
        .xy_n_rd        (xy_n_rd),
        .xy_n_rd_bad    (xy_n_rd_bad),
+       .xy_n_dva       (xy_n_dva),
+       .xy_n_dva_bad   (xy_n_dva_bad),
+       .xy_dva_adr     (xy_dva_adr),
        .dv_n_xact      (dv_n_xact),
        .dv_n_adr_move  (dv_n_adr_move),
        .dv_n_dat_move  (dv_n_dat_move),

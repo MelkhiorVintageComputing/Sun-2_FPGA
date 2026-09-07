@@ -93,6 +93,15 @@ puts [format "  blocks       %s   <- the control: near-full pattern blocks" [rd 
 puts [format "  INCOMPLETE   %s   <- a block missing at least one write" [rd $vio wb_n_blk_bad]]
 puts [format "  first miss   offset %s  at %s" [rd $vio wb_blk_off] [rd $vio wb_blk_adr]]
 puts ""
+puts "DVMA BOUNDS: does a disk access land outside the sector it is moving?"
+puts [format "  accesses     %s   <- the control" [rd $vio xy_n_dva]]
+puts [format "  OUTSIDE      %s   at %s" [rd $vio xy_n_dva_bad] [rd $vio xy_dva_adr]]
+puts ""
+puts "This is the device-to-memory direction, which nothing else here watches."
+puts "A DVMA write one word outside its buffer drops disk content -- program"
+puts "text -- into a neighbouring page: one word, which is the shape the fault"
+puts "has and the shape a 2 KiB mapping error cannot produce."
+puts ""
 puts "Non-zero INCOMPLETE means a CPU write never reached memory, and the"
 puts "offset should match one the disk shows corrupted.  Zero, with blocks"
 puts "large, means every word was written and something overwrote it after."
