@@ -42,6 +42,7 @@
 //
 
 module wb_to_mig_ui #(
+    parameter bit DOUBLE_READ = 1'b0,
     parameter int APP_ADDR_WIDTH = 28,
     parameter int APP_DATA_WIDTH = 128,
     parameter int APP_MASK_WIDTH = APP_DATA_WIDTH / 8
@@ -109,7 +110,22 @@ module wb_to_mig_ui #(
     // comparing the corrupted value with itself.
     output wire [31:0]               xchk_n_wpat,   // full writes that were the
                                                     // pattern in the wb domain
-    output wire [31:0]               xchk_n_wbad
+    output wire [31:0]               xchk_n_wbad,
+
+    // DOUBLE_READ, ported from boards/DECA/deca_wb_to_ddr3.sv.  Every read is
+    // issued twice and the two answers compared: is the controller
+    // self-consistent for this address at this moment?
+    //
+    // That is what the open contradiction needs.  ARRIVED BAD says the master
+    // was handed program text for an address whose physical page is correct at
+    // C_S6, while patwr's later read-back of the same file is clean.  If the
+    // two reads agree, memory really did hold that word then and the right
+    // value arrived afterwards -- a visibility or ordering fault.  If they
+    // disagree, a read returned something memory did not hold.
+    output reg  [31:0]               dbg_rr,      // reads compared
+    output reg  [31:0]               dbg_rr_bad,  // ... whose answers differed
+    output reg  [31:0]               dbg_rr_v1,
+    output reg  [31:0]               dbg_rr_v2
 );
 
    // ------------------------------------------------------------------
@@ -281,8 +297,10 @@ module wb_to_mig_ui #(
    // CPU memory access, and measurably does -- it cost a whole cpu_clk of the
    // seven the 68010 waits, which is not a reasonable price for tidiness.
    reg waiting;
+   reg        rr_second;   // this c_done is the repeat of a read
+   reg [31:0] rr_first;
 
-   assign c_req   = req_pulse | waiting;
+   assign c_req   = req_pulse | waiting | rr_second;
    assign c_addr  = {{(APP_ADDR_WIDTH-27){1'b0}}, req_adr[25:2], 3'b000};
    assign c_we    = req_we;
    // The same word in all four lanes; the mask decides which copy is actually
@@ -296,6 +314,9 @@ module wb_to_mig_ui #(
          ack_tgl <= 1'b0;
          rd_lane <= 32'h0;
          c_wpat  <= 32'd0; c_wbad <= 32'd0;
+         rr_second <= 1'b0; rr_first <= 32'h0;
+         dbg_rr <= 32'd0; dbg_rr_bad <= 32'd0;
+         dbg_rr_v1 <= 32'h0; dbg_rr_v2 <= 32'h0;
       end else begin
          if (req_pulse) begin
             waiting <= 1'b1;
@@ -306,7 +327,21 @@ module wb_to_mig_ui #(
             end
          end
 
-         if (c_done) begin
+         if (c_done && DOUBLE_READ && !req_we && !rr_second) begin
+            // First answer: keep it, go round once more at the same address.
+            // waiting stays low; rr_second holds c_req up for the repeat.
+            rr_first  <= c_rdata[lane*32 +: 32];
+            rr_second <= 1'b1;
+         end else if (c_done) begin
+            if (rr_second) begin
+               rr_second <= 1'b0;
+               dbg_rr <= dbg_rr + 32'd1;
+               if (c_rdata[lane*32 +: 32] != rr_first) begin
+                  dbg_rr_bad <= dbg_rr_bad + 32'd1;
+                  dbg_rr_v1  <= rr_first;
+                  dbg_rr_v2  <= c_rdata[lane*32 +: 32];
+               end
+            end
             rd_lane <= c_rdata[lane*32 +: 32];
             // The verdict for this word, decided here in ui_clk where the data
             // is native, and carried across with it.

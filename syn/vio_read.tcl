@@ -84,6 +84,14 @@ puts [format "  transactions %s   <- the control" [rd $vio dv_n_xact]]
 puts [format "  ADDR MOVED   %s   <- wb_adr_i changed mid-transaction" [rd $vio dv_n_adr_move]]
 puts [format "  DATA MOVED   %s   <- wb_dat_i changed mid-write" [rd $vio dv_n_dat_move]]
 puts ""
+puts "DOUBLE READ: every read issued twice, the two answers compared"
+puts [format "  compared     %s   <- the control" [rd $vio rr_n]]
+puts [format "  DISAGREED    %s" [rd $vio rr_bad]]
+puts ""
+puts "Zero here, with ARRIVED BAD non-zero, means memory really did hold that"
+puts "word at that moment and the right value arrived later -- a visibility or"
+puts "ordering fault, not a read-path one.  Non-zero means the read path."
+puts ""
 puts "the sector buffer: what the disk controller stored"
 puts [format "  bytes       %s   <- the control" [rd $vio xy_n_sb]]
 puts [format "  wrong raw   %s   (includes runs: metadata, not the pattern)" [rd $vio xy_n_sb_bad]]

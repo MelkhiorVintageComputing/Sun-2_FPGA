@@ -1423,13 +1423,44 @@ that is the value the bridge uses -- the transient has settled several clocks
 earlier. **The stale-page-map account is dead**, and the `S_SETTLE` null result
 was telling us so before this confirmed it.
 
-So the master issues a correct physical address and gets another page's contents
-back, while the read crossing, the lane select, the half select, the response
-matching and the double read all read clean. The one reading that is *not*
-consistent with that is `patwr`'s own read-back from the buffer cache, which is
-clean on every run: at that moment memory holds the right word. Something has to
-give between those two facts, and finding which is the next step rather than
-another guess.
+**DOUBLE_READ and ARRIVED BAD on the same run resolve it.** `DOUBLE_READ` is
+ported to `wb_to_mig_ui` now and issues every read twice, comparing the answers:
+
+```
+  in a run       524,279
+  ARRIVED BAD          9      the fault was present on this run
+  compared   195,547,866      every read doubled
+  DISAGREED            0
+```
+
+195 million comparisons, none disagreeing, while nine words arrived wrong. So
+the read is **not** a transient: memory really did hold program text at the
+instant the master read it, and the pattern appeared there later -- which is why
+`patwr`'s own read-back, minutes afterwards, is clean every time.
+
+**That makes it a write-visibility fault, and the mechanism is already named in
+this file.** "One transaction in flight on the whole interface, because MIG's
+`ORDERING = "NORM"` is not established here and the read path has no tag."
+The adapter serialises its *own* requests, but a write is finished from its
+point of view when the controller accepts it, not when it reaches DRAM. A read
+issued afterwards -- by the other master, for the buffer the CPU has just
+filled -- can be answered from memory before that write drains, and it gets the
+page's previous contents: program text.
+
+It fits every measurement. The word is wrong before the master captures it; the
+physical page is right at `C_S6`; both crossings, the lane, the half and the
+response matching are clean, because every one of them faithfully carries a
+value the controller really returned; the rate does not move with clock
+frequency; and it needs a CPU write and a master read of the same page close
+together, which is exactly a disk flush of a buffer the CPU has just written and
+nothing a quiet memory test ever does. `WRITE_VERIFY` passes because it reads
+back through the same port, which *is* ordered against its own write.
+
+**What it predicts, and how to test it without a rebuild:** anything that
+separates the CPU's write from the master's read in time should suppress it.
+The cheapest is `sync` between filling and flushing; the real fix is to make the
+adapter hold a read until prior writes are known committed, or to establish
+strict ordering in the controller.
 
 **What is not yet pinned down** is the exact window -- whether `C_S6` can be
 true for a cycle before the map output settles, or whether the bridge latches

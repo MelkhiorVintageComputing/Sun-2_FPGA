@@ -349,6 +349,7 @@ module wukong_top #(
    wire [31:0] dv_n_arm32, dv_n_arm32_bad;
    wire [31:0] xy_n_sb, xy_n_sb_bad, xy_n_sb_iso, xy_n_drop, xy_n_rd, xy_n_rd_bad;
    wire [31:0] dv_n_xact, dv_n_adr_move, dv_n_dat_move;
+   wire [31:0] rr_n, rr_bad, rr_v1, rr_v2;
    wire        dv_arrived_bad;
 
 `ifdef SUN2_ILA
@@ -407,7 +408,9 @@ module wukong_top #(
        .probe_in22 (dv_n_arm32_bad),
        .probe_in23 (dv_n_xact),
        .probe_in24 (dv_n_adr_move),
-       .probe_in25 (dv_n_dat_move)
+       .probe_in25 (dv_n_dat_move),
+       .probe_in26 (rr_n),
+       .probe_in27 (rr_bad)
    );
 
    sun2_ila u_ila (
@@ -664,7 +667,13 @@ module wukong_top #(
    wire [127:0] c0_wdata, c0_rdata, c1_rdata;
    wire [15:0]  c0_wmask;
 
-   wb_to_mig_ui adapter (
+   wb_to_mig_ui #(
+`ifdef SUN2_ILA
+       .DOUBLE_READ (1'b1)   // debug builds only: it doubles every read
+`else
+       .DOUBLE_READ (1'b0)
+`endif
+   ) adapter (
        .clk_wb  (cpu_clk),
        .rst_wb  (sys_reset),
 
@@ -682,6 +691,10 @@ module wukong_top #(
        .xchk_n_bad (xchk_n_bad),
        .xchk_n_wpat (xchk_n_wpat),
        .xchk_n_wbad (xchk_n_wbad),
+       .dbg_rr (rr_n),
+       .dbg_rr_bad (rr_bad),
+       .dbg_rr_v1 (rr_v1),
+       .dbg_rr_v2 (rr_v2),
        .xchk_got (xchk_got),
        .xchk_exp (xchk_exp)
    );
