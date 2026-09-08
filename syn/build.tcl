@@ -304,7 +304,14 @@ set ipdir   $top/build/ip/$board
 # -- make reported one path while Vivado wrote to another, quietly overwriting
 # the bitstream the new knob existed to leave alone.  Add to both, or to
 # neither.
-set outdir  $top/build/syn/vivado/$board-$machine[expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$mb_3c400 == 1 ? "-3c400" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu$cputag[expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$fbdebug == 1 ? "-fbdbg" : ""}][expr {$fbprobe == 1 ? "-fbprobe" : ""}][expr {$fbforce == 1 ? "-fbforce" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}]
+#
+# It happened again, with VME_SCSI and MB_SCSI: the Makefile's TAG carried them
+# and this did not, so `make bitstream MACHINE=vme VME_SCSI=1' wrote a
+# SCSI-fitted machine over the plain VME one and then reported a path that did
+# not exist, and `make program' failed with "no such bitstream".  The failure is
+# loud only because the two names differ; had make looked where Vivado wrote,
+# the wrong machine would have been programmed silently.
+set outdir  $top/build/syn/vivado/$board-$machine[expr {$vme_scsi == 1 ? "-vmescsi" : ""}][expr {$mb_scsi == 1 ? "-mbscsi" : ""}][expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$mb_3c400 == 1 ? "-3c400" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu$cputag[expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$fbdebug == 1 ? "-fbdbg" : ""}][expr {$fbprobe == 1 ? "-fbprobe" : ""}][expr {$fbforce == 1 ? "-fbforce" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir

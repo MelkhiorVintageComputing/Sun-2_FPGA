@@ -1594,6 +1594,33 @@ per-byte work at all, while the check side is one longword compare per four
 bytes. Same coverage, four times the volume, and the load lands where it is
 supposed to.
 
+**And on one bitstream with both masters, the Ethernet *and* the disk are
+clean -- which moves the fault onto the machine rather than the controller.**
+A VME 2/50 built with `VME_SCSI=1`, so the 82586 and the SCSI card are both
+fitted and both master the bus, reading the same micro-SD card the MultiBus
+builds corrupt:
+
+```
+  network, 32 MiB   0 wrong          82586 DMA
+  SCSI disk, 16 MiB 0 of 8,388,608   SCSI DMA, read-back missing an 8 MB cache
+```
+
+The MultiBus XY450 machine corrupts about 92 words per 8 MiB on the same card,
+the same `blk_sd`, the same bridge, the same adapter and the same DDR3. So the
+fault does not follow the disk controller or the SD path: **it follows the
+machine.** A MultiBus build corrupts with either disk controller -- XY450 on the
+Wukong, SCSI on the DECA -- and a VME build with SCSI does not.
+
+What differs is the MultiBus machine itself: its TYPE 2 and TYPE 3 bus spaces,
+its DVMA window, and `FAKES1BOOT`'s remap of virtual `0xF00000` onto physical
+`0xC0000` that a MultiBus disk transfer goes through and a VME one does not.
+That is a much smaller thing to read than everything eliminated before it.
+
+**One caution before this is leaned on.** It is a single 16 MiB pass; the
+MultiBus rate would predict about 180 bad words, so zero is a strong signal
+rather than a marginal one, but a second pass and a cold verify after a reboot
+would make it as solid as the MultiBus numbers it is being compared against.
+
 **That exonerates the whole shared path under a different master.** The VME
 Ethernet reaches memory through the same `sun2_dvma`, the same
 `sun2_wishbone_bridge`, the same MMU and `C_S` chain, the same `wb_to_mig_ui`
