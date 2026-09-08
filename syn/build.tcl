@@ -31,6 +31,7 @@ set fb       0
 set xy450    0
 set vme_scsi 0
 set mb_scsi 0
+set disk_off_mib 0
 set cpu      suska
 set ila      0
 set hdmimode 1280x1024
@@ -59,6 +60,7 @@ if {[llength $argv] > 14} { set cpu_div [lindex $argv 14] }
 if {[llength $argv] > 15} { set mb_3c400 [lindex $argv 15] }
 if {[llength $argv] > 16} { set vme_scsi [lindex $argv 16] }
 if {[llength $argv] > 17} { set mb_scsi  [lindex $argv 17] }
+if {[llength $argv] > 18} { set disk_off_mib [lindex $argv 18] }
 
 # CPU_DIV names the MMCM divider directly and wins over CPU_HZ in
 # wukong_clkgen.sv:63, so from here on cpu_hz has to mean the clock that will
@@ -311,7 +313,7 @@ set ipdir   $top/build/ip/$board
 # not exist, and `make program' failed with "no such bitstream".  The failure is
 # loud only because the two names differ; had make looked where Vivado wrote,
 # the wrong machine would have been programmed silently.
-set outdir  $top/build/syn/vivado/$board-$machine[expr {$vme_scsi == 1 ? "-vmescsi" : ""}][expr {$mb_scsi == 1 ? "-mbscsi" : ""}][expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$mb_3c400 == 1 ? "-3c400" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu$cputag[expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$fbdebug == 1 ? "-fbdbg" : ""}][expr {$fbprobe == 1 ? "-fbprobe" : ""}][expr {$fbforce == 1 ? "-fbforce" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}]
+set outdir  $top/build/syn/vivado/$board-$machine[expr {$vme_scsi == 1 ? "-vmescsi" : ""}][expr {$mb_scsi == 1 ? "-mbscsi" : ""}][expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$mb_3c400 == 1 ? "-3c400" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu$cputag[expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$fbdebug == 1 ? "-fbdbg" : ""}][expr {$fbprobe == 1 ? "-fbprobe" : ""}][expr {$fbforce == 1 ? "-fbforce" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}][expr {$disk_off_mib != 0 ? "-off${disk_off_mib}m" : ""}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir
@@ -555,6 +557,7 @@ synth_design -top wukong_top -part $part \
     -verilog_define $defines \
     -generic CPU_CLK_HZ=$cpu_hz \
     -generic CPU_DIV=$cpu_div \
+    -generic DISK_LBA_OFFSET=[expr {$disk_off_mib * 2048}] \
     -directive Default
 
 write_checkpoint -force $outdir/post_synth.dcp

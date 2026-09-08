@@ -1616,10 +1616,35 @@ its DVMA window, and `FAKES1BOOT`'s remap of virtual `0xF00000` onto physical
 `0xC0000` that a MultiBus disk transfer goes through and a VME one does not.
 That is a much smaller thing to read than everything eliminated before it.
 
-**One caution before this is leaned on.** It is a single 16 MiB pass; the
-MultiBus rate would predict about 180 bad words, so zero is a strong signal
-rather than a marginal one, but a second pass and a cold verify after a reboot
-would make it as solid as the MultiBus numbers it is being compared against.
+**And it is not the card region, which the Wukong could not previously rule
+out.** `DISK_OFF_MIB` was Quartus-only -- it appears in `syn/Makefile` and not
+once in `syn/build.tcl` -- so every measurement the Wukong has ever produced was
+taken at sector 0. It reaches the Vivado flow now, applied at the media in
+`wukong_top` exactly as `deca_top` does it, with the `outdir` tag added to
+*both* expressions. Same machine, same controller, same bitstream logic, only
+the region of the card different:
+
+```
+  offset 0     92 of 4,194,304 words wrong
+  offset 1024  81 of 4,194,304
+```
+
+So the medium is not the variable. That matters because this project has been
+caught by it before -- `351e320` found a create/delete stress damaging inode
+2140 every time at sector 0 and cleanly at 512 MiB -- but that was a different
+card, replaced since, and the rate here does not move.
+
+**The offsets are not interchangeable, and picking the wrong one wastes a
+boot.** Even multiples of 512 MiB (0, 1024, 2048) hold `eagle.img`, whose
+`/etc/fstab` names `xy0`; odd ones (512, 1536, 2560, 3584) hold `eagle-sd.img`,
+naming `sd0`. A machine pointed at the other kind boots and then cannot mount
+its root read-write: the VME SCSI test above ran at offset 0 and came up on an
+`xy0` fstab, which read exactly like a broken NFS root and cost a diagnosis.
+
+**One caution before this is leaned on.** The VME result is a single 16 MiB
+pass; the MultiBus rate would predict about 180 bad words, so zero is a strong
+signal rather than a marginal one, but a second pass and a cold verify would
+make it as solid as the MultiBus numbers it is compared against.
 
 **That exonerates the whole shared path under a different master.** The VME
 Ethernet reaches memory through the same `sun2_dvma`, the same

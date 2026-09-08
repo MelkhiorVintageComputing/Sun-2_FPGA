@@ -41,7 +41,16 @@ module wukong_top #(
     // -generic reaches the top level and nothing below it, so a knob declared
     // two levels down is silently ignored and you get the default clock with
     // no warning at all.
-    parameter int CPU_DIV    = 0
+    parameter int CPU_DIV    = 0,
+
+    // The disk's block 0, this many sectors into the micro-SD card.  The DECA
+    // has had this since a failing card and failing gateware were found to
+    // present identically -- the same LBA reaches the same flash every time,
+    // so a worn erase block and a bad transfer are one observation.  Writing
+    // the image somewhere else and pointing the machine at it makes the medium
+    // the only thing that changed.  The Wukong had no such knob, so every
+    // measurement it has ever produced was taken at sector 0.
+    parameter int DISK_LBA_OFFSET = 0
 ) (
     input  wire        clk50,
     input  wire        cpu_reset,     // board button, active low
@@ -531,10 +540,20 @@ module wukong_top #(
    // murmur, so this only shows up at synthesis.
    localparam int SD_CLK_PERIOD_PS = 1_000_000_000 / (CPU_CLK_HZ / 1000);
 
+   // Applied here, at the media, rather than in a controller: it is a property
+   // of where the image was written, so it belongs to the board and covers the
+   // Xylogics and the SCSI card alike without either knowing.  Same placement
+   // as boards/DECA/deca_top.sv.
+   blk_req_t blk_req_media;
+   always_comb begin
+      blk_req_media     = blk_req;
+      blk_req_media.lba = blk_req.lba + DISK_LBA_OFFSET[31:0];
+   end
+
    blk_sd #(.CLK_PERIOD_PS(SD_CLK_PERIOD_PS)) sdcard (
        .clk_i(cpu_clk),
        .rst_i(sys_reset),
-       .blk_i(blk_req),
+       .blk_i(blk_req_media),
        .blk_o(blk_rsp),
        .sd_clk_o(sd_clk),
        .sd_cs_n_o(sd_dat3),

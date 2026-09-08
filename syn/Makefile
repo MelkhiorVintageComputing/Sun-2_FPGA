@@ -171,7 +171,7 @@ ETH5_D  = $(shell printf '%d' 0x$(ETH5))
 SYNDIR  = $(TOP)/build/syn
 
 TAG     = $(if $(filter 1,$(VME_SCSI)),-vmescsi,)$(if $(filter 1,$(MB_SCSI)),-mbscsi,)$(if $(filter 1,$(BLKTRACE)),-blktrace,)$(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)
-OUTDIR  = $(SYNDIR)/vivado/$(BOARD)-$(MACHINE)$(TAG)-cpu$(CPU_MHZ_TAG)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(ILA)),-ila,)$(if $(filter 1,$(FB)),-$(HDMI_MODE),)$(if $(filter 1,$(FBDEBUG)),-fbdbg,)$(if $(filter 1,$(FBPROBE)),-fbprobe,)$(if $(filter 1,$(FBFORCE)),-fbforce,)$(if $(filter-out e0,$(ETH5)),-eth$(ETH5),)$(if $(CPU_DIV),-div$(CPU_DIV),)
+OUTDIR  = $(SYNDIR)/vivado/$(BOARD)-$(MACHINE)$(TAG)-cpu$(CPU_MHZ_TAG)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(ILA)),-ila,)$(if $(filter 1,$(FB)),-$(HDMI_MODE),)$(if $(filter 1,$(FBDEBUG)),-fbdbg,)$(if $(filter 1,$(FBPROBE)),-fbprobe,)$(if $(filter 1,$(FBFORCE)),-fbforce,)$(if $(filter-out e0,$(ETH5)),-eth$(ETH5),)$(if $(CPU_DIV),-div$(CPU_DIV),)$(if $(filter 0,$(DISK_OFF_MIB)),,-off$(DISK_OFF_MIB)m)
 # Absolute, because the recipes below run Vivado from $(WORKDIR) and $(OUTDIR)
 # is relative to here: a relative path resolves against the wrong directory and
 # program.tcl reports a bitstream that was never at that address.
@@ -213,7 +213,7 @@ inputs:
 
 bitstream: ip rom inputs $(if $(filter 1,$(ILA)),ip-ila,) | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
-		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB) $(XY450) $(CPU) $(ILA) $(HDMI_MODE) $(FBDEBUG) $(ALLOW_PW) $(FBPROBE) $(FBFORCE) $(ETH5_D) $(if $(CPU_DIV),$(CPU_DIV),0) $(MB_3C400) $(VME_SCSI) $(MB_SCSI)
+		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB) $(XY450) $(CPU) $(ILA) $(HDMI_MODE) $(FBDEBUG) $(ALLOW_PW) $(FBPROBE) $(FBFORCE) $(ETH5_D) $(if $(CPU_DIV),$(CPU_DIV),0) $(MB_3C400) $(VME_SCSI) $(MB_SCSI) $(DISK_OFF_MIB)
 	@echo "bitstream: $(BIT)"
 
 # Programming.  Same knobs as bitstream, so `make program ILA=1 CPU=rd68011
