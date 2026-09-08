@@ -1568,6 +1568,48 @@ million read-pairs; nothing is reordered; the physical page is right at `C_S6`;
 and the read path from DDR3 to the card is clean end to end. The corruption
 persists at exactly the same rate through all of it.
 
+**The Ethernet's DVMA is clean, over 33.5 MB, in both directions.** A VME 2/50
+with no storage -- so the 82586 is the only master -- netbooted, with
+`tools/netchk.c` on the machine and `tools/netchk_host.py` on a host on the same
+subnet, streaming `patwr -u`'s pattern over TCP so that no filesystem, buffer
+cache, disk driver or controller is in the path at all:
+
+```
+  host -> board   16,777,216 bytes, 0 wrong    82586 DMA writing memory
+  board -> host   16,777,216 bytes, 0 wrong    82586 DMA reading memory
+```
+
+The disk path corrupts about one word per 45 KB, so the same fault would have
+shown roughly 370 bad words across those two passes. Zero, and the CPU was busy
+in a tight byte loop throughout, so CPU and DVMA cycles were interleaved exactly
+as they are during a disk transfer.
+
+**That exonerates the whole shared path under a different master.** The VME
+Ethernet reaches memory through the same `sun2_dvma`, the same
+`sun2_wishbone_bridge`, the same MMU and `C_S` chain, the same `wb_to_mig_ui`
+and the same MIG and DDR3 -- all of it carrying 33.5 MB without a single wrong
+byte. Whatever the fault is, it is **not** in the machinery every DVMA master
+shares.
+
+What differs between the two cases is the disk controllers and what sits under
+them: `sun2_xy450` and `sun2_scsi_core`, and the `blk_sd` seam and SD card both
+of them use. `blk_sd` is the one piece the XY450 and the SCSI card have in
+common, which is what makes both boards corrupt identically while the Ethernet
+does not.
+
+**Two cautions about the comparison, stated because they are real.** It is a
+different machine (VME, not MultiBus) and therefore a different bitstream and
+device decode, and it is a different `sun2_dvma` instance. So this is not
+literally the same logic exercised two ways; it is the same *shared modules*
+exercised by a different master, which is weaker but still decisive at a rate
+ratio above 700 to 1.
+
+**A third caution, about the instrument itself.** Transferring the source over
+the 9600-baud console dropped a run of text on the first attempt and the compile
+failed; `sum` caught it. The console has no flow control and every write on a
+diskless machine blocks on NFS, so a transfer must be paced and its checksum
+checked before anything built from it is believed.
+
 **What has not been compared, and is the only pairing left:** the *physical*
 address of a failing read against the physical addresses the CPU actually wrote.
 Every check here predicts from the address it is handed -- the coverage check
