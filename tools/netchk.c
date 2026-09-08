@@ -5,7 +5,7 @@
  * corruption measurement in this investigation has run through a disk or an
  * NFS mount, so a buffer cache, a driver and a controller sit between the
  * pattern and the wire.  A socket removes all of that and leaves one thing:
- * the Ethernet's DMA into and out of main memory, the CPU reading it back.
+ * the Ethernet's DMA into and out of main memory, and the CPU reading it back.
  *
  * The pattern is tools/patwr's -u pattern, byte for byte, so a bad word here
  * and a bad word on a disk are the same signature and can be compared:
@@ -13,21 +13,28 @@
  *      byte 2i     = 0x80
  *      byte 2i + 1 = i & 0xff        i counted in 16-bit words from the start
  *
- * It repeats every 512 bytes, so position is recoverable from content and a
- * wrong word names both what it should have been and where it came from.
+ * It repeats every 512 bytes, so position is recoverable from content, and --
+ * the reason this is fast -- a buffer whose length is a multiple of 512 is
+ * valid at *every* aligned offset in the stream.  Build it once and the send
+ * side does no per-byte work at all, while the check side is one longword
+ * compare per four bytes.
+ *
+ * **That matters for what is being tested.**  A byte-at-a-time loop on a
+ * 20 MHz 68010 runs at a few hundred KB/s, which barely troubles the Ethernet
+ * or the DMA; the first version of this program was the bottleneck rather than
+ * the machine.  Comparing four bytes at a time against a precomputed buffer
+ * puts the load where it belongs.
  *
  * Byte-defined rather than word-defined on purpose: the Sun is big-endian and
- * the host may not be, and a pattern that depends on that would test the wrong
- * thing.
+ * the host may not be, and a pattern that depended on that would test the
+ * wrong thing.  The longword compare is safe because both ends build the same
+ * bytes.
  *
  *   netchk r <host> <mbytes>    connect, read that many MiB, check them
  *   netchk s <host> <mbytes>    connect, send that many MiB
  *
  * The board always connects; the host always listens.  That keeps the board
- * side to one socket call and avoids bind/listen differences between 4.2BSD
- * and anything modern.
- *
- * SunOS 4.0.3 is K&R: no prototypes, and no <unistd.h>.
+ * side to one socket call.  SunOS 4.0.3 is K&R: no prototypes, no <unistd.h>.
  */
 
 #include <sys/types.h>
@@ -36,16 +43,18 @@
 #include <stdio.h>
 
 #define PORT   5555
-#define BUFSZ  8192
+#define BUFSZ  16384            /* a multiple of 512, so ref[] tiles the stream */
 
+char ref[BUFSZ];
 char buf[BUFSZ];
 
 main(argc, argv)
 int argc;
 char **argv;
 {
-    int  fd, mode, i, n, got, want_hi, want_lo;
-    long total, done, pos, nbad;
+    int  fd, mode, i, n, have;
+    long total, done, nbad, t0, t1;
+    long *p, *q;
     struct sockaddr_in sin;
     unsigned long addr;
     unsigned int a, b, c, d;
@@ -63,6 +72,9 @@ char **argv;
            ((unsigned long)c << 8)  | (unsigned long)d;
     total = atol(argv[3]) * 1024L * 1024L;
 
+    for (i = 0; i < BUFSZ; i++)
+        ref[i] = ((i & 1) == 0) ? 0x80 : (char)((i >> 1) & 0xff);
+
     for (i = 0; i < sizeof(sin); i++) ((char *)&sin)[i] = 0;
     sin.sin_family = AF_INET;
     sin.sin_port   = htons(PORT);
@@ -73,38 +85,38 @@ char **argv;
         perror("connect"); return 1;
     }
 
-    done = 0; nbad = 0; pos = 0;
+    done = 0; nbad = 0; have = 0;
+    time(&t0);
     if (mode == 'r') {
         while (done < total) {
-            n = read(fd, buf, BUFSZ);
+            n = read(fd, buf + have, BUFSZ - have);
             if (n <= 0) break;
-            for (i = 0; i < n; i++) {
-                /* pos counts bytes; the word index is pos/2 */
-                if ((pos & 1L) == 0) want_hi = 0x80, got = buf[i] & 0xff;
-                else                 want_hi = (int)((pos >> 1) & 0xffL),
-                                     got = buf[i] & 0xff;
-                if (got != want_hi) {
-                    if (nbad < 8)
-                        printf("BAD  byte %ld  want %02x  got %02x\n",
-                               pos, want_hi, got);
-                    nbad++;
+            have += n;
+            if (have == BUFSZ) {          /* a whole aligned block: compare it */
+                p = (long *)buf; q = (long *)ref;
+                for (i = 0; i < BUFSZ / 4; i++) {
+                    if (p[i] != q[i]) {
+                        if (nbad < 8)
+                            printf("BAD  byte %ld  want %08lx  got %08lx\n",
+                                   done + (long)i * 4L, q[i], p[i]);
+                        nbad++;
+                    }
                 }
-                pos++;
+                done += BUFSZ;
+                have = 0;
             }
-            done += n;
         }
-        printf("netchk: read %ld bytes, %ld wrong\n", done, nbad);
+        time(&t1);
+        printf("netchk: read %ld bytes, %ld wrong longwords, %ld s\n",
+               done, nbad, t1 - t0);
     } else {
         while (done < total) {
-            for (i = 0; i < BUFSZ; i++) {
-                if (((done + i) & 1L) == 0) buf[i] = 0x80;
-                else buf[i] = (char)((((done + i) >> 1) & 0xffL));
-            }
-            n = write(fd, buf, BUFSZ);
+            n = write(fd, ref, BUFSZ);
             if (n <= 0) break;
             done += n;
         }
-        printf("netchk: sent %ld bytes\n", done);
+        time(&t1);
+        printf("netchk: sent %ld bytes, %ld s\n", done, t1 - t0);
     }
     close(fd);
     return nbad != 0;

@@ -1575,14 +1575,24 @@ subnet, streaming `patwr -u`'s pattern over TCP so that no filesystem, buffer
 cache, disk driver or controller is in the path at all:
 
 ```
-  host -> board   16,777,216 bytes, 0 wrong    82586 DMA writing memory
-  board -> host   16,777,216 bytes, 0 wrong    82586 DMA reading memory
+  host -> board   16,777,216 + 67,108,864 bytes, 0 wrong   DMA writing memory
+  board -> host   16,777,216 + 67,108,864 bytes, 0 wrong   DMA reading memory
 ```
 
-The disk path corrupts about one word per 45 KB, so the same fault would have
-shown roughly 370 bad words across those two passes. Zero, and the CPU was busy
-in a tight byte loop throughout, so CPU and DVMA cycles were interleaved exactly
-as they are during a disk transfer.
+**160 MiB in total, not one wrong byte.** The disk path corrupts about one word
+per 45 KB, so the same fault would have shown on the order of 3,700 bad words
+across those passes. The CPU was busy throughout, so CPU and DVMA cycles were
+interleaved exactly as they are during a disk transfer.
+
+**The first version of this test was its own bottleneck, which is worth
+recording.** It built and checked the pattern a byte at a time, which on a
+20 MHz 68010 runs at a few hundred KB/s -- the program, not the machine, was the
+limit, and the Ethernet and the DMA were barely troubled. Because the pattern
+repeats every 512 bytes, a buffer whose length is a multiple of 512 is valid at
+*every* aligned offset in the stream: build it once and the send side does no
+per-byte work at all, while the check side is one longword compare per four
+bytes. Same coverage, four times the volume, and the load lands where it is
+supposed to.
 
 **That exonerates the whole shared path under a different master.** The VME
 Ethernet reaches memory through the same `sun2_dvma`, the same
