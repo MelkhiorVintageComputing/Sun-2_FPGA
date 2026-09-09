@@ -1641,10 +1641,24 @@ naming `sd0`. A machine pointed at the other kind boots and then cannot mount
 its root read-write: the VME SCSI test above ran at offset 0 and came up on an
 `xy0` fstab, which read exactly like a broken NFS root and cost a diagnosis.
 
-**One caution before this is leaned on.** The VME result is a single 16 MiB
-pass; the MultiBus rate would predict about 180 bad words, so zero is a strong
-signal rather than a marginal one, but a second pass and a cold verify would
-make it as solid as the MultiBus numbers it is compared against.
+**Confirmed on a second pass, with the filesystem the build is meant for.** The
+first VME+SCSI run predated `DISK_OFF_MIB` on this flow and therefore sat at
+offset 0, on an `eagle.img` whose fstab names `xy0` -- it booted, but its root
+came up read-only and had to be hand-remounted. Rebuilt at **512 MiB**, it finds
+`eagle-sd.img`, mounts `root on sd0a fstype 4.2` against a matching fstab, and
+comes up clean:
+
+```
+  VME + SCSI, offset 0     0 of 8,388,608 words wrong
+  VME + SCSI, offset 512   0 of 8,388,608
+  MultiBus + XY450, off 0     92 of 4,194,304
+  MultiBus + XY450, off 1024  81 of 4,194,304
+```
+
+32 MiB through the SCSI path across two builds and two regions of the card,
+where the MultiBus rate predicts about 370 bad words. So the comparison no
+longer rests on a single pass, and neither side depends on which copy of the
+image it used.
 
 **That exonerates the whole shared path under a different master.** The VME
 Ethernet reaches memory through the same `sun2_dvma`, the same
