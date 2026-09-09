@@ -1605,16 +1605,32 @@ builds corrupt:
   SCSI disk, 16 MiB 0 of 8,388,608   SCSI DMA, read-back missing an 8 MB cache
 ```
 
-The MultiBus XY450 machine corrupts about 92 words per 8 MiB on the same card,
-the same `blk_sd`, the same bridge, the same adapter and the same DDR3. So the
-fault does not follow the disk controller or the SD path: **it follows the
-machine.** A MultiBus build corrupts with either disk controller -- XY450 on the
-Wukong, SCSI on the DECA -- and a VME build with SCSI does not.
+**That "it follows the machine" reading was wrong, and holding the machine
+fixed is what showed it.** The comparison behind it changed *two* variables at
+once -- MultiBus+XY450 against VME+SCSI -- so it could not tell a machine apart
+from a controller. A MultiBus 2/120 with the **SCSI** card, on the very
+filesystem the VME+SCSI run had just verified, is clean twice over:
 
-What differs is the MultiBus machine itself: its TYPE 2 and TYPE 3 bus spaces,
-its DVMA window, and `FAKES1BOOT`'s remap of virtual `0xF00000` onto physical
-`0xC0000` that a MultiBus disk transfer goes through and a VME one does not.
-That is a much smaller thing to read than everything eliminated before it.
+```
+  MultiBus + XY450, offset 0     92 of 4,194,304 words wrong
+  MultiBus + XY450, offset 1024  81 of 4,194,304
+  MultiBus + SCSI,  offset 512    0 of 8,388,608   two passes, 32 MiB
+  VME      + SCSI,  offset 512    0 of 8,388,608
+  VME      + SCSI,  offset 0      0 of 8,388,608
+```
+
+Same machine, same board, same card, same `blk_sd`, same bridge and DDR3 --
+**only the disk controller differs, and only `sun2_xy450` corrupts.** The
+control holds: 7 MiB of RAM against a 16 MiB file, so the in-pass read-back
+genuinely misses the buffer cache, and the XY450 rate predicts about 170 bad
+words per pass where zero were seen.
+
+**This conflicts with what this file records about the DECA**, where the
+original corruption was measured with `MB_SCSI` and the XY450 was then found to
+"corrupt identically". Both cannot be true as stated. Either the DECA's SCSI
+result was something else, or a difference between the two boards' SCSI paths
+matters; that is the next thing to settle, and it is cheap now that a 16 MiB
+pass reports in-pass with no reboot.
 
 **And it is not the card region, which the Wukong could not previously rule
 out.** `DISK_OFF_MIB` was Quartus-only -- it appears in `syn/Makefile` and not
