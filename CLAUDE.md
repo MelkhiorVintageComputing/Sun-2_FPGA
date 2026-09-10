@@ -1920,54 +1920,75 @@ rather than an absence of evidence: the instrument that found the `P_RESET_n`
 bug in one run was pointed at a corrupting build and a clean one and reports
 the same thing about both.
 
-**Slowing the master halves the corruption, and that is the first knob that
-has ever moved it.** `sun2_dvma` gained a throttle -- `THR_MASK`/`THR_RAND`,
-gating only the *entry* to `S_IDLE`, so nothing about an access under way
-changes and the 68010 protocol is untouched. It is driven from a dedicated
-`THRT` ISSP source, so **one bitstream covers the whole sweep** and placement
-cannot vary between points, which matters because two builds of the identical
-design gave 120 and 163. Measured on the DECA, VME 2/50 + VME SCSI, 1536 MiB,
-16 MiB `patwr -u` per point:
+**The corruption rate is not stable over a session, and that invalidates every
+single-pass comparison in a long sweep -- including the one below.**
+`sun2_dvma` gained a throttle (`THR_MASK`/`THR_RAND`, gating only the *entry*
+to `S_IDLE`, driven from a dedicated `THRT` ISSP source so one bitstream covers
+a whole sweep and placement cannot vary between points). Nine 16 MiB `patwr -u`
+passes on the DECA, VME 2/50 + VME SCSI at 1536 MiB, in time order:
 
 ```
-  gap 0 clocks    163 of 8,388,608     32m17s
-  gap 3           137                  32m00s
-  gap 15          123                  32m01s
-  gap 63           81                  32m00s
-  gap 0 (repeat)  140                  32m01s
+  pos  setting        wrong   trend   delta
+   1   off (mask 0)    163     163      0
+   2   fixed  3        137     156    -19
+   3   fixed 15        123     150    -27
+   4   fixed 63         81     143    -62
+   5   off (mask 0)    140     136     +4
+   6   random 63.5      85     129    -44
+   7   random 15.5      58     123    -65
+   8   fixed 127        89     116    -27
+   9   off (mask 0)    109     109      0
 ```
 
-**Monotonic, a 46% fall, about 4.6 sigma against the pooled baseline of 151.**
+**The three unthrottled controls read 163, 140, 109** -- monotonically down,
+3.3 sigma end to end, with nothing changed between them. The baseline fell about
+a third over four and a half hours.
 
-Three things make it readable rather than suggestive:
+**A claim was made here and is retracted.** This file briefly recorded the
+fixed-mode points as "monotonic, a 46% fall, about 4.6 sigma, drift excluded".
+The exclusion rested on the position-5 control coming back *up* to 140 after the
+81 at position 4. That was not a return to baseline; it was the baseline's own
+downward slope passing through, and one point was read as evidence of stability
+when it was a point on a line. The sigma figures were computed against a
+baseline assumed constant and are meaningless.
 
-* **Run-to-run variance at a fixed setting is small.** Mask 0 twice on one
-  bitstream is 163 and 140, a 1.3 sigma difference and consistent with Poisson.
-  The 120-against-163 spread recorded elsewhere is *placement*, between
-  bitstreams, and does not apply within one.
-* **The closing control rules out drift.** The runs went 163, 137, 123, 81, 140
-  in time order. A session-long drift -- the filesystem filling, the card
-  warming -- would have left the final control lowest. It came back *up*. The
-  decline tracks the knob and not the clock.
-* **Total time is constant**, 32m00s to 32m17s across every point. So this is
-  the same work, over the same duration, with only the master's *instantaneous*
-  request density changed.
+**What survives.** Detrended against the three controls, every throttled point
+sits below the local baseline by 19 to 65 words while the controls sit on it to
+within 4. So a throttle effect is probably real. But the drift is the same order
+as the effect and there is one pass per setting, so it cannot be quantified from
+this data, and the interesting features -- the apparent saturation between gap
+63 and gap 127, and fixed-15 (123) disagreeing with random-15.5 (58) at 4.8
+sigma where fixed-63 and random-63.5 agreed to 0.3 -- are all inside the
+confound.
 
-**Elapsed time is the wrong control here, and the arithmetic says why.** A pass
-moves 32 MiB in 1920 s, which is **29 ms per sector**; a 15-clock gap across a
-sector's 128 longword transactions adds 115 us, 0.4% of that. The pass is
-dominated by SPI and filesystem work, so total time cannot see the throttle
-however well it works. What the knob changes is spacing *inside* a gather
-burst, and `make -C sim dvma` measures that directly -- 29 clocks per access
-unthrottled against 40.5 at fixed gap 15. A first reading of the flat elapsed
-time as "the knob is not biting" was wrong and is retracted.
+**The design error is the lesson.** A sweep whose points are 32 minutes apart
+needs its control *interleaved with every point*, or the order randomised, not
+one control in the middle and one at each end. Three controls were enough to
+detect the drift and not enough to correct for it. Paired A/B -- control, point,
+control, point -- costs twice the runs and is the only version of this
+experiment worth running.
 
-**The knob was validated before it was believed**, because a knob that reaches
-no logic is this project's most repeated failure and it has shipped three.
-`make -C sim dvma` times identical traffic in all three modes and requires the
-gap to slow it; `tools/deca_throttle.tcl` reads the source back and refuses to
-run a point if it did not take; and the `THRT` probe is wired to its own source
-for exactly that read-back.
+**The drift's cause is unknown and is its own finding.** It is not the knob:
+the controls have the throttle off. Candidates, none established -- the SD
+card's flash translation layer remapping after repeated rewrites of the same
+LBAs, thermal drift over hours, or filesystem free-list state evolving across
+nine rewrites of the same 16 MiB file. Anything that reads this machine's
+corruption rate as a stable quantity should measure it three times first.
+
+**What the sweep does establish, independent of the drift**, is that the knob
+works and is honest: `make -C sim dvma` times identical traffic in three modes
+and requires the gap to slow it (29 clocks per access unthrottled, 40.5 at fixed
+gap 15); `tools/deca_throttle.tcl` reads the source back and refuses a point if
+it did not take; total pass time is constant at 32m00s to 32m21s across all
+nine, so every point moved the same data in the same time. And the regressions
+hold -- MultiBus 22/274 and VME 10/312, byte-exact, with `check_console` clean.
+
+**Elapsed time is the wrong control for this knob, and the arithmetic says
+why.** A pass moves 32 MiB in 1920 s, which is 29 ms per sector; a 15-clock gap
+across a sector's 128 longword transactions adds 115 us, 0.4% of that. The pass
+is SPI- and filesystem-bound, so total duration cannot see the throttle however
+well it works. What it changes is spacing *inside* a gather burst. A first
+reading of the flat elapsed time as "the knob is not biting" was also wrong.
 
 **And it is not the card region, which the Wukong could not previously rule
 out.** `DISK_OFF_MIB` was Quartus-only -- it appears in `syn/Makefile` and not
