@@ -1668,10 +1668,15 @@ words per pass where zero were seen.
 
 **The DECA settles it, and "only the XY450" is wrong too.** The same MultiBus
 SCSI build on the DECA, at the same 512 MiB offset, on the same filesystem the
-Wukong had just verified clean, corrupts: **83 of 8,388,608**, with the wrong
-values `53d2`, `281c` and `6d08` -- the three this file recorded for the DECA
-long ago, and not the Wukong's `2e2e`/`2f2d`/`584f`, because each board's memory
-holds its own program text. So the old entry was right.
+Wukong had just verified clean, corrupts: **83 of 8,388,608**.
+
+**Confirmed on a card rewritten from scratch, which removes the last confound.**
+That first DECA figure was taken on a filesystem this investigation had been
+writing to for weeks -- the one whose `ld` could no longer link a hello-world --
+so "the medium is worn out" was still available as an explanation. With every
+copy on the card rewritten, the same bitstream on the same offset gives
+**102 of 8,388,608**: the same rate, on a filesystem hours old. The DECA
+MultiBus+SCSI result is real.
 
 The full matrix, every cell a 16 MiB pass with the read-back missing the cache:
 
@@ -1680,7 +1685,23 @@ The full matrix, every cell a 16 MiB pass with the read-back missing the cache:
 | Wukong | MultiBus | XY450 | MIG | **196** of 8,388,608 |
 | Wukong | MultiBus | SCSI | MIG | 0, twice |
 | Wukong | VME | SCSI | MIG | 0, twice |
-| DECA | MultiBus | SCSI | BrianHG | **83** of 8,388,608 |
+| DECA | MultiBus | SCSI | BrianHG | **83**, then **102** of 8,388,608 |
+
+**And the wrong values follow the filesystem, not the board -- which is a
+correction.** The 83-word run was recorded here as showing `53d2`, `281c` and
+`6d08`, "the three this file recorded for the DECA long ago, and not the
+Wukong's, because each board's memory holds its own program text". That
+reasoning was wrong. On the rewritten card the DECA's 102 wrong words are
+`2f2d` (36), `2e2e` (31) and `584f` (26) -- **the Wukong's three**, in the same
+order of frequency, with a tail of `0000`, `4ef8`, `7572`, `2f64`, `2f2e`,
+`005f` and `0006` at one each.
+
+The intruding content is whatever program text the *filesystem* has resident,
+so two boards reading identical images produce identical values and the same
+board reading a different image produces different ones. The board was never
+the variable; the card's contents were. That also means the value histogram is
+a property of the workload and cannot be used to tell two boards' faults apart,
+which is what the retracted sentence tried to do.
 
 **So it is neither the machine nor the controller alone.** MultiBus is not the
 variable -- Wukong MultiBus+SCSI is clean. The XY450 is not the variable -- DECA
