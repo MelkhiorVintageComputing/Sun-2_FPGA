@@ -1633,12 +1633,37 @@ control holds: 7 MiB of RAM against a 16 MiB file, so the in-pass read-back
 genuinely misses the buffer cache, and the XY450 rate predicts about 170 bad
 words per pass where zero were seen.
 
-**This conflicts with what this file records about the DECA**, where the
-original corruption was measured with `MB_SCSI` and the XY450 was then found to
-"corrupt identically". Both cannot be true as stated. Either the DECA's SCSI
-result was something else, or a difference between the two boards' SCSI paths
-matters; that is the next thing to settle, and it is cheap now that a 16 MiB
-pass reports in-pass with no reboot.
+**The DECA settles it, and "only the XY450" is wrong too.** The same MultiBus
+SCSI build on the DECA, at the same 512 MiB offset, on the same filesystem the
+Wukong had just verified clean, corrupts: **83 of 8,388,608**, with the wrong
+values `53d2`, `281c` and `6d08` -- the three this file recorded for the DECA
+long ago, and not the Wukong's `2e2e`/`2f2d`/`584f`, because each board's memory
+holds its own program text. So the old entry was right.
+
+The full matrix, every cell a 16 MiB pass with the read-back missing the cache:
+
+| board | machine | controller | memory | result |
+|---|---|---|---|---|
+| Wukong | MultiBus | XY450 | MIG | **196** of 8,388,608 |
+| Wukong | MultiBus | SCSI | MIG | 0, twice |
+| Wukong | VME | SCSI | MIG | 0, twice |
+| DECA | MultiBus | SCSI | BrianHG | **83** of 8,388,608 |
+
+**So it is neither the machine nor the controller alone.** MultiBus is not the
+variable -- Wukong MultiBus+SCSI is clean. The XY450 is not the variable -- DECA
+SCSI corrupts without one. The disk controller is not even the variable in
+itself: the *same* card is clean on one board and corrupts on the other.
+
+**What survives is that the controller sets the stimulus rate.** The XY450 moves
+four bytes per DVMA transaction back to back, while the SCSI card stages a
+longword and walks it out a byte at a time across `scsi_fabric` -- far fewer
+memory accesses per unit time. So SCSI on MIG may simply be too slow to provoke
+what XY450 on MIG does, while SCSI on the slower BrianHG path is fast enough
+relative to *its* memory. That restores the shared path as the suspect, with the
+controller acting as a knob on how hard it is driven rather than as the fault.
+
+It is a hypothesis, and it is testable: the rate is the thing to vary next,
+holding board and controller fixed.
 
 **And it is not the card region, which the Wukong could not previously rule
 out.** `DISK_OFF_MIB` was Quartus-only -- it appears in `syn/Makefile` and not
