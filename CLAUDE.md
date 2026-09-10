@@ -1568,6 +1568,39 @@ million read-pairs; nothing is reordered; the physical page is right at `C_S6`;
 and the read path from DDR3 to the card is clean end to end. The corruption
 persists at exactly the same rate through all of it.
 
+**The CPU alone does not corrupt memory, and the same machine corrupts a disk
+write minutes later.** `tools/memchk.c` with `tools/memloop.s` fills 3 MiB with
+a constant and reads every longword back, both loops in the 68010's **loop
+mode** -- one one-word instruction plus `DBcc`, cached inside the chip, so the
+bus carries operand traffic and no instruction fetches. Six constants, three
+passes, about 108 MiB of read and write traffic from the heaviest memory client
+the machine has:
+
+```
+  memchk, 3 MiB x 6 constants x 3 passes      0 wrong
+  patwr -u, 16 MiB, same boot, same machine   corrupting
+```
+
+So it is not simply "memory under load". A disk transfer differs from this in
+one respect that matters: it interleaves a DVMA master with the CPU, where
+`memchk` is the CPU alone at full rate. That is consistent with everything else
+here -- the fault has always needed a master.
+
+**A rewritten card was needed to run it at all, and the reason is worth
+keeping.** `ld` failed to link even `main(){printf("hi\n");}` on the 512 MiB
+copy and again on the 1536 MiB one, with the failure moving between SIGSEGV and
+SIGILL. Two filesystems and a moving failure reads as the machine, and it was
+not: with every copy rewritten, `cc` links and runs first time. **The toolchain
+had been corrupted on disk by the very fault under investigation.** A machine
+that cannot build its own instruments is the end state of leaving a filesystem
+in service after it has been written by a corrupting path.
+
+**What a constant cannot see**, recorded beside the zero: a word fetched from
+elsewhere *in the same buffer* holds the same constant and is invisible. Program
+text intruding -- what the disk tests actually find -- is caught, and varying the
+constant catches a value surviving from the previous pass. A position-derived
+pattern is strictly stronger and is the next step.
+
 **The Ethernet's DVMA is clean, over 33.5 MB, in both directions.** A VME 2/50
 with no storage -- so the 82586 is the only master -- netbooted, with
 `tools/netchk.c` on the machine and `tools/netchk_host.py` on a host on the same
