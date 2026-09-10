@@ -1765,6 +1765,60 @@ controller acting as a knob on how hard it is driven rather than as the fault.
 It is a hypothesis, and it is testable: the rate is the thing to vary next,
 holding board and controller fixed.
 
+**`report_cdc` does not separate a corrupting build from a clean one.**
+Vivado's CDC report was run on the routed checkpoints of all three Wukong
+builds -- MultiBus+XY450, which corrupts 196 words, and MultiBus+SCSI and
+VME+SCSI, which are both clean. The populations are *structurally identical*:
+
+```
+  build      CDC-1   CDC-10   CDC-15   CDC-10 outside the ILA/VIO
+  xy450        637       28      367       5      <- corrupts
+  mbscsi       637       26      367       5      <- clean
+  vmescsi      848       40      587      10      <- clean
+```
+
+The 28-against-26 looked like a real difference and is not: filtering the
+debug-core rows leaves five in each, and diffing them shows the same five nets
+with a different bit of the same counter named as the launch flop
+(`hold_ctr_reg[4]` against `[0]`, `serial/rst_a_cnt_reg[3]` against `[1]`). The
+rest of the diff is the instance name of the one `sun2_dvma` -- `xy_dvma`
+against `sc_dvma`. **Nothing structural distinguishes them.** And VME+SCSI
+carries nearly *twice* the CDC population, from the 82586's `phy_rx_clk` and
+`phy_tx_clk` domains, while corrupting nothing at all -- so the count does not
+even correlate in the right direction.
+
+**One real data-path crossing it does name, present in every build.** The
+`z8530_scc`'s receive FIFO, in `mmcm_b_serial`, reaches `sun2_dvma`'s `rd_lo`
+and `rd_hi` latches in `mmcm_a_cpu` -- eight endpoints, **CDC-15 "Clock enable
+controlled CDC structure", Warning**, across an `Asynch Clock Groups` exception,
+which means it is deliberately untimed:
+
+```
+  machine/sun2/serial/u_rx_fifo_a/mem_reg[2][2]/C -> machine/xy_dvma/rd_hi_reg[10]/D
+```
+
+Those are exactly the two latches whose assembly
+`wb_dat_o <= {rd_hi[7:0], rd_hi[15:8], rd_lo[7:0], rd_lo[15:8]}` produces the
+16-bit granule the fault has. The path exists because **`P_DOUT` is a 20-way
+read mux and the SCC is one of its arms**, so structurally a DVMA latch can
+capture a word launched in the serial domain. Functionally it should never
+happen -- a DVMA memory read selects the memory arm, never the SCC's -- and it
+is in the two clean builds identically, so it cannot be what separates them.
+Worth knowing anyway, because this file already records one bug of exactly this
+shape (the raw `X2` oscillator reaching the Am9513's clock enables) and because
+an untimed path is one placement away from behaving differently.
+
+The five non-debug CDC-10s are the ones this file already listed as left
+undone: MIG's `init_calib_complete` and `hold_ctr` into `rst_cpu/chain_reg[0]`'s
+preset, the SCC's own two soft-reset synchronisers, and `rst_cpu/chain_reg[2]`
+into `serial/sreset_b_sync_reg[0]`'s clear. All reset assembly, none in a data
+path, all present in corrupting and clean alike.
+
+**So CDC is not the discriminator on this board**, which is a real elimination
+rather than an absence of evidence: the instrument that found the `P_RESET_n`
+bug in one run was pointed at a corrupting build and a clean one and reports
+the same thing about both.
+
 **And it is not the card region, which the Wukong could not previously rule
 out.** `DISK_OFF_MIB` was Quartus-only -- it appears in `syn/Makefile` and not
 once in `syn/build.tcl` -- so every measurement the Wukong has ever produced was
