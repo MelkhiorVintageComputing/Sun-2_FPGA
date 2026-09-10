@@ -1920,6 +1920,55 @@ rather than an absence of evidence: the instrument that found the `P_RESET_n`
 bug in one run was pointed at a corrupting build and a clean one and reports
 the same thing about both.
 
+**Slowing the master halves the corruption, and that is the first knob that
+has ever moved it.** `sun2_dvma` gained a throttle -- `THR_MASK`/`THR_RAND`,
+gating only the *entry* to `S_IDLE`, so nothing about an access under way
+changes and the 68010 protocol is untouched. It is driven from a dedicated
+`THRT` ISSP source, so **one bitstream covers the whole sweep** and placement
+cannot vary between points, which matters because two builds of the identical
+design gave 120 and 163. Measured on the DECA, VME 2/50 + VME SCSI, 1536 MiB,
+16 MiB `patwr -u` per point:
+
+```
+  gap 0 clocks    163 of 8,388,608     32m17s
+  gap 3           137                  32m00s
+  gap 15          123                  32m01s
+  gap 63           81                  32m00s
+  gap 0 (repeat)  140                  32m01s
+```
+
+**Monotonic, a 46% fall, about 4.6 sigma against the pooled baseline of 151.**
+
+Three things make it readable rather than suggestive:
+
+* **Run-to-run variance at a fixed setting is small.** Mask 0 twice on one
+  bitstream is 163 and 140, a 1.3 sigma difference and consistent with Poisson.
+  The 120-against-163 spread recorded elsewhere is *placement*, between
+  bitstreams, and does not apply within one.
+* **The closing control rules out drift.** The runs went 163, 137, 123, 81, 140
+  in time order. A session-long drift -- the filesystem filling, the card
+  warming -- would have left the final control lowest. It came back *up*. The
+  decline tracks the knob and not the clock.
+* **Total time is constant**, 32m00s to 32m17s across every point. So this is
+  the same work, over the same duration, with only the master's *instantaneous*
+  request density changed.
+
+**Elapsed time is the wrong control here, and the arithmetic says why.** A pass
+moves 32 MiB in 1920 s, which is **29 ms per sector**; a 15-clock gap across a
+sector's 128 longword transactions adds 115 us, 0.4% of that. The pass is
+dominated by SPI and filesystem work, so total time cannot see the throttle
+however well it works. What the knob changes is spacing *inside* a gather
+burst, and `make -C sim dvma` measures that directly -- 29 clocks per access
+unthrottled against 40.5 at fixed gap 15. A first reading of the flat elapsed
+time as "the knob is not biting" was wrong and is retracted.
+
+**The knob was validated before it was believed**, because a knob that reaches
+no logic is this project's most repeated failure and it has shipped three.
+`make -C sim dvma` times identical traffic in all three modes and requires the
+gap to slow it; `tools/deca_throttle.tcl` reads the source back and refuses to
+run a point if it did not take; and the `THRT` probe is wired to its own source
+for exactly that read-back.
+
 **And it is not the card region, which the Wukong could not previously rule
 out.** `DISK_OFF_MIB` was Quartus-only -- it appears in `syn/Makefile` and not
 once in `syn/build.tcl` -- so every measurement the Wukong has ever produced was

@@ -256,7 +256,8 @@ module tb_sun2 #(
                  .mii_rx_dv(mii_rx_dv), .mii_rx_er(mii_rx_er),
                  .mii_crs(mii_crs), .mii_col(mii_col));
 
-   top dut(.cpu_clk(cpu_clk),
+   top dut(.dvma_thr_mask(8'd0), .dvma_thr_rand(1'b0),
+	   .cpu_clk(cpu_clk),
            .clk40(clk40),
            .clk4m9152(clk4m9152),
            .sys_reset(sys_reset),

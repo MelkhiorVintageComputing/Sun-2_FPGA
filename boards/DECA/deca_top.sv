@@ -326,6 +326,8 @@ module deca_top #(
    wire         dvmp_src;   // the ISSP's source, unused but connected
 
    top machine (
+      .dvma_thr_mask (thr_src[7:0]),
+      .dvma_thr_rand (thr_src[8]),
        .cpu_clk        (cpu_clk),
        .clk40          (1'b0),          // dead on both boards: its only reader
                                         // was a path that is compiled out
@@ -1034,6 +1036,27 @@ module deca_top #(
        .source_clk (cpu_clk),
        .probe  ({bt_data, bt_wp, bt_nx}),
        .source (bt_src));
+
+   // ------------------------------------------------------------------
+   // The master-traffic throttle knob.
+   // ------------------------------------------------------------------
+   // Its own instance for exactly the reason the block below states:
+   // widening an existing source shifts every field under it.  bits [7:0]
+   // are THR_MASK, bit [8] is THR_RAND.  The probe reads the source straight
+   // back, so a sweep can confirm the knob actually took before believing the
+   // point -- this project has set a knob that reached no logic three times.
+   wire [8:0] thr_src;
+   altsource_probe #(
+       .sld_auto_instance_index ("YES"),
+       .instance_id             ("THRT"),
+       .probe_width             (9),
+       .source_width            (9),
+       .source_initial_value    ("0"),
+       .enable_metastability    ("YES")
+   ) u_thr_issp (
+       .source_clk (cpu_clk),
+       .probe      (thr_src),
+       .source     (thr_src));
 
    // The pairing counters, read with tools/deca_dvmaprobe.tcl.  A separate
    // instance rather than extra bits on the block trace's probe: that one is

@@ -569,6 +569,9 @@ module wukong_top #(
 `endif
 
    top machine (
+      // The throttle experiment is a DECA-side knob; tied off here.
+      .dvma_thr_mask (8'd0),
+      .dvma_thr_rand (1'b0),
        .cpu_clk    (cpu_clk),
        // clk40 is unused inside sun2_fpga -- the only thing that ever read it
        // was the disabled CPU_CLK_MULTIPLE_SERIAL path, and the LiteX build
