@@ -1777,8 +1777,42 @@ driver anywhere imposes a rate, a spacing, or a bus-hold limit on the DMA
 itself; `xy_throttle` (32 words/transfer) is advisory to the controller and is
 the only thing said about it at all.
 
-Two hits are worth checking against the RTL anyway, because they are cheap and
-would be real bugs whatever they explain:
+**Both were checked against the RTL and both are honoured.** `sun2_xy450` sets
+`csr_gbsy` on the same clock edge that decodes the GO write -- the decode is
+`wr_lo & sel_ctl & mbio_din[7]`, where `wr_lo` is qualified by
+`first = mbio_hit & (phase == 2'd0)`, a genuine one-shot rather than a level, so
+BUSY is asserted **one clock into the GO write cycle** against the 30 us the
+driver allows. And it is cleared in exactly one place in normal operation,
+`E_FINISH`, which is reachable only through `E_WB_W`; every DVMA access in the
+engine -- `E_IN_W`, `E_OUT_W`, `E_WB_W` -- advances only on `wb_ack_i`. So BUSY
+does not drop at IOPB-fetch completion, and the interrupt (`csr_ipnd`, set in
+`E_IOPB_END` and `E_FINISH`) is raised strictly after the last DVMA write has
+been acknowledged. Reset behaves too: `csr_gbsy` is held for `RESET_CLOCKS = 64`
+(3.8 us at 16.7 MHz) against a 100 us boot-path wait.
+
+**What "acknowledged" resolves to is the one thing worth writing down.** The
+chain is `sun2_xy450` -> `sun2_dvma` -> a 68010 cycle -> `sun2_wishbone_bridge`
+(`W_ACK = (wb_ack_i & issued) | done`) -> `wb_to_mig_ui`, whose `wb_ack_o` fires
+on `ack_pulse` from the memory domain, which `mig_arb` raises when **MIG accepts
+the write**:
+
+```verilog
+   wire cmd_ok = cmd_done | (app_en       & app_rdy);
+   wire dat_ok = dat_done | (app_wdf_wren & app_wdf_rdy);
+```
+
+MIG's UI has no write-completion response -- writes are posted -- so the whole
+ack chain means *accepted by the controller*, never *committed to DRAM*. The
+driver's only synchronisation for "everything the controller wrote is visible"
+is that interrupt, and the interrupt is gated on acceptance. **That window is
+real and it is already closed by measurement rather than by argument**: it would
+only bite if the controller could answer a read from DRAM ahead of a pending
+write in its own queue, which is exactly what `Strict` against `Normal`
+ordering governs, and rebuilding with `ORDERING = "STRICT"` changed nothing.
+`WRITE_VERIFY` reads every write straight back at 0 wrong, and it is the
+device->memory direction, which the cold reads show clean.
+
+The two hits, kept because the reasoning above is what retires them:
 
 * **When does BUSY assert relative to the GO write?** The boot path is
   `xy_csr = XY_GO;` then `do { DELAY(30); } while (xy_csr & XY_BUSY);`
