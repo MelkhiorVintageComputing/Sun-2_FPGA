@@ -1765,6 +1765,73 @@ controller acting as a knob on how hard it is driven rather than as the fault.
 It is a hypothesis, and it is testable: the rate is the thing to vary next,
 holding board and controller fixed.
 
+**The XY450 drivers were audited for timing assumptions, and none of them can
+produce this fault.** Every layer was read -- the 3.4 and 4.1.4 kernel drivers,
+`sunstand/xy.c`, `prom_monitor/{msun,rsun}/mon/prom2/xy.c` (the PROM this board
+actually runs), and `stand/src/diag/xy.c`. Every timing requirement found is a
+**control-path** one: command start, command completion, reset, interrupt
+delivery. Violating any of them produces a loud failure -- a panic, a lost
+interrupt, a timed-out probe, a whole sector read early -- **not a silent
+single-word substitution in the middle of a correctly-addressed sector**. No
+driver anywhere imposes a rate, a spacing, or a bus-hold limit on the DMA
+itself; `xy_throttle` (32 words/transfer) is advisory to the controller and is
+the only thing said about it at all.
+
+Two hits are worth checking against the RTL anyway, because they are cheap and
+would be real bugs whatever they explain:
+
+* **When does BUSY assert relative to the GO write?** The boot path is
+  `xy_csr = XY_GO;` then `do { DELAY(30); } while (xy_csr & XY_BUSY);`
+  (`sunstand/xy.c:268-272`, identical in `prom2/xy.c:207-210`). The `DELAY`
+  runs *first*, so this reads "wait 30 us, and if BUSY is clear the command is
+  finished" -- and the boot path has no other completion test, it never looks at
+  `xy_complete`. If the replica raises BUSY a few clocks late, or drops it at
+  IOPB-fetch completion rather than at data completion, the PROM proceeds while
+  DVMA is still in flight. Note `XY_GO` (write, 0x80) and `XY_BUSY` (read, 0x80)
+  are the same bit (`xycreg.h:43-44`).
+* **Is the interrupt raised before or after the last DVMA write retires?** With
+  `xy_autoup = 1` and `xy_intrall = 0` the driver takes one interrupt and then
+  reads `xy_complete` *out of DVMA memory* for every IOPB, with no register
+  re-read and no flush. Everything the controller wrote must be visible when the
+  interrupt lands. This would corrupt device->memory, and the measurements put
+  this fault in memory->device, so it is not the cause -- but it is free to
+  check.
+
+**The strongest historical evidence, and it cuts against the replica being at
+fault.** Every 4.1.4 change in this area is a *wait added* -- `xycsrvalid`,
+`xywait`, `xyintwait` -- and one carries the rationale in the source:
+
+```
+ * make sure the busy bit goes ON before we wait until it clears..
+ * This is a problem with faster machines where the controller does
+ * not have enough time to react to the command.
+ * Changed by EK 9/10/89
+```
+
+So Sun found that a faster CPU could outrun this controller in the interrupt
+path and patched around it with polls. **The kernel booting here is 4.0.3, which
+predates that annotation**, so the running driver behaves like 3.4 and does
+*not* wait -- which makes the replica's BUSY and interrupt timing more load-
+bearing, not less.
+
+**The kernel and the PROM contradict each other about register spacing, which
+bounds what the replica must support.** The kernel says a 15 us delay and a
+readback are needed after every register write, "due to a bug in the 450"
+(`xy.c:159-163`, `1349-1352`), and `panic`s on a double miscompare. The
+standalone and PROM drivers write all five registers **back to back with no
+delay and no readback** (`sunstand/xy.c:263-268`). Both cannot be true of the
+same chip. For the replica: the minimum inter-register spacing that must work is
+one 68010 bus cycle, and the kernel's 15 us is slack it should not need.
+
+Two smaller things the audit settled. `XY_ATTN`/`XY_ACK` are used by **no**
+driver in either tree -- only the header defines them, confirming what this file
+already recorded. And the SCSI driver carries materially fewer timing
+assumptions than xy: three `DELAY` sites against eighteen, every one a back-off
+inside a loop testing a real handshake bit, with no write-then-read-back, no
+fixed-delay-then-assume, no device-rewritten structure in host memory, and no
+chain. That asymmetry is *consistent with* SCSI being clean where the XY450 is
+not, but it is about control-path robustness and explains no single wrong word.
+
 **`report_cdc` does not separate a corrupting build from a clean one.**
 Vivado's CDC report was run on the routed checkpoints of all three Wukong
 builds -- MultiBus+XY450, which corrupts 196 words, and MultiBus+SCSI and
@@ -2562,7 +2629,20 @@ through the MMU, reusing `rtl/sun2-vme/sun2_dvma.v` unchanged. Media is an SD
 card on a V3, a file in simulation, behind the block seam
 `Inputs/Wish5380/doc/block.md` defines.
 
-It **chains**: CHEN in an IOPB's command byte says to follow that IOPB's Next
+It **chains**, but SunOS on this machine almost never asks it to. `xychain`
+(`xy.c:731-773`) walks `c->c_units[]` and takes **at most one ready IOPB per
+drive**, then optionally appends the controller's own `c_cmd`. On a one-drive
+machine -- every configuration in this project -- that is a chain of one during
+ordinary read/write traffic, with `xy_chain = 0`, and two only when a
+controller-level command happens to be pending at the same time. Nothing is ever
+appended to a *running* chain. So `make -C sim xychain` exercises a path the
+kernel does not take while moving file data, and the "one interrupt per chain"
+requirement below is real but rarely reached. SunOS 4.1.4 went further and added
+two ways to switch chaining off entirely (`XY_NOCHAINING` from the config file,
+`DK_ISOLATE`/`XY_NOCHN` per ioctl), which suggests it gave somebody trouble on
+real hardware.
+
+CHEN in an IOPB's command byte says to follow that IOPB's Next
 IOPB Address, relocated by the same registers as the head. Two things there
 fail quietly. `xy_nxtoff` is **only valid when CHEN is set** — `xychain()`
 clears `xy_chain` on the tail and leaves a stale offset beside it
