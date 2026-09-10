@@ -1612,12 +1612,20 @@ from a controller. A MultiBus 2/120 with the **SCSI** card, on the very
 filesystem the VME+SCSI run had just verified, is clean twice over:
 
 ```
-  MultiBus + XY450, offset 0     92 of 4,194,304 words wrong
+  MultiBus + XY450, offset 0    196 of 8,388,608   16 MiB, same protocol
+  MultiBus + XY450, offset 0     92 of 4,194,304   8 MiB, earlier build
   MultiBus + XY450, offset 1024  81 of 4,194,304
   MultiBus + SCSI,  offset 512    0 of 8,388,608   two passes, 32 MiB
   VME      + SCSI,  offset 512    0 of 8,388,608
   VME      + SCSI,  offset 0      0 of 8,388,608
 ```
+
+The first line is the positive control repeated **at the same 16 MiB and from
+the same tree as the SCSI runs**, so the comparison no longer spans two
+protocols: 196 wrong against 0, on one board, one machine, one card, with only
+the controller changed. The rate is consistent with the 8 MiB figures --
+196 in 8.4 million is 92 in 4.2 million doubled -- so nothing about the newer
+build or the larger file moved it.
 
 Same machine, same board, same card, same `blk_sd`, same bridge and DDR3 --
 **only the disk controller differs, and only `sun2_xy450` corrupts.** The
