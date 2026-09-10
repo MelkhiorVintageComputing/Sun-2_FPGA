@@ -1686,6 +1686,51 @@ The full matrix, every cell a 16 MiB pass with the read-back missing the cache:
 | Wukong | MultiBus | SCSI | MIG | 0, twice |
 | Wukong | VME | SCSI | MIG | 0, twice |
 | DECA | MultiBus | SCSI | BrianHG | **83**, then **102** of 8,388,608 |
+| DECA | VME | SCSI | BrianHG | **120** of 8,388,608 |
+
+**The DECA's VME machine corrupts too, and that fills the last corner.** Same
+board, same controller, same memory, same 16.667 MHz, same `patwr.c` by
+checksum, on a pristine `eagle-sd.img` at 1536 MiB -- only the machine changed,
+MultiBus 2/120 to VME 2/50: **120 against 102**. Those are the same rate.
+
+So **the machine is not the variable on either board.** The Wukong is clean on
+MultiBus+SCSI *and* VME+SCSI; the DECA corrupts on MultiBus+SCSI *and*
+VME+SCSI. What is left standing is the board, and -- on the Wukong alone -- the
+controller.
+
+**Which is what the stimulus-rate hypothesis predicted, and it is now the
+reading the whole table supports.** Sort the five cells by how hard the master
+drives memory relative to how fast that memory answers:
+
+```
+  Wukong  MIG      + SCSI  (sparse master, fast memory)     0, 0, 0, 0
+  Wukong  MIG      + XY450 (dense  master, fast memory)   196
+  DECA    BrianHG  + SCSI  (sparse master, slow memory)    83, 102, 120
+```
+
+One threshold orders every measurement. The XY450 moves four bytes per DVMA
+transaction back to back; the SCSI card stages a longword and walks it out a
+byte at a time through `scsi_fabric`, so it asks for memory far less often.
+MIG answers faster than BrianHG's controller. A fault that needs master traffic
+above some rate *relative to the memory path* is clean in exactly one of those
+three cells and present in the other two -- which no "it is the machine" or "it
+is the controller" reading can produce, because both of those have now been
+held fixed and varied in both directions.
+
+**What this does not settle** is what the threshold is a threshold *on*. Rate
+is one candidate; so is anything else that tracks it, such as how often a
+master's cycle lands close to a CPU cycle, or how long a request is outstanding.
+The next experiment is to vary the rate with board and controller held fixed --
+slow the XY450's DVMA on the Wukong until it corrupts less, or clock the DECA
+down -- because that is the one axis the five cells above never varied on its
+own.
+
+Two caveats on the VME cell, stated because they are real. A 2/50 fits the
+82586, so this machine has a second potential master the MultiBus build does
+not -- the machines differ by more than the bus, and the Ethernet was idle but
+present. And it is a fresh place-and-route, which has flipped outcomes twice in
+this file; the DECA has now corrupted across three independent builds, so the
+*direction* is safe, but the exact rate is one pass.
 
 **And the wrong values follow the filesystem, not the board -- which is a
 correction.** The 83-word run was recorded here as showing `53d2`, `281c` and
@@ -1704,9 +1749,10 @@ a property of the workload and cannot be used to tell two boards' faults apart,
 which is what the retracted sentence tried to do.
 
 **So it is neither the machine nor the controller alone.** MultiBus is not the
-variable -- Wukong MultiBus+SCSI is clean. The XY450 is not the variable -- DECA
-SCSI corrupts without one. The disk controller is not even the variable in
-itself: the *same* card is clean on one board and corrupts on the other.
+variable -- Wukong MultiBus+SCSI is clean, and neither is VME, which is clean on
+the Wukong and corrupts on the DECA. The XY450 is not the variable -- DECA SCSI
+corrupts without one. The disk controller is not even the variable in itself:
+the *same* card is clean on one board and corrupts on the other.
 
 **What survives is that the controller sets the stimulus rate.** The XY450 moves
 four bytes per DVMA transaction back to back, while the SCSI card stages a
