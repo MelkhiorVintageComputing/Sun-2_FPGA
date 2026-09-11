@@ -366,6 +366,13 @@ module wukong_top #(
    wire [31:0] rr_n, rr_bad, rr_v1, rr_v2;
    wire        dv_arrived_bad;
 
+   // Master-traffic throttle: bits [7:0] THR_MASK, bit [8] THR_RAND.
+   // **Declared outside the `ifdef on purpose.**  A declaration inside one
+   // becomes an implicit one-bit net when the define is absent -- bit 0 wired,
+   // bits 8..1 dangling, no warning -- the trap that cost five builds on
+   // dvma_probe.  The VIO drives it under ILA=1; the `else ties it off.
+   wire [8:0] thr_src;
+
 `ifdef SUN2_ILA
    // Named wires rather than slices straight into the core, because the
    // Hardware Manager names a probe after the net it is driven from -- and
@@ -431,7 +438,8 @@ module wukong_top #(
        .probe_in31 ({9'd0, wb_blk_adr}),
        .probe_in32 (xy_n_dva),
        .probe_in33 (xy_n_dva_bad),
-       .probe_in34 ({8'd0, xy_dva_adr})
+       .probe_in34 ({8'd0, xy_dva_adr}),
+       .probe_out0 (thr_src)
    );
 
    sun2_ila u_ila (
@@ -454,6 +462,8 @@ module wukong_top #(
        .probe15(xchk_exp),
        .probe16(dv_arrived_bad)
    );
+`else
+   assign thr_src = 9'd0;   // no VIO, no throttle
 `endif
 
    //
@@ -569,9 +579,10 @@ module wukong_top #(
 `endif
 
    top machine (
-      // The throttle experiment is a DECA-side knob; tied off here.
-      .dvma_thr_mask (8'd0),
-      .dvma_thr_rand (1'b0),
+      // Master-traffic throttle, driven from the VIO's one output probe under
+      // ILA=1 and tied off otherwise.  See sun2_dvma's ports.
+      .dvma_thr_mask (thr_src[7:0]),
+      .dvma_thr_rand (thr_src[8]),
        .cpu_clk    (cpu_clk),
        // clk40 is unused inside sun2_fpga -- the only thing that ever read it
        // was the disabled CPU_CLK_MULTIPLE_SERIAL path, and the LiteX build
