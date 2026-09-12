@@ -1920,6 +1920,53 @@ rather than an absence of evidence: the instrument that found the `P_RESET_n`
 bug in one run was pointed at a corrupting build and a clean one and reports
 the same thing about both.
 
+**A clean cell can be made to corrupt, and what does it is *irregular* master
+timing rather than a slower one.** The Wukong VME+SCSI machine at 20 MHz has
+read zero five times running -- twice before the throttle existed, and three
+times in one session on a freshly written card, with an interleaved control.
+With the throttle in **random** mode it corrupts:
+
+```
+  bitstream        setting              mean gap   result        elapsed
+  normal (no THR)  --                      --      0 of 8,388,608   42m
+  throttle         mask 0                   0      0                42m
+  throttle         FIXED gap 63            63      0                42m
+  throttle         mask 0 (control)         0      0                42m
+  throttle         RANDOM mean 63.5      63.5      **43**           42m
+```
+
+**Fixed and random have the same mean rate by construction** -- `THR_MASK>>1`
+against a uniform draw over `[0, THR_MASK]` -- and differ only in the
+regularity of the master's request spacing. Fixed is clean; random is not. So
+on this cell the variable is **jitter, not rate**, and the throttle's two modes
+were built for exactly this comparison.
+
+**The signature is the fault, not a new one.** The 43 wrong values are
+`2e2e` (20), `2f2d` (15), `584f` (4) and `0000` (2) -- the same three common
+68010 opcodes that every corrupting run in this file reports, which is program
+text intruding into the buffer. Word offsets split 23 even to 20 odd, so it is
+not confined to one half of a longword.
+
+**This is the first knob that turns the fault ON in a configuration that is
+otherwise clean**, which is worth more than one that halves it in a
+configuration that is already dirty: it is a positive control. Every previous
+experiment could only ask "did the rate go down"; this one can ask "did the
+fault appear", against a cell with a perfect record and no Poisson spread to
+hide in.
+
+**It also supersedes the DECA reading, which was confounded.** That sweep had
+fixed-63 at 81 and random-63.5 at 85 and was read as "rate is the variable,
+alignment is not". Its baseline drifted 163 -> 140 -> 109 across the session,
+the sigma figures were computed against a baseline assumed constant, and the
+whole thing is retracted below. This experiment has a flat baseline -- four
+consecutive 42-minute passes at zero, control included -- so where the two
+disagree, this one is the measurement.
+
+Recorded before the confirmation runs finish: **43 against 0 is unambiguous in
+direction and one sample in magnitude.** Zero has no spread, so "the fault
+appeared" is solid; "43" is not yet a rate. Repeats of random, fixed and random
+again are running.
+
 **The corruption rate is not stable over a session, and that invalidates every
 single-pass comparison in a long sweep -- including the one below.**
 `sun2_dvma` gained a throttle (`THR_MASK`/`THR_RAND`, gating only the *entry*
