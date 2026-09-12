@@ -1999,15 +1999,43 @@ mechanism. And doubling the jitter range changes nothing measurable -- 34
 against 38 to 44, all inside Poisson noise -- so the effect does not scale with
 how large the jitter is either.
 
-Three readings are therefore excluded by measurement:
+**And it is not the parity of the gap either.** Both fixed points tested so far
+were *odd* -- 63 and 127 -- while random draws both parities, so "even gaps are
+the dangerous ones" explained every result without invoking jitter at all. A
+68010 bus cycle is an even number of clocks and `sun2_dvma` drives AS on one
+edge and releases it on the other, so a gap shifting the next request by an odd
+number of clocks lands it on the opposite phase from an even one; with a
+half-period path and an untimed CDC-15 into `rd_lo`/`rd_hi` already on record,
+that was physically plausible. Measured, it is wrong:
 
-* **not rate** -- fixed 63 and fixed 127 are different rates, both at baseline;
+```
+  FIXED gap 62  (even)             0
+```
+
+The full set:
+
+```
+  off / normal bitstream            0, 0, 0, 0      mean   0
+  FIXED  gap  62  (even)            0               mean   0
+  FIXED  gap  63  (odd)             0, 1            mean   0.5
+  FIXED  gap 127  (odd, maximum)    0               mean   0
+  RANDOM mean  63.5  range 0-127    43, 38, 44      mean  41.7
+  RANDOM mean 127.5  range 0-255    34
+```
+
+**Every fixed gap is at baseline whatever its size or parity; every random gap
+corrupts whatever its mean.** Four readings are excluded by measurement rather
+than argument:
+
+* **not rate** -- fixed 62, 63 and 127 are three different rates, all clean;
 * **not the long-gap tail** -- fixed 127 matches random's maximum, clean;
-* **not jitter magnitude** -- mean 63.5 and mean 127.5 give the same answer.
+* **not jitter magnitude** -- mean 63.5 and mean 127.5 agree;
+* **not gap parity** -- fixed 62 is even and clean.
 
 What is left is the *irregularity itself*: the master's requests arriving at
-unpredictable intervals, whatever their mean or extreme. That is a narrow and
-unusual property for a fault to key on, and it is the thing any explanation now
+unpredictable intervals, whatever their mean, extreme or parity. That is a
+narrow and unusual property for a fault to key on -- most hardware faults key
+on a threshold, not on unpredictability -- and it is what any explanation now
 has to account for.
 
 **The corruption rate is not stable over a session, and that invalidates every
