@@ -1980,6 +1980,36 @@ cell's own very low background rate or a slight perturbation from the fixed
 gap; against 38 to 44 it does not trouble the result, but "fixed is clean" is
 better stated as "fixed is at baseline, within one word of it".
 
+**And the obvious alternative was tested and is dead: it is not the long-gap
+tail.** Random over `[0, 127]` contains delays up to 127 that a fixed gap of 63
+never produces, so the whole effect might have been that small fraction of long
+delays rather than the irregularity. Running the fixed maximum settles it:
+
+```
+  off / normal bitstream            0, 0, 0, 0      mean   0
+  FIXED  gap  63                    0, 1            mean   0.5
+  FIXED  gap 127  (the maximum)     0               mean   0
+  RANDOM mean  63.5  range 0-127    43, 38, 44      mean  41.7
+  RANDOM mean 127.5  range 0-255    34
+```
+
+**A fixed 127-clock gap reaches the same maximum delay as random `[0,127]`,
+carries twice its mean, and corrupts nothing.** So long delays are not the
+mechanism. And doubling the jitter range changes nothing measurable -- 34
+against 38 to 44, all inside Poisson noise -- so the effect does not scale with
+how large the jitter is either.
+
+Three readings are therefore excluded by measurement:
+
+* **not rate** -- fixed 63 and fixed 127 are different rates, both at baseline;
+* **not the long-gap tail** -- fixed 127 matches random's maximum, clean;
+* **not jitter magnitude** -- mean 63.5 and mean 127.5 give the same answer.
+
+What is left is the *irregularity itself*: the master's requests arriving at
+unpredictable intervals, whatever their mean or extreme. That is a narrow and
+unusual property for a fault to key on, and it is the thing any explanation now
+has to account for.
+
 **The corruption rate is not stable over a session, and that invalidates every
 single-pass comparison in a long sweep -- including the one below.**
 `sun2_dvma` gained a throttle (`THR_MASK`/`THR_RAND`, gating only the *entry*
