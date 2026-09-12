@@ -1962,10 +1962,23 @@ whole thing is retracted below. This experiment has a flat baseline -- four
 consecutive 42-minute passes at zero, control included -- so where the two
 disagree, this one is the measurement.
 
-Recorded before the confirmation runs finish: **43 against 0 is unambiguous in
-direction and one sample in magnitude.** Zero has no spread, so "the fault
-appeared" is solid; "43" is not yet a rate. Repeats of random, fixed and random
-again are running.
+**Confirmed, three for three.** The repeats put it beyond a single sample:
+
+```
+  off / normal bitstream   0, 0, 0, 0      mean  0
+  FIXED  gap 63            0, 1            mean  0.5
+  RANDOM mean 63.5         43, 38, 44      mean 41.7
+```
+
+Every pass 42 minutes, so the knob changes neither throughput nor total work --
+only the regularity of the master's request spacing -- and the separation is
+about eighty to one. **Random provokes the fault every time; fixed does not.**
+
+One correction to the first write-up: **fixed is not a perfect zero.** Its
+repeat returned 1 wrong word where the first returned 0. That is either this
+cell's own very low background rate or a slight perturbation from the fixed
+gap; against 38 to 44 it does not trouble the result, but "fixed is clean" is
+better stated as "fixed is at baseline, within one word of it".
 
 **The corruption rate is not stable over a session, and that invalidates every
 single-pass comparison in a long sweep -- including the one below.**
