@@ -1005,6 +1005,16 @@ counter only counts `CMD_ena && !req_we`.
 there.** Handshake, response accounting, lane, half, capture, read consistency
 and write visibility all read zero on runs that corrupt.
 
+**Qualified 2026-09-13: the write-visibility zero above was one boot, not a run
+that corrupted.** About 20,000 verified writes, against a fault of roughly one
+word in 60,000 to 130,000 pattern writes, cannot tell a lost write from none.
+It has since been repeated on a real corrupting pass (the "sun2_clobber" results
+further down): `patwr` 90 wrong, 88 wrong at the master's capture, **write
+verify still 0** over the whole 16 MiB. But the check compares **only the bytes
+the write itself enabled**, so it proves each halfword was right *immediately
+after its own write* and says nothing about the other half of the same 32-bit
+word afterwards.
+
 **It is not the DECA, and it is not BrianHG's controller.** A Wukong V3 --
 Xilinx, Vivado, MIG, a MultiBus machine with the **Xylogics 450** rather than
 SCSI, at 20 MHz -- boots SunOS from the same micro-SD card and corrupts at the
@@ -1064,6 +1074,15 @@ only an *isolated* miss, one with matching words on both sides. On the same run:
   at the master's capture   wrong words 4, first took 53d2 (wanted 80xx)
   at the card interface     byte 432, wanted 80 got 53
 ```
+
+**The "4" above is not the master-capture count** -- found and fixed
+2026-09-13. `tools/deca_dvmaprobe.tcl` assigned `pat_bad` twice, the
+master-capture count (offset 32) and then the block-seam count (offset 389), in
+the same commit that recorded this table (`d075d7f`), so "wrong words" has
+always printed the block-seam figure. `first took 53d2` is a separate field
+(offset 48), set only by a real master-capture miss, so the conclusion drawn
+from it stands; the count does not. The fixed tool read **88** at the master's
+capture against `patwr`'s 90 on the first run after the fix.
 
 **`0x53` replacing `0x80` at both ends.** So the word is already wrong when the
 master captures it from the bridge, and `sun2_dvma`, the SCSI engine, the sector
@@ -1809,7 +1828,8 @@ real and it is already closed by measurement rather than by argument**: it would
 only bite if the controller could answer a read from DRAM ahead of a pending
 write in its own queue, which is exactly what `Strict` against `Normal`
 ordering governs, and rebuilding with `ORDERING = "STRICT"` changed nothing.
-`WRITE_VERIFY` reads every write straight back at 0 wrong, and it is the
+`WRITE_VERIFY` reads every write straight back at 0 wrong (checking only the
+bytes each write enables -- see the qualification above), and it is the
 device->memory direction, which the cold reads show clean.
 
 The two hits, kept because the reasoning above is what retires them:
@@ -2076,8 +2096,8 @@ whether the CPU or the master wrote it; ghosts near it with those at zero would
 say no write of text was ever seen. `make -C sim clobber` is 166 checks, and
 eleven mutations are each caught by the scenario aimed at them. It reaches the
 VIO as `cl_*` (`syn/vio_read.tcl`, "WRITE HISTORY") and the ILA as probe 17,
-with capture modes `clob`, `clobcand` and `ghost` qualified one sample per memory
-transaction.
+with capture modes `clob`, `clobiso`, `clobcand`, `ghost`, `ghostdvma` and
+`arrivedx`, all qualified one sample per memory transaction.
 
 **It also closes a gap every earlier write check had: the lanes.**
 `wb_to_mig_ui` latches `wb_sel` on the same clock as address and data, and the
@@ -2094,7 +2114,99 @@ counted against it -- the `clob` trigger would have fired on noise. A block is
 now marked only by a *run*, a pattern write whose previous write was the
 pattern at the word before (or word 255 of the block below, for word 0), and
 `PARTIAL` is gated the same way. Every instrument in this file has needed such
-a rule; this one shipped without it for one build.
+a rule; this one shipped without it for one build. With the rule, a full disk
+boot, halt and netboot leaves **every** counter at 0.
+
+**The results: the damage is a ghost, and the "foreign write" is its copy.**
+Three 16 MiB `patwr -u` passes on the netbooted capture machine, the last on the
+run-gated bitstream with a zero baseline:
+
+```
+                          run 1 (v1)   run 2 (v1)   run 3 (v2)
+  patwr, words wrong          140          149          132
+  ARRIVED BAD                +140         +149         +132
+  ghost, read by the master  +140         +149         +132
+  iso-behind, by the master  +140         +149         +132
+  lone                          .            .            0
+  PARTIAL (run-gated)           .            .            0   of 16,849,362 pattern writes
+  DISAGREED / OUTSIDE           0            0          0 / 0
+```
+
+Four counters in two modules are identical to `patwr` on every run. Reading them
+took one wrong turn, recorded because it looked right: the iso count was read at
+first as "a master writes text into the buffer". The first capture (`clobiso`)
+showed what it is -- the XY450 writing `2f2d` at word 78 of a sector *during
+patwr's verify*, which patwr then reported as `sector 14 word 78 got 2f2d`: the
+faithful **read-back of a sector already wrong on the medium**. The damage is
+the ghost: at the disk write, the master reads text out of a block whose last
+bridge-visible write was the pattern, while write coverage says every word of it
+was written. **No write of text into those blocks is ever seen at the bridge**,
+and none is issued with a lane missing.
+
+**The window cannot reach the write that matters.** `arrivedx` (trigger on
+`dv_arrived_bad`, armed *before* patwr -- patwr writes the whole file before it
+verifies, so every damaging read is in the first ~40 minutes, and `ghostdvma`
+armed half-way through run 2 waited an hour for events that had all happened)
+caught the master reading `584f` at word 180 of block 0x392e00 in an otherwise
+perfect stream, and **no write into that block anywhere in the ~3,500 prior
+transactions**. The CPU's copy into it is older than a 4,096-deep ILA can hold.
+
+**Every damaged word is the first halfword of its 32-bit word: 511 of 511**
+(140 + 149 + 132 on the Wukong, 90 on the DECA). That is also the **first bus
+cycle** of each longword: the kernel fills the buffer in `_copyin` (0x4804,
+reached from `_uiomove`) with `movesl %a0@+,%d1 ; movel %d1,%a1@+`, and a long
+write to `(An)+` goes high word first; long reads go high word first; and
+`sun2_dvma` does half 0 before half 1 in both directions (384 back-to-back
+even-then-odd master reads in one capture). Only `-(An)` writes the low word
+first, and `copyin` does not use it. Buffer blocks are 512-byte aligned, so each
+longword is exactly one 32-bit DDR3 word.
+
+**Both memory controllers mask sub-word writes with the DDR3 chip's own DM
+balls, and simulation hides that.** MIG with `DATA_MASK=1` sends `app_wdf_mask`
+nowhere but the DM pins -- output-only bitlanes in the data byte groups, FPGA
+A22/C22, which the Wukong V3 schematic routes as DDR_DQM0/1 to the part's
+UDM/LDM -- while `wb_to_mig_ui` drives the same word into all four lanes. Micron's
+DDR3L x16 has functional UDM/LDM. BrianHG does the same ("DDR3_DM[0] drives
+write DQ[7:0]"). The Micron simulation model implements `dm_tdqs` as a byte mask
+(`ddr3_model.sv` `bit_mask`), which is why `make -C sim migddr3`'s partial write
+passes; and MIG's calibration holds the mask at 0 throughout
+(`mux_wrdata_mask = ... ? mc_wrdata_mask : 'b0`), so DM is never exercised
+until the machine runs. On Artix-7 there is no ODELAY, so DM gets the same
+per-byte-group write alignment as DQ -- a plain timing gap is less likely than
+something specific to those two traces or to the isolated one-word DM pulse a
+halfword write produces.
+
+**The DECA's write-verify, on a corrupting pass, says the halfword *was*
+written.** `deca-multibus-...-mbscsi-blktrace-off512m-lb16` (09-10, `434d207`,
+`WRITE_VERIFY=1`): `patwr` 90 of 8,388,608, all even, the same three values;
+88 wrong at the master's capture (first at 0xF03568, word 180, `2e2e`); **write
+verify 0**, with every write of the run routed through the read-back and the
+`responses - reads issued` control advancing. The read-back really reached
+DDR3: `PORT_R_CACHE_TOUT` is 0 with `PORT_R_CACHE_TOUT_ENA` left at its default,
+which reloads the timeout with bit 8 set so the read cache never hits, and
+`PORT_CACHE_SMART` is 0. So "the first write never lands" -- a missed DM pulse on
+its own write -- is **falsified on the DECA**.
+
+**What that check cannot see is the next cycle.** It compares only the bytes the
+write enabled: after the even write it checks the even half, after the odd write
+only the odd half. The second write of the pair, or anything later, could undo
+the even half invisibly. But a plain mask failure on that second write does not
+produce *old text* on either controller -- MIG would put the odd word's value
+in the even half (`80xx+1`), BrianHG the even value it had just written -- so the
+old contents must come from something that carries the page's *previous* state,
+and that path is not identified. On the Wukong the same counters cannot tell
+"never landed" from "landed and reverted"; there is no write-verify there.
+
+**Next measurement:** make the DECA's write-verify, after a write to the second
+halfword, also compare the first halfword of the same 32-bit word against what
+was last written there -- which separates "undone by the second cycle" from
+"undone later".
+
+Two tools met on the way: `pkill -f <pattern>` kills the shell running it when
+the pattern is in its own command line (exit 144, twice in this investigation --
+select by PID with a bracketed pattern such as `[d]eca_console`); and the DECA
+console and ISSP cannot share the chain, so a probe read means stopping
+`juart-terminal` and re-attaching after.
 
 **The corruption rate is not stable over a session, and that invalidates every
 single-pass comparison in a long sweep -- including the one below.**

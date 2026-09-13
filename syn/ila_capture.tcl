@@ -573,6 +573,46 @@ switch -- $mode {
            set_property TRIGGER_COMPARE_VALUE eq6'bXX1XXX $P(clob)
            set qualify_xact 1
            set trigpos_override 3584 }
+    clobiso { # iso alone: a foreign word inside a copy, the next write into
+           # that block being the pattern again.  Narrower than `clob', which
+           # also takes `lone' -- and on the board lone is noisy where iso is
+           # not: on the first sun2_clobber bitstream a whole SunOS boot
+           # counted 0 iso and 63 lone, and the patwr run that followed counted
+           # iso +140, iso-behind +140, candidates by a master +140, against
+           # patwr's own 140 and ARRIVED BAD's 140.  One for one.
+           if {![info exists P(clob)]} { puts "ERROR: no sun2_clobber probe in this bitstream"; exit 1 }
+           set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(clob)
+           set qualify_xact 1
+           set trigpos_override 3584 }
+    arrivedx { # `arrived', but one sample per memory transaction and the trigger
+           # near the end: the ~3500 memory transactions *before* the master
+           # read text out of a pattern buffer.  dv_arrived_bad and
+           # ghost-by-master are the same events -- 140 and 140, then 289 and
+           # 289 -- and this trigger has fired on the board before, where
+           # `ghostdvma' ANDs a pulse registered two clocks after the read with
+           # a dbg_dvma sampled then, which has never been shown to meet.
+           #
+           # Arm it BEFORE patwr starts: patwr writes the whole file and only
+           # then verifies, so every damaging read happens in the first half.
+           # Armed at the half-way point of the second run, `ghostdvma' waited
+           # an hour for events that had all already happened.
+           set_property TRIGGER_COMPARE_VALUE eq1'b1 $P(abad)
+           set qualify_xact 1
+           set trigpos_override 3584 }
+    ghostdvma { # A ghost read by the MASTER: the disk controller taking text out
+           # of a block whose last bridge-visible write was the pattern.  This,
+           # not `clobiso', is the damage.  The first `clobiso' capture caught
+           # the master writing 2f2d into a buffer at word 78 of a sector --
+           # which patwr then reported as `sector 14 word 78 got 2f2d' -- and
+           # that was the read-back of a sector already wrong on the medium:
+           # iso-by-master counts the copy, ghost-by-master the cause.  On the
+           # first bitstream both were 0 through a boot and +140 over a run
+           # that corrupted 140 words.
+           if {![info exists P(clob)]} { puts "ERROR: no sun2_clobber probe in this bitstream"; exit 1 }
+           set_property TRIGGER_COMPARE_VALUE eq6'bX1XXXX $P(clob)
+           set_property TRIGGER_COMPARE_VALUE eq1'b1 $P(dvma)
+           set qualify_xact 1
+           set trigpos_override 3584 }
     clobcand { # Every candidate, reuse included -- the control for `clob'.  It
            # must fire within seconds of patwr starting, or `clob' never firing
            # means nothing.

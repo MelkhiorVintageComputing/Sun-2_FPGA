@@ -64,7 +64,9 @@ set rr_adr      [field $raw 279 30]
 set rr_v1       [field $raw 309 32]
 set rr_v2       [field $raw 341 32]
 set pat_sectors [field $raw 373 16]
-set pat_bad     [field $raw 389 16]
+# Not `pat_bad': that name already holds the master-capture count from offset
+# 32, and reusing it here made the "wrong words" line above print this one.
+set blk_bad     [field $raw 389 16]
 set pat_lba     [field $raw 405 32]
 set pat_off     [field $raw 437 16]
 set pat_exp     [field $raw 453 8]
@@ -102,8 +104,8 @@ puts        "                          changed between issue and response"
 puts ""
 puts "Pattern check, in flight at the block seam (tools/patwr -u)"
 puts [format "  sectors seen   %6d" $pat_sectors]
-puts [format "  bytes wrong    %6d" $pat_bad]
-if {$pat_bad > 0} {
+puts [format "  bytes wrong    %6d" $blk_bad]
+if {$blk_bad > 0} {
     puts [format "  first: LBA %08x byte %d, wanted %02x got %02x" \
               $pat_lba $pat_off $pat_exp $pat_got]
     puts        "  ^ the data was ALREADY wrong when it reached the card"
