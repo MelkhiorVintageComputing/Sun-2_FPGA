@@ -2038,6 +2038,64 @@ narrow and unusual property for a fault to key on -- most hardware faults key
 on a threshold, not on unpredictability -- and it is what any explanation now
 has to account for.
 
+**A capture machine whose disk carries nothing but the test.** A MultiBus
+2/120 with the XY450 *and* the Sun MultiBus Ethernet, netbooted, so root, swap
+and every binary come over NFS through the Ethernet card's own 256 KiB and the
+XY450 is the only bus master -- its DVMA buffers hold `patwr` traffic and
+nothing else. `xy0a` is mounted on `/mnt` for the test alone. It still corrupts:
+**164 of 8,388,608** in 79 minutes (`2e2e` 57, `584f` 55, `2f2d` 52), the same
+three values as ever, so the intruding text is not the disk's own program text
+being paged in through the buffers under test. The build is
+`v3-multibus-mbether-xy450-cpu20-rd68011-ila-div50-off1024m`, 23,960 LUTs and
+106.5 of 135 BRAM tiles before the instrument below.
+
+Netbooting it takes one thing that is not obvious. The PROM's `boottab` lists
+`xy` before `ie`, so it always autoboots the disk and BREAK loses the race: let
+it boot, `sync`, `/etc/halt`, then `b ie()vmunix -a`. **Answer the `-a` prompts
+twice** -- the bootloader's (root fstype `nfs`, an empty root name, which
+bootparams fills in as `x11spl:/home/dolbeau2/Sun3_BootDir/nfsroot/sun2_f_m`)
+and then the kernel's own root and swap prompts, `nfs` and empty names again.
+Answering only the first set boots an NFS-loaded kernel that still mounts
+`xy0a` as root, which is exactly the traffic this machine exists to exclude.
+Root's shell is csh, so `$?` is `Variable syntax.` and the whole line is
+rejected unexecuted.
+
+**`sun2_clobber`: the history of a buffer, which no transfer check can give.**
+Every instrument so far asks a question of one transfer, and every one reads
+zero while `ARRIVED BAD` counts the corruption one for one. So memory really
+holds text where the pattern went, and the open question is *how it got
+there* -- a question of history. `rtl/sun2-common/sun2_clobber.v`, inside the
+bridge, keeps one bit per 512-byte block (14,336 blocks, one RAMB18): "the last
+write here was the pattern". Against it, a non-pattern write into a pattern
+block is resolved by the next write into that block as *reuse* (not the pattern
+either), *iso* (the pattern again -- one foreign word inside a copy, *behind*
+if below the copy head), or *lone* (nothing more before a timeout); a
+non-pattern *read* from a pattern block is a *ghost*. Iso-behind plus lone near
+`ARRIVED BAD` would say a write put the text there, and the record names
+whether the CPU or the master wrote it; ghosts near it with those at zero would
+say no write of text was ever seen. `make -C sim clobber` is 166 checks, and
+eleven mutations are each caught by the scenario aimed at them. It reaches the
+VIO as `cl_*` (`syn/vio_read.tcl`, "WRITE HISTORY") and the ILA as probe 17,
+with capture modes `clob`, `clobcand` and `ghost` qualified one sample per memory
+transaction.
+
+**It also closes a gap every earlier write check had: the lanes.**
+`wb_to_mig_ui` latches `wb_sel` on the same clock as address and data, and the
+write-coverage check tested address and data only; DECA's `WRITE_VERIFY` masked
+its comparison *by* `wb_sel`. A pattern write issued with one strobe missing
+would leave the old text in place under both. `PARTIAL` counts exactly that.
+
+**Its first bitstream was flooded by coincidence, and the numbers are the
+lesson.** It marked a block on any single pattern-shaped word. On the board,
+before `patwr` had written a byte, SunOS's own boot had counted **33,776
+ghosts, 63 lones and 381 partials**: `{0x80, index}` is not a rare word, and one
+chance match marked a block of kernel data whose every later access then
+counted against it -- the `clob` trigger would have fired on noise. A block is
+now marked only by a *run*, a pattern write whose previous write was the
+pattern at the word before (or word 255 of the block below, for word 0), and
+`PARTIAL` is gated the same way. Every instrument in this file has needed such
+a rule; this one shipped without it for one build.
+
 **The corruption rate is not stable over a session, and that invalidates every
 single-pass comparison in a long sweep -- including the one below.**
 `sun2_dvma` gained a throttle (`THR_MASK`/`THR_RAND`, gating only the *entry*

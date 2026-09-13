@@ -129,4 +129,44 @@ puts "request went out with.  Every pattern check predicts the expected word"
 puts "FROM the address, so a response matched to the wrong address satisfies"
 puts "all of them and still hands the master a word from somewhere else."
 puts ""
+
+# sun2_clobber.  Absent from bitstreams built before it, where every line
+# reads `?' rather than zero.
+proc hex2int {v} { if {$v eq "?"} { return -1 }; return [expr {"0x$v"}] }
+puts "WRITE HISTORY: how did text get into a pattern block?"
+puts [format "  pattern wr   %s   <- the control: pattern halfwords written" [rd $vio cl_patwr]]
+puts [format "  PARTIAL      %s   <- a pattern write issued with one strobe" [rd $vio cl_partial]]
+puts [format "  candidates   %s   (by a master %s)  non-pattern write into a pattern block" \
+          [rd $vio cl_cand] [rd $vio cl_cand_dvma]]
+puts [format "    reuse      %s   <- the next write there was not the pattern either" [rd $vio cl_reuse]]
+puts [format "    iso        %s   <- one foreign word inside a copy" [rd $vio cl_iso]]
+puts [format "    ISO BEHIND %s   <- ... below the copy head, never overwritten" [rd $vio cl_iso_behind]]
+puts [format "    LONE       %s   <- nothing more written to that block" [rd $vio cl_lone]]
+puts [format "    collide    %s   (a second candidate while one was pending)" [rd $vio cl_collide]]
+puts [format "  pattern rd   %s   <- the control: pattern read from a pattern block" [rd $vio cl_rdpat]]
+puts [format "  GHOST        %s   (by a master %s)  text read from a block whose last write was pattern" \
+          [rd $vio cl_ghost] [rd $vio cl_ghost_dvma]]
+set h [hex2int [rd $vio cl_rec_hit]]
+if {$h > 0} {
+    set blk [expr {($h >> 32) & 0x3FFF}]; set off [expr {($h >> 24) & 0xFF}]
+    puts [format "  last hit:    %s by %s at phys 0x%06x (block 0x%06x word %d) data %04x, copy head next at %d" \
+              [expr {(($h >> 48) & 3) == 1 ? ((($h >> 47) & 1) ? "iso-behind" : "iso") : "lone"}] \
+              [expr {(($h >> 46) & 1) ? "master" : "CPU"}] \
+              [expr {$blk * 512 + $off * 2}] [expr {$blk * 512}] $off \
+              [expr {$h & 0xFFFF}] [expr {($h >> 16) & 0xFF}]]
+}
+set g [hex2int [rd $vio cl_rec_ghost]]
+if {$g > 0} {
+    set blk [expr {($g >> 24) & 0x3FFF}]; set off [expr {($g >> 16) & 0xFF}]
+    puts [format "  last ghost:  read by %s at phys 0x%06x (block 0x%06x word %d) got %04x" \
+              [expr {(($g >> 38) & 1) ? "master" : "CPU"}] \
+              [expr {$blk * 512 + $off * 2}] [expr {$blk * 512}] $off [expr {$g & 0xFFFF}]]
+}
+puts ""
+puts "Read against ARRIVED BAD above.  ISO BEHIND + LONE near it: a write put"
+puts "the text there, and the record says whose.  GHOST near it with those at"
+puts "zero: no write of text was ever seen -- the pattern write did not land, or"
+puts "the read did not come from where the bridge thinks.  PARTIAL non-zero is"
+puts "a lane dropped from a pattern write, which no earlier check could see."
+puts ""
 close_hw_manager

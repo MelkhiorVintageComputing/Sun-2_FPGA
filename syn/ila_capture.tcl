@@ -150,6 +150,9 @@ set P(xgot) $byport(14)
 set P(xexp) $byport(15)
 # The one event this whole investigation is chasing, as a validated trigger.
 set P(abad) $byport(16)
+# sun2_clobber's pulses, {xact ghost harm lone iso cand}.  Only in bitstreams
+# built after it; the modes that need it refuse without it.
+if {[info exists byport(17)]} { set P(clob) $byport(17) }
 foreach k {addr fc hand cs smap ps ma verd data ctx cx} {
     puts "== probe $k: [get_property NAME $P($k)] port [get_property PROBE_PORT $P($k)] width [get_property WIDTH $P($k)] =="
 }
@@ -553,6 +556,39 @@ switch -- $mode {
            # will not trigger it.
            set_property TRIGGER_COMPARE_VALUE eq6'bXX1XXX $P(verd) }
 
+    clob { # A foreign word that stays: iso-behind or lone, from sun2_clobber.
+           #
+           # The question no counter can answer -- what happened in the cycles
+           # before text landed in a pattern buffer.  The verdict comes some
+           # writes *after* the foreign one (it waits to see whether the copy
+           # carries on over it), so the trigger sits near the end and the
+           # foreign write is in the history.  Qualified one sample per memory
+           # transaction, so the window is ~3500 transactions before and ~500
+           # after rather than a few hundred bus cycles.
+           #
+           # Read the counters first: `vio_read.tcl' says how often this fires
+           # on the capture machine, and a trigger that fires on ordinary reuse
+           # spends its one capture on nothing.
+           if {![info exists P(clob)]} { puts "ERROR: no sun2_clobber probe in this bitstream"; exit 1 }
+           set_property TRIGGER_COMPARE_VALUE eq6'bXX1XXX $P(clob)
+           set qualify_xact 1
+           set trigpos_override 3584 }
+    clobcand { # Every candidate, reuse included -- the control for `clob'.  It
+           # must fire within seconds of patwr starting, or `clob' never firing
+           # means nothing.
+           if {![info exists P(clob)]} { puts "ERROR: no sun2_clobber probe in this bitstream"; exit 1 }
+           set_property TRIGGER_COMPARE_VALUE eq6'bXXXXX1 $P(clob)
+           set qualify_xact 1
+           set trigpos_override 2048 }
+    ghost { # Text read out of a block whose last write was the pattern: the
+           # case where no foreign write was seen.  Same qualifier; the
+           # history then shows the last writes into that block, if they
+           # are recent enough to be in the window.
+           if {![info exists P(clob)]} { puts "ERROR: no sun2_clobber probe in this bitstream"; exit 1 }
+           set_property TRIGGER_COMPARE_VALUE eq6'bX1XXXX $P(clob)
+           set qualify_xact 1
+           set trigpos_override 3584 }
+
     scc  { # any access in the console SCC's device page, 0xEEC800..0xEECFFF.
            # dbg_addr is P_A[23:1], so the page is the top 13 bits of 0x776400
            # and the low ten are don't-care.
@@ -564,7 +600,7 @@ switch -- $mode {
     fc1  { set_property TRIGGER_COMPARE_VALUE eq6'bXXXX1X $P(verd)
            set_property TRIGGER_COMPARE_VALUE eq3'b001   $P(fc) }
     as   { set_property TRIGGER_COMPARE_VALUE eq6'b0XXXXX $P(hand) }
-    default { puts "ERROR: MODE must be err, arrived, xchk, xpat, fc1, as, supw, scc, ether, etherseq, caseq, caclk, wildptr, lateerr, dvma, dvmaseq, iack, iackseq, illegal, vecfetch, scp, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz, fbprobe or reset, not '$mode'"; exit 1 }
+    default { puts "ERROR: MODE must be err, arrived, clob, clobcand, ghost, xchk, xpat, fc1, as, supw, scc, ether, etherseq, caseq, caclk, wildptr, lateerr, dvma, dvmaseq, iack, iackseq, illegal, vecfetch, scp, uerr, uerr2, uonly, uprog, uprogerr, ctxwr, ctxnz, fbprobe or reset, not '$mode'"; exit 1 }
 }
 
 # Capture control: keep bus cycles, drop the idle clocks between them.  4096
@@ -598,6 +634,10 @@ if {[info exists qualify_prog]} {
     # only CPU-space cycles: FC 7, which on this machine is nothing but an
     # interrupt acknowledge.  dbg_addr[2:0] is then A3-A1, the level.
     set_property CAPTURE_COMPARE_VALUE eq3'b111 $P(fc)
+} elseif {[info exists qualify_xact]} {
+    # one sample per memory transaction, the clock after it: a write's data is
+    # on the bus then, and a read's has just been loaded into P_DATA_OUT
+    set_property CAPTURE_COMPARE_VALUE eq6'b1XXXXX $P(clob)
 } elseif {[info exists qualify_done]} {
     # AS asserted *and* DTACK asserted: exactly one sample per completed bus
     # cycle.  hand is {AS RW UDS LDS DTACK BERR}, all active low.

@@ -17,6 +17,7 @@
 #   ./run_unit.sh trace     sun2_trace: the DECA's JTAG-readable capture buffer
 #   ./run_unit.sh blktrace sun2_blktrace: the LBA/signature trace of block transfers
 #   ./run_unit.sh dvmaprobe sun2_dvma_probe: the bridge-load / master-capture pairing
+#   ./run_unit.sh clobber   sun2_clobber: foreign writes into a pattern buffer, and ghosts
 #   ./run_unit.sh scanout   fb_scanout: DDR3 to pixels, a whole frame checked
 #
 set -e -o pipefail
@@ -367,10 +368,20 @@ bridge)
 	# memory cycle immediately after another with no fetch between them.  See
 	# the header of tb/tb_wb_bridge.sv for why that is the only case that can
 	# leave `done' set across a cycle boundary.
+	step xvlog "$top/rtl/sun2-common/sun2_clobber.v"
 	step xvlog "$top/rtl/sun2-common/sun2_wishbone_bridge.v"
 	step xvlog --sv "$top/tb/tb_wb_bridge.sv"
 	step xelab -debug off --timescale 1ns/1ps work.tb_wb_bridge -s bridge_sim
 	xsim bridge_sim -R | grep -E '===|PASS|FAIL|ok$|LOST|returned|timeout'
+	;;
+
+clobber)
+	# The write-history detector alone, one scenario per verdict, each checking
+	# the change in every counter rather than only the one it is about.
+	step xvlog "$top/rtl/sun2-common/sun2_clobber.v"
+	step xvlog --sv "$top/tb/tb_clobber.sv"
+	step xelab -debug off --timescale 1ns/1ps work.tb_clobber -s clobber_sim
+	xsim clobber_sim -R | grep -E '===|PASS|FAIL'
 	;;
 
 dvma)

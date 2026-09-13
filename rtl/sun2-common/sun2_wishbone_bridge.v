@@ -88,7 +88,17 @@ module sun2_wishbone_bridge #(
 			     output reg [31:0]  dbg_n_blk_bad, // ... incomplete
 			     output reg [8:0]   dbg_blk_off,   // first missing
 			     output reg [22:0]  dbg_blk_adr,
-			     
+
+			     // Who wrote into a buffer after the pattern did?
+			     // sun2_clobber keeps one bit of history per
+			     // 512-byte block; see its header.  DVMA says whose
+			     // cycle this is, which this module cannot tell --
+			     // top_fpga muxes both masters onto one bus.
+			     input 	       DVMA,
+			     output [5:0]      dbg_clob_trig,
+			     output [383:0]    dbg_clob_n,
+			     output [127:0]    dbg_clob_rec,
+
 			     // wishbone
 			     output 	       wb_cyc_o,
 			     output 	       wb_stb_o,
@@ -301,6 +311,25 @@ module sun2_wishbone_bridge #(
 	   blk_any <= 1'b1;
 	end
      end
+
+   // ---- write history ------------------------------------------------------
+   // The same two instants the checks above use: a write at the clock its
+   // request goes out, which is the clock the adapter latches address, data and
+   // lanes; a read at the clock its answer is loaded.  Memory only -- a frame
+   // buffer read is not a buffer-cache block.
+   sun2_clobber clobber (
+       .CLK     (CLK),
+       .RESET_n (RESET_n),
+       .wr_fire (wr_fire),
+       .adr     (P_ADR_IN[22:1]),
+       .wdat    (P_DATA_IN),
+       .wlanes  ({EN_UBYTE, EN_LBYTE}),
+       .dvma    (DVMA),
+       .rd_load (ENABLE & wb_ack_i & issued & ~wb_we_o & MATCH_MEM),
+       .rdat    (out_act),
+       .trig    (dbg_clob_trig),
+       .n_flat  (dbg_clob_n),
+       .rec_flat(dbg_clob_rec));
 
    // Counted here rather than derived outside, because the address the request
    // went out with exists only inside this module.

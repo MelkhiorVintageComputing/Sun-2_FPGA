@@ -63,6 +63,11 @@ module top(input         cpu_clk,
 	   output [31:0]  dv_n_adr_move,
 	   output [31:0]  dv_n_dat_move,
 	   output         dv_arrived_bad,
+	   // sun2_clobber's write history: {xact, ghost, harm, lone, iso, cand},
+	   // twelve counters and two records.  Field maps in its header.
+	   output [5:0]   clob_trig,
+	   output [383:0] clob_n,
+	   output [127:0] clob_rec,
 
 	   /* Ethernet diagnostics, for the board top to surface: a PHY that
 	    holds carrier sense asserted stops transmission dead, and it is the
@@ -440,6 +445,10 @@ module top(input         cpu_clk,
 		  .dbg_wb_dout(dbg_wb_dout),
 		  .dbg_match_mem(dbg_match_mem),
 		  .dbg_wb_load_half(dbg_wb_load_half),
+		  .dbg_clob_dvma(dvma_active),
+		  .dbg_clob_trig(clob_trig),
+		  .dbg_clob_n(clob_n),
+		  .dbg_clob_rec(clob_rec),
 				
 		  // wishbone
 		  .wb_cyc_o(wb_cyc_o),

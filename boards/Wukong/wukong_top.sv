@@ -365,6 +365,10 @@ module wukong_top #(
    wire [31:0] dv_n_xact, dv_n_adr_move, dv_n_dat_move;
    wire [31:0] rr_n, rr_bad, rr_v1, rr_v2;
    wire        dv_arrived_bad;
+   // sun2_clobber's write history; see rtl/sun2-common/sun2_clobber.v.
+   wire [5:0]   clob_trig;
+   wire [383:0] clob_n;
+   wire [127:0] clob_rec;
 
    // Master-traffic throttle: bits [7:0] THR_MASK, bit [8] THR_RAND.
    // **Declared outside the `ifdef on purpose.**  A declaration inside one
@@ -397,6 +401,25 @@ module wukong_top #(
    // INT7_n..INT1_n, timer_int[5:1]}.  One probe, because the basic trigger
    // unit is one comparator per probe and these are always read together.
    wire [15:0] dbg_irq  = dbg_bus[117:102];
+
+   // sun2_clobber, one named wire per VIO probe for the same reason as the
+   // debug bus above: slices of one net all take that net's name, and
+   // syn/vio_read.tcl reads probes by name.
+   wire [31:0] cl_patwr      = clob_n[ 31:  0];
+   wire [31:0] cl_partial    = clob_n[ 63: 32];
+   wire [31:0] cl_cand       = clob_n[ 95: 64];
+   wire [31:0] cl_cand_dvma  = clob_n[127: 96];
+   wire [31:0] cl_reuse      = clob_n[159:128];
+   wire [31:0] cl_iso        = clob_n[191:160];
+   wire [31:0] cl_iso_behind = clob_n[223:192];
+   wire [31:0] cl_lone       = clob_n[255:224];
+   wire [31:0] cl_collide    = clob_n[287:256];
+   wire [31:0] cl_rdpat      = clob_n[319:288];
+   wire [31:0] cl_ghost      = clob_n[351:320];
+   wire [31:0] cl_ghost_dvma = clob_n[383:352];
+   wire [63:0] cl_rec_hit    = clob_rec[ 63: 0];
+   wire [63:0] cl_rec_ghost  = clob_rec[127:64];
+   wire [5:0]  cl_trig       = clob_trig;       // {xact ghost harm lone iso cand}
 
    // Counters, read after the run with syn/vio_read.tcl.  n_pat is the control
    // that makes n_bad mean anything: zero bad crossings proves nothing unless
@@ -439,6 +462,20 @@ module wukong_top #(
        .probe_in32 (xy_n_dva),
        .probe_in33 (xy_n_dva_bad),
        .probe_in34 ({8'd0, xy_dva_adr}),
+       .probe_in35 (cl_patwr),
+       .probe_in36 (cl_partial),
+       .probe_in37 (cl_cand),
+       .probe_in38 (cl_cand_dvma),
+       .probe_in39 (cl_reuse),
+       .probe_in40 (cl_iso),
+       .probe_in41 (cl_iso_behind),
+       .probe_in42 (cl_lone),
+       .probe_in43 (cl_collide),
+       .probe_in44 (cl_rdpat),
+       .probe_in45 (cl_ghost),
+       .probe_in46 (cl_ghost_dvma),
+       .probe_in47 (cl_rec_hit),
+       .probe_in48 (cl_rec_ghost),
        .probe_out0 (thr_src)
    );
 
@@ -460,7 +497,8 @@ module wukong_top #(
        .probe13(xchk_bad),
        .probe14(xchk_got),
        .probe15(xchk_exp),
-       .probe16(dv_arrived_bad)
+       .probe16(dv_arrived_bad),
+       .probe17(cl_trig)
    );
 `else
    assign thr_src = 9'd0;   // no VIO, no throttle
@@ -634,6 +672,9 @@ module wukong_top #(
        .dv_n_adr_move  (dv_n_adr_move),
        .dv_n_dat_move  (dv_n_dat_move),
        .dv_arrived_bad (dv_arrived_bad),
+       .clob_trig      (clob_trig),
+       .clob_n         (clob_n),
+       .clob_rec       (clob_rec),
 
 
        .eth_crs_stuck (eth_crs_stuck),

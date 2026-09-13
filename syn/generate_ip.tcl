@@ -145,7 +145,7 @@ create_ip -name ila -vendor xilinx.com -library ip \
 # validated as a whole, so naming C_PROBE8_WIDTH while the core still has eight
 # probes invalidates the entire dict -- silently: the IP keeps its old
 # configuration and only the generated .xci shows it.
-set_property CONFIG.C_NUM_OF_PROBES {17} [get_ips sun2_ila]
+set_property CONFIG.C_NUM_OF_PROBES {18} [get_ips sun2_ila]
 
 set_property -dict [list \
     CONFIG.C_DATA_DEPTH        {4096} \
@@ -172,6 +172,7 @@ set_property -dict [list \
     CONFIG.C_PROBE14_WIDTH {32} \
     CONFIG.C_PROBE15_WIDTH {32} \
     CONFIG.C_PROBE16_WIDTH {1} \
+    CONFIG.C_PROBE17_WIDTH {6} \
 ] [get_ips sun2_ila]
 
 # And check it took.  The properties above are validated as a whole and can be
@@ -179,9 +180,9 @@ set_property -dict [list \
 # that setting it worked -- the failure mode is a bitstream that cannot be
 # built and a message that points at the wrong file.
 set got [get_property CONFIG.C_NUM_OF_PROBES [get_ips sun2_ila]]
-if {$got != 17} {
-    puts "ERROR: sun2_ila has $got probes, not the 17 asked for -- the"
-    puts "       configuration was rejected.  wukong_top.sv drives probe16,"
+if {$got != 18} {
+    puts "ERROR: sun2_ila has $got probes, not the 18 asked for -- the"
+    puts "       configuration was rejected.  wukong_top.sv drives probe17,"
     puts "       so synthesis would fail on a stale stub instead."
     exit 1
 }
@@ -202,7 +203,7 @@ puts "== sun2_ila: $got probes =="
 create_ip -name vio -vendor xilinx.com -library ip -module_name sun2_vio \
     -dir $ipdir -force
 set_property -dict [list \
-    CONFIG.C_NUM_PROBE_IN  {35} \
+    CONFIG.C_NUM_PROBE_IN  {49} \
     CONFIG.C_NUM_PROBE_OUT {1} \
     CONFIG.C_PROBE_OUT0_WIDTH {9} \
     CONFIG.C_PROBE_OUT0_INIT_VAL {0x000} \
@@ -241,12 +242,26 @@ set_property -dict [list \
     CONFIG.C_PROBE_IN32_WIDTH {32} \
     CONFIG.C_PROBE_IN33_WIDTH {32} \
     CONFIG.C_PROBE_IN34_WIDTH {32} \
+    CONFIG.C_PROBE_IN35_WIDTH {32} \
+    CONFIG.C_PROBE_IN36_WIDTH {32} \
+    CONFIG.C_PROBE_IN37_WIDTH {32} \
+    CONFIG.C_PROBE_IN38_WIDTH {32} \
+    CONFIG.C_PROBE_IN39_WIDTH {32} \
+    CONFIG.C_PROBE_IN40_WIDTH {32} \
+    CONFIG.C_PROBE_IN41_WIDTH {32} \
+    CONFIG.C_PROBE_IN42_WIDTH {32} \
+    CONFIG.C_PROBE_IN43_WIDTH {32} \
+    CONFIG.C_PROBE_IN44_WIDTH {32} \
+    CONFIG.C_PROBE_IN45_WIDTH {32} \
+    CONFIG.C_PROBE_IN46_WIDTH {32} \
+    CONFIG.C_PROBE_IN47_WIDTH {64} \
+    CONFIG.C_PROBE_IN48_WIDTH {64} \
 
 
 
 ] [get_ips sun2_vio]
 generate_target all [get_ips sun2_vio]
-puts "== sun2_vio: 35 input probes, 1 output probe (throttle) =="
+puts "== sun2_vio: 49 input probes, 1 output probe (throttle) =="
 
 generate_target {instantiation_template synthesis simulation} [get_ips sun2_ila]
 
