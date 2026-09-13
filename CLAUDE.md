@@ -850,6 +850,18 @@ invalidate a decode that indexes the returned bit string MSB-first.
 So "no card" and "a card that never initialised" are the same reading, and the
 only way to tell them apart is to try another card.
 
+**Resolved 2026-09-13 -- read this first.** The single-word disk corruption
+that everything below chases was a *bus-errored memory access issuing a phantom
+DDR3 request*: in the clock after a refused cycle's AS negates, `MATCH_MEM` was
+true for one clock, the adapter ran that orphan read, and the next memory cycle
+-- typically a master's first halfword -- took its acknowledge and its data.
+Found with a bus-history ILA, reproduced by `tb/tb_orphan_ack.sv`, fixed in
+`sun2_fpga.v` by holding the MMU's refusal for the rest of the cycle, and
+measured on the board at **0 of 8,388,608** where the same setup gave 140, 149
+and 177. See "Found and fixed" near the end of this investigation. The history
+below is kept because the eliminations in it are real, but several of its
+theories (retention, write visibility, DM pins) are superseded by that result.
+
 **Writing to the card corrupts files, the blocks go to the right places, and
 what it needs is concurrency rather than volume.** A copy is byte-perfect on
 its own and three copies back to back all come back wrong -- measured on a
@@ -2197,10 +2209,91 @@ old contents must come from something that carries the page's *previous* state,
 and that path is not identified. On the Wukong the same counters cannot tell
 "never landed" from "landed and reverted"; there is no write-verify there.
 
-**Next measurement:** make the DECA's write-verify, after a write to the second
-halfword, also compare the first halfword of the same 32-bit word against what
-was last written there -- which separates "undone by the second cycle" from
-"undone later".
+(The follow-up proposed here -- make the DECA's write-verify re-check the first
+halfword after the second write -- was overtaken: memory was never wrong.)
+
+**Found and fixed: a refused memory access issued a phantom DDR3 request, and
+the next memory cycle took its answer.**
+
+*The instrument.* A second ILA core, `u_busila` (`syn/generate_ip.tcl`,
+`boards/Wukong/wukong_top.sv`), 13 probes and 8,192 samples: the 68010 bus
+(address, FC, strobes, the C_S chain, data, `dvma_active`, physical page) *and*
+the memory side of the bridge -- the whole 32-bit word DDR3 returned, the
+Wishbone control lines and address -- triggered on `dv_arrived_bad` and
+storage-qualified by a "bus changed" strobe. `sun2_ila` went to 1,024 samples to
+free the BRAM (`ila_capture.tcl` now picks it by cell name and scales its trigger
+positions). `syn/busila_capture.tcl` arms it; `tools/busila_dec.py` decodes. The
+capture must be armed before `patwr` starts. Vivado suffixes probes that share a
+net with the other core (`dbg_addr_1`), which the decoder accepts.
+
+*What it showed* (netbooted XY450 machine, first capture):
+
+```
+  -22..-20  cpu FC1 read phys 0246bc: AS, C_S4, C_S6
+  -19       BERR, no DTACK                         the MMU refused it
+  -18       AS negated, C_S6 still 1, wb_cyc=1 for word 0091af, no ack
+  -13       master read halfword 94 of word 148d2f: wb_cyc
+  -10       ack arrives with 23ed584f              -- 0091af's contents
+   -9       master latches 584f
+   -4..-1   halfword 95, same DDR3 word, re-issued: 805f805e, correct
+```
+
+The only request dropped without an acknowledge in 8,192 samples, immediately
+before the bad read.
+
+*The mechanism.* `MMU_REFUSE` is gated by `~P_AS_n`; the C_S chain clears on the
+posedge *after* AS negates. So in that one clock `MMU_OK` read 1 while `C_S6` was
+still 1, and `MATCH_MEM` -- and every other `MATCH_*` -- came true for a cycle
+the MMU had refused. The bridge had issued nothing in that cycle, so it issued a
+fresh request; both DDR3 adapters latch a request on its first clock and run it
+to completion, and ignore a new request while busy; and the bridge accepts
+`wb_ack_i & issued` from whatever cycle is on the bus. A memory cycle starting
+within the orphan's latency therefore got the refused page's word and never
+issued its own read. That is every property this file recorded: one halfword,
+the first of a pair (the master takes the bus straight after the CPU's fault),
+program text (the faulting process's memory), memory itself never wrong (why
+DOUBLE_READ, WRITE_VERIFY and every DDR3 check were clean and the ghost counter
+fired), timing-dependent (the random-throttle result), and both boards (shared
+`sun2_fpga`, same adapter shape). A refused *write* issued a write with
+`wb_sel` = 0 -- harmless to data, but equally able to steal an acknowledge.
+
+*The reproduction.* `make -C sim orphan` (`tb/tb_orphan_ack.sv`) drives the real
+`sun2_fpga` with a 68010 bus-functional driver into the real `wb_to_mig_ui`,
+`mig_arb` and `mig_ui_model`. `tb_sun2` can never show this: `wb_ram_model`
+forgets a request whose CYC drops, and the real adapters do not. On the unfixed
+RTL, 3 of 8 checks fail: one refused read issues a request; a valid read 0 or
+1 clocks later is wrong 32 of 32 times at each gap, **all 64 returning the
+refused page's word**; refused writes issue write requests. A valid-then-valid
+control is clean at every gap.
+
+*The fix* (`sun2_fpga.v`, `MMU_REFUSED`): the refusal is latched on any posedge
+where `MMU_REFUSE` is true and cleared on the posedge with AS negated -- the edge
+that clears the C_S chain -- and `MMU_OK = ~MMU_REFUSE & ~MMU_REFUSED`. Chosen
+over re-gating the decode with AS as the change least likely to disturb anything:
+nothing differs while AS is asserted.
+
+*Measured.* Simulation: `orphan` 8/8; `bridge` PASS; MultiBus 22/274 and VME
+10/312 with bus-error sequences identical to the unfixed RTL *including
+timestamps*; `xychain` PASS. Board, same netbooted MultiBus+XY450+Ethernet
+Wukong and the same 1024 MiB copy:
+
+```
+                           unfixed (3 runs)     fixed
+  patwr, words wrong       140, 149, 177         0 of 8,388,608
+  ARRIVED BAD              = patwr               0 of 8,388,608 master pattern reads
+  ghost (by the master)    = patwr               0
+  iso / lone / PARTIAL     -                     0 / 0 / 0
+```
+
+*Left open.* The DECA shares the RTL and has not been rebuilt or tested with
+the fix. Filesystems written by unfixed bitstreams can carry silent damage in
+metadata as well as data -- the 1024 MiB copy failed its boot fsck with an
+unknown inode type on the first fixed boot and needed `fsck -y`; any copy used
+for a pristine source should be checked or rewritten. The fixed Wukong build met
+hold by only 0.008 ns (WHS). Hardening the bridge/adapter handshake so a cycle
+can only accept its own request's acknowledge -- defence in depth against any
+future phantom request -- is not done. Bitstreams are archived in
+`build/archive/` (`…-busila-v1`, `…-fixB`, `…-off2048m-fixB`) with the run notes.
 
 Two tools met on the way: `pkill -f <pattern>` kills the shell running it when
 the pattern is in its own command line (exit 144, twice in this investigation --

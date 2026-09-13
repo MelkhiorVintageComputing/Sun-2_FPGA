@@ -696,8 +696,39 @@ module sun2_fpga(input         cpu_clk,
    // (machine/ethernet/mac/u_ru/buf_addr_reg[3] -> acc_addr_reg[3]) that
    // MultiBus does not have among its tightest.  A margin that small is a
    // latent fault whatever provoked it; see BRINGUP.md.
+   // The refusal holds for the rest of the cycle.
+   //
+   // MMU_REFUSE is gated by ~P_AS_n, so it drops the moment AS negates -- but
+   // the C_S chain, and with it C_S6, only clears on the posedge *after* AS has
+   // gone.  In that one clock MMU_OK read 1 again and every MATCH_* term above
+   // it came true for a cycle the MMU had just refused.  For memory that is a
+   // Wishbone request with nobody waiting for it: the DDR3 adapter latches a
+   // request on its first clock and runs it to completion, ignores the next
+   // cycle's request while it is busy, and hands that cycle the orphan's
+   // acknowledge.  The bridge loads the refused page's word as the new cycle's
+   // data and never issues the real read.
+   //
+   // That was the disk corruption, for most of the life of this investigation:
+   // a user-mode page fault followed at once by a master's DVMA read gave the
+   // master one halfword of the faulting process's memory -- the first of its
+   // longword, and program text.  Caught on the Wukong's bus-history ILA
+   // (2026-09-13, BERR on the CPU's read, `wb_cyc' raised a clock later with AS
+   // gone, the orphan's `23ed584f' taken by the master's next read of a
+   // different word) and reproduced in simulation by tb/tb_orphan_ack.sv,
+   // where every wrong read returned the refused page's word.
+   //
+   // Held rather than re-gated with AS, so that what reaches the decode is
+   // "the MMU refused this cycle", decided once, and not a property of how the
+   // strobes happen to line up with the chain.  Cleared on exactly the edge
+   // that clears C_S4..C_S24, so it can never outlive the cycle either.
+   reg MMU_REFUSED;
+   initial MMU_REFUSED = 1'b0;
+   always @(posedge C100)
+     if (P_AS_n)          MMU_REFUSED <= 1'b0;
+     else if (MMU_REFUSE) MMU_REFUSED <= 1'b1;
+
    wire MMU_OK;
-   assign MMU_OK = ~MMU_REFUSE;
+   assign MMU_OK = ~MMU_REFUSE & ~MMU_REFUSED;
 
    // ------------------------------------------------------------------
    // The page map's statistics bits, which the MMU maintains itself

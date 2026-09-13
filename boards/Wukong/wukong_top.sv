@@ -500,6 +500,40 @@ module wukong_top #(
        .probe16(dv_arrived_bad),
        .probe17(cl_trig)
    );
+
+   // The bus history (syn/generate_ip.tcl, sun2_busila): the 68010 bus and the
+   // memory side of the bridge, every clock, triggered on a master reading a
+   // wrong word.  Named wires, for the same reason as dbg_* above.  bw_dat is
+   // the whole 32-bit word DDR3 returned -- the CPU and the master only ever
+   // see half of it, and the other half is where a value could sit unseen.
+   wire [31:0] bw_dat = wb_dat_s2m;
+   wire [7:0]  bw_ctl = {wb_cyc, wb_stb, wb_we, wb_ack, wb_sel};
+   wire [21:0] bw_adr = wb_adr[21:0];     // word address; 7 MiB is 21 bits
+
+   // High on a clock whose sampled value differs from the clock before.  As
+   // the storage qualifier it keeps every distinct state and drops idle clocks.
+   wire [133:0] bh_now = {dbg_addr, dbg_fc, dbg_hand, dbg_cs, dbg_data, dbg_dvma,
+                          dbg_ma, bw_dat, bw_ctl, bw_adr, dv_arrived_bad, cl_trig};
+   reg  [133:0] bh_prev;
+   always @(posedge cpu_clk) bh_prev <= bh_now;
+   wire        bh_chg = (bh_now != bh_prev);
+
+   sun2_busila u_busila (
+       .clk    (cpu_clk),
+       .probe0 (dbg_addr),
+       .probe1 (dbg_fc),
+       .probe2 (dbg_hand),
+       .probe3 (dbg_cs),
+       .probe4 (dbg_data),
+       .probe5 (dbg_dvma),
+       .probe6 (dbg_ma),
+       .probe7 (bw_dat),
+       .probe8 (bw_ctl),
+       .probe9 (bw_adr),
+       .probe10(dv_arrived_bad),
+       .probe11(cl_trig),
+       .probe12(bh_chg)
+   );
 `else
    assign thr_src = 9'd0;   // no VIO, no throttle
 `endif

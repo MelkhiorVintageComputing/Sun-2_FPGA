@@ -18,6 +18,7 @@
 #   ./run_unit.sh blktrace sun2_blktrace: the LBA/signature trace of block transfers
 #   ./run_unit.sh dvmaprobe sun2_dvma_probe: the bridge-load / master-capture pairing
 #   ./run_unit.sh clobber   sun2_clobber: foreign writes into a pattern buffer, and ghosts
+#   ./run_unit.sh orphan    a bus-errored memory access, and the memory cycle after it
 #   ./run_unit.sh scanout   fb_scanout: DDR3 to pixels, a whole frame checked
 #
 set -e -o pipefail
@@ -373,6 +374,34 @@ bridge)
 	step xvlog --sv "$top/tb/tb_wb_bridge.sv"
 	step xelab -debug off --timescale 1ns/1ps work.tb_wb_bridge -s bridge_sim
 	xsim bridge_sim -R | grep -E '===|PASS|FAIL|ok$|LOST|returned|timeout'
+	;;
+
+orphan)
+	# A bus-errored memory access followed by the next memory cycle, through
+	# the real sun2_fpga (MMU, C_S chain, MATCH_MEM, bridge) and the real
+	# wb_to_mig_ui + mig_arb into a MIG UI model.  tb_sun2 cannot show this:
+	# wb_ram_model forgets a request whose CYC drops, and the real adapters latch.
+	[ -f "$top/build/inputs/z8530_scc/z8530_scc.sv" ] || "$top/tools/patch_inputs.sh" z8530_scc
+	make -s -C "$top/tools"
+	odefs=(-d SUN2_SIM -d SUN2_ILA -d SUN2_MULTIBUS -d MEM_PAGES=512 -d SRAM_POWERUP_ZERO)
+	step xvlog "${odefs[@]}" -i "$top/rtl/sun2-common" -i "$top/build/rom" \
+		"$top/rtl/sun2-common/sun2_fpga.v" "$top/rtl/sun2-common/sun2_mmu.v" \
+		"$top/rtl/sun2-common/ctx_reg.v" "$top/rtl/sun2-common/pmap.v" \
+		"$top/rtl/sun2-common/smap.v" "$top/rtl/sun2-common/sram_sync.v" \
+		"$top/rtl/sun2-common/sram_sync_16bits_bytewritable.v" \
+		"$top/rtl/sun2-common/bootrom.v" "$top/rtl/sun2-common/idprom.v" \
+		"$top/rtl/sun2-common/gen8bit_reg.v" "$top/rtl/sun2-vme/sun2_ether_ctl.v" \
+		"$top/rtl/sun2-vme/sun2_phy_status.v" "$top/rtl/sun2-common/sun2_fb_ctl.v" \
+		"$top/rtl/sun2-common/ttl_am9513.v" "$top/rtl/sun2-common/mm58167.v" \
+		"$top/rtl/sun2-common/ttl_74F151.v" "$top/rtl/sun2-common/ttl_74LS148.v" \
+		"$top/rtl/sun2-common/sun2_wishbone_bridge.v" "$top/rtl/sun2-common/sun2_clobber.v" \
+		"$top/rtl/sun2-common/tolog.v"
+	step xvlog --sv "${odefs[@]}" -i "$top/rtl/sun2-common" -i "$top/build/rom" \
+		"$top/build/inputs/z8530_scc/z8530_scc.sv" \
+		"$top/boards/Wukong/wb_to_mig_ui.sv" "$top/boards/Wukong/mig_arb.sv" \
+		"$top/tb/mig_ui_model.sv" "$top/tb/tb_orphan_ack.sv"
+	step xelab -debug off --timescale 1ns/1ps work.tb_orphan_ack -s orphan_sim
+	xsim orphan_sim -R | grep -E '===|PASS|FAIL|gap|  [ 0-9]+ |adapter|words of|setup|no response|FATAL|Error'
 	;;
 
 clobber)

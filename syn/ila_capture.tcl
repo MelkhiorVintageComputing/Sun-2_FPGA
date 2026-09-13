@@ -113,7 +113,13 @@ if {$bit ne ""} {
     refresh_hw_device $dev
 }
 
-set ila [lindex [get_hw_ilas -quiet] 0]
+# By cell name: bitstreams since the bus history carry a second core,
+# u_busila, and get_hw_ilas does not promise an order.
+set ila ""
+foreach i [get_hw_ilas -quiet] {
+    if {[string match "*u_ila*" [get_property CELL_NAME $i]]} { set ila $i }
+}
+if {$ila eq ""} { set ila [lindex [get_hw_ilas -quiet] 0] }
 if {$ila eq ""} {
     puts "ERROR: no ILA on the device.  Is this an ILA=1 bitstream?"
     exit 1
@@ -656,7 +662,10 @@ if {[info exists qualify_prog]} { set trigpos 16 }
 # samples *after* the trigger -- the question is what the routine went on to
 # do, not what called it.  KPOS=16 gives 4080 clocks of that.
 if {[info exists ::env(KPOS)]} { set trigpos $::env(KPOS) }
-if {[info exists trigpos_override]} { set trigpos $trigpos_override }
+# The overrides are written against a 4096-deep core; scale them to the one in
+# the bitstream (1024 once the bus history took the BRAM), keeping the same
+# fraction of history.
+if {[info exists trigpos_override]} { set trigpos [expr {$trigpos_override * $depth / 4096}] }
 set_property CONTROL.TRIGGER_POSITION $trigpos $ila
 puts "== trigger position $trigpos of $depth =="
 

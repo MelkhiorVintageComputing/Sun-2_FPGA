@@ -493,6 +493,22 @@ if {$ila == 1} {
     synth_ip [get_ips sun2_ila]
     puts "== ILA fitted on the MMU debug bus =="
 
+    # The bus history, a second ILA core; see syn/generate_ip.tcl.
+    set busxci $ipdir/sun2_busila/sun2_busila.xci
+    if {![file exists $busxci]} {
+        puts "ERROR: the bus-history ILA has not been generated. Run:"
+        puts "    make -C syn ip-ila BOARD=$board"
+        exit 1
+    }
+    read_ip $busxci
+    if {[llength [get_ips sun2_busila]] == 0} {
+        puts "ERROR: sun2_busila.xci did not load"
+        exit 1
+    }
+    file delete -force $ipdir/sun2_busila/sun2_busila.dcp
+    synth_ip [get_ips sun2_busila]
+    puts "== bus-history ILA fitted =="
+
     # The VIO rides with the ILA: both are the debug build, and a counter that
     # has to be read after the run is the half an ILA cannot do.
     set vioxci $ipdir/sun2_vio/sun2_vio.xci

@@ -148,7 +148,7 @@ create_ip -name ila -vendor xilinx.com -library ip \
 set_property CONFIG.C_NUM_OF_PROBES {18} [get_ips sun2_ila]
 
 set_property -dict [list \
-    CONFIG.C_DATA_DEPTH        {4096} \
+    CONFIG.C_DATA_DEPTH        {1024} \
     CONFIG.C_INPUT_PIPE_STAGES {2} \
     CONFIG.C_EN_STRG_QUAL      {1} \
     CONFIG.C_ADV_TRIGGER       {false} \
@@ -264,6 +264,61 @@ generate_target all [get_ips sun2_vio]
 puts "== sun2_vio: 49 input probes, 1 output probe (throttle) =="
 
 generate_target {instantiation_template synthesis simulation} [get_ips sun2_ila]
+
+# ---------------------------------------------------------------------------
+# The bus history: every value on the 68010 bus *and* on the memory side of
+# the bridge, as deep as the device allows, for the question a write-side
+# capture could not answer -- when the master reads a wrong word, was that
+# value anywhere on the bus, or in a DDR3 word the CPU never sees half of,
+# in the moments before?
+#
+# A second core rather than more probes on sun2_ila, so every capture mode that
+# indexes sun2_ila's ports keeps working.  The BRAM comes from sun2_ila, cut
+# from 4096 to 1024 samples: the capture machine sat at 107.5 of 135 tiles with
+# sun2_ila at 4096 x 190 bits, and 8192 x 135 bits needs about 30.
+#
+# Probe 12 is a change strobe computed in wukong_top: high on any clock whose
+# sampled value differs from the clock before.  Used as the storage qualifier
+# it keeps every distinct bus state and drops the idle clocks in between, which
+# stretches 8192 samples over several times the 410 us they cover at 20 MHz
+# otherwise.  Unqualified, the capture is literally every clock.
+#
+# Widths must match the named wires in boards/Wukong/wukong_top.sv.
+file delete -force $ipdir/sun2_busila
+create_ip -name ila -vendor xilinx.com -library ip \
+          -module_name sun2_busila -dir $ipdir
+set_property CONFIG.C_NUM_OF_PROBES {13} [get_ips sun2_busila]
+set_property -dict [list \
+    CONFIG.C_DATA_DEPTH        {8192} \
+    CONFIG.C_INPUT_PIPE_STAGES {2} \
+    CONFIG.C_EN_STRG_QUAL      {1} \
+    CONFIG.C_ADV_TRIGGER       {false} \
+    CONFIG.C_TRIGOUT_EN        {false} \
+    CONFIG.C_TRIGIN_EN         {false} \
+    CONFIG.ALL_PROBE_SAME_MU_CNT {2} \
+    CONFIG.C_PROBE0_WIDTH  {23} \
+    CONFIG.C_PROBE1_WIDTH  {3} \
+    CONFIG.C_PROBE2_WIDTH  {6} \
+    CONFIG.C_PROBE3_WIDTH  {4} \
+    CONFIG.C_PROBE4_WIDTH  {16} \
+    CONFIG.C_PROBE5_WIDTH  {1} \
+    CONFIG.C_PROBE6_WIDTH  {12} \
+    CONFIG.C_PROBE7_WIDTH  {32} \
+    CONFIG.C_PROBE8_WIDTH  {8} \
+    CONFIG.C_PROBE9_WIDTH  {22} \
+    CONFIG.C_PROBE10_WIDTH {1} \
+    CONFIG.C_PROBE11_WIDTH {6} \
+    CONFIG.C_PROBE12_WIDTH {1} \
+] [get_ips sun2_busila]
+set got  [get_property CONFIG.C_NUM_OF_PROBES [get_ips sun2_busila]]
+set gotd [get_property CONFIG.C_DATA_DEPTH    [get_ips sun2_busila]]
+if {$got != 13 || $gotd != 8192} {
+    puts "ERROR: sun2_busila has $got probes and depth $gotd, not 13 and 8192 --"
+    puts "       the configuration was rejected."
+    exit 1
+}
+generate_target {instantiation_template synthesis simulation} [get_ips sun2_busila]
+puts "== sun2_busila: $got probes, depth $gotd =="
 
 puts "== done; generated under $ipdir/sun2_ila =="
 
