@@ -178,7 +178,6 @@ module sun2_ethernet #(
    // 82586 can reach -- and ties the rest low.
    // Tied off: the experiment throttles the disk's master only.
    sun2_dvma dvma (
-      .THR_MASK(8'd0), .THR_RAND(1'b0),
        .CLK(CLK),
        .RESET(RESET),
 

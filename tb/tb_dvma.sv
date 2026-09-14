@@ -32,9 +32,6 @@ module tb_dvma;
    // Declared here rather than beside the memory model, because the always
    // blocks that police arbitration sit above it and count into them.
    int fail = 0, checks = 0;
-   // Free-running, for the throttle test: it measures rate, so it needs a clock.
-   int unsigned cyc = 0;
-   always @(posedge clk) cyc <= cyc + 1;
 
    // ------------------------------------------------------------------
    // Wishbone side
@@ -65,14 +62,7 @@ module tb_dvma;
    reg         EN_DVMA = 1'b1, ether_reset = 1'b0;
    wire        dvma_err;
 
-   // Driven by the throttle test at the end; zero for every other check,
-   // so nothing above this line changes behaviour.
-   reg [7:0] thr_mask = 8'd0;
-   reg       thr_rand = 1'b0;
-
    sun2_dvma dut(.CLK(clk), .RESET(reset),
-		 // throttle off: this test is about the 68010 protocol, not the knob
-		 .THR_MASK(thr_mask), .THR_RAND(thr_rand),
                  .wb_cyc_i(wb_cyc), .wb_stb_i(wb_stb), .wb_we_i(wb_we),
                  .wb_sel_i(wb_sel), .wb_adr_i(wb_adr), .wb_dat_i(wb_dat_w),
                  .wb_dat_o(wb_dat_r), .wb_ack_o(wb_ack), .wb_err_o(wb_err),
@@ -798,67 +788,6 @@ module tb_dvma;
             fail++;
          end
          wait_states = 0;
-      end
-
-      // --- the master-traffic throttle -------------------------------
-      // This knob exists for one experiment: does the corruption rate move
-      // when the *only* thing changed is how often the master asks for
-      // memory?  A knob that reaches no logic would answer "no" for the
-      // wrong reason, and this project has shipped three of those, so the
-      // knob is measured here rather than trusted.
-      //
-      // Timed over identical traffic: same addresses, same SELs, same
-      // number of accesses.  Only the gap changes.
-      begin : throttle_test
-         int unsigned t0, t_off, t_fixed, t_rand;
-         int unsigned n;
-         n = 24;
-
-         thr_mask = 8'd0;  thr_rand = 1'b0;
-         @(posedge clk); t0 = cyc;
-         for (i = 0; i < n; i++) wb_access(1'b0, 22'h020 + i[21:0], 4'b1111, 32'h0, rd, err);
-         t_off = cyc - t0;
-
-         thr_mask = 8'd31; thr_rand = 1'b0;   // fixed gap of 15 clocks
-         @(posedge clk); t0 = cyc;
-         for (i = 0; i < n; i++) wb_access(1'b0, 22'h020 + i[21:0], 4'b1111, 32'h0, rd, err);
-         t_fixed = cyc - t0;
-
-         thr_mask = 8'd31; thr_rand = 1'b1;   // uniform [0,31], same mean
-         @(posedge clk); t0 = cyc;
-         for (i = 0; i < n; i++) wb_access(1'b0, 22'h020 + i[21:0], 4'b1111, 32'h0, rd, err);
-         t_rand = cyc - t0;
-
-         thr_mask = 8'd0;  thr_rand = 1'b0;
-
-         $display("   throttle: off=%0d fixed(15)=%0d rand(mean 15.5)=%0d clocks for %0d accesses",
-                  t_off, t_fixed, t_rand, n);
-
-         // The knob must slow things down, by about the gap per access.
-         checks++;
-         if (!(t_fixed > t_off + (n*10))) begin
-            $display("FAIL: throttle: fixed gap did not slow the master (%0d vs %0d)",
-                     t_fixed, t_off); fail++;
-         end
-         checks++;
-         if (!(t_rand > t_off + (n*10))) begin
-            $display("FAIL: throttle: random gap did not slow the master (%0d vs %0d)",
-                     t_rand, t_off); fail++;
-         end
-         // ... and the two modes must have comparable means, which is the
-         // property the alignment-vs-rate comparison rests on.  Allow a wide
-         // band: 24 samples of a uniform [0,31] is a noisy mean.
-         checks++;
-         if (!((t_rand*10 > t_fixed*6) && (t_rand*6 < t_fixed*10))) begin
-            $display("FAIL: throttle: fixed %0d and random %0d means too far apart",
-                     t_fixed, t_rand); fail++;
-         end
-         // Data must still be correct with the throttle in.
-         thr_mask = 8'd15; thr_rand = 1'b0;
-         wb_access(1'b1, 22'h030, 4'b1111, 32'h89ABCDEF, rd, err);
-         wb_access(1'b0, 22'h030, 4'b1111, 32'h0, rd, err);
-         expect_word(rd, 32'h89ABCDEF, "throttled access still moves the right data");
-         thr_mask = 8'd0;
       end
 
       $display("%0d checks, %0d bus cycles", checks, n_cycles);

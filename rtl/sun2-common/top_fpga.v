@@ -6,11 +6,6 @@ module top(input         cpu_clk,
 	   input 	 clk40,
 	   input 	 clk4m9152,
 	   input 	 sys_reset,
-	   /* master-traffic throttle: an experiment knob, 0 = off.  See the
-	      note on the ports of sun2_dvma.  Wired to the disk's DVMA only;
-	      the Ethernet's is tied off so the experiment moves one thing. */
-	   input [7:0] 	 dvma_thr_mask,
-	   input 	 dvma_thr_rand,
 	   /* serial */
 	   output 	 tx,
 	   input 	 rx,
@@ -768,7 +763,6 @@ module top(input         cpu_clk,
    assign dvma_dout   = scsi_dvma_active ? scsi_dvma_dout  : eth_dvma_dout;
 
    sun2_dvma scsi_dvma(.CLK(C100),
-		       .THR_MASK(dvma_thr_mask), .THR_RAND(dvma_thr_rand),
 		       .RESET(~P_RESET_n),
 
 		       .wb_cyc_i(scsi_wb_cyc),
@@ -1098,7 +1092,6 @@ module top(input         cpu_clk,
       );
 
    sun2_dvma xy_dvma(.CLK(C100),
-		       .THR_MASK(dvma_thr_mask), .THR_RAND(dvma_thr_rand),
 		     .RESET(machine_reset),   // machine, not a card
 
 		     .wb_cyc_i(xy_wb_cyc),
@@ -1203,7 +1196,6 @@ module top(input         cpu_clk,
       );
 
    sun2_dvma sc_dvma(.CLK(C100),
-		       .THR_MASK(dvma_thr_mask), .THR_RAND(dvma_thr_rand),
 		     // ~P_RESET_n and not machine_reset, so the bridge and the
 		     // card it serves leave reset together.  A DVMA held in a
 		     // different reset from its client can come back mid

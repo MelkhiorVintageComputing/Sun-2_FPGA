@@ -370,13 +370,6 @@ module wukong_top #(
    wire [383:0] clob_n;
    wire [127:0] clob_rec;
 
-   // Master-traffic throttle: bits [7:0] THR_MASK, bit [8] THR_RAND.
-   // **Declared outside the `ifdef on purpose.**  A declaration inside one
-   // becomes an implicit one-bit net when the define is absent -- bit 0 wired,
-   // bits 8..1 dangling, no warning -- the trap that cost five builds on
-   // dvma_probe.  The VIO drives it under ILA=1; the `else ties it off.
-   wire [8:0] thr_src;
-
 `ifdef SUN2_ILA
    // Named wires rather than slices straight into the core, because the
    // Hardware Manager names a probe after the net it is driven from -- and
@@ -475,8 +468,7 @@ module wukong_top #(
        .probe_in45 (cl_ghost),
        .probe_in46 (cl_ghost_dvma),
        .probe_in47 (cl_rec_hit),
-       .probe_in48 (cl_rec_ghost),
-       .probe_out0 (thr_src)
+       .probe_in48 (cl_rec_ghost)
    );
 
    sun2_ila u_ila (
@@ -534,8 +526,6 @@ module wukong_top #(
        .probe11(cl_trig),
        .probe12(bh_chg)
    );
-`else
-   assign thr_src = 9'd0;   // no VIO, no throttle
 `endif
 
    //
@@ -651,10 +641,6 @@ module wukong_top #(
 `endif
 
    top machine (
-      // Master-traffic throttle, driven from the VIO's one output probe under
-      // ILA=1 and tied off otherwise.  See sun2_dvma's ports.
-      .dvma_thr_mask (thr_src[7:0]),
-      .dvma_thr_rand (thr_src[8]),
        .cpu_clk    (cpu_clk),
        // clk40 is unused inside sun2_fpga -- the only thing that ever read it
        // was the disabled CPU_CLK_MULTIPLE_SERIAL path, and the LiteX build

@@ -45,22 +45,6 @@ module sun2_dvma(input             CLK,
 		 // {wb_adr_i, 2'b00} -- 24 bits, exactly the space the chip can
 		 // reach and exactly what P_A[23:1] wants.
 		 //
-		 //
-		 // Master-traffic throttle.  An experiment knob, not part of the
-		 // machine: THR_MASK = 0 is exactly the behaviour without it.
-		 // The mask sets how long this module refuses to start the next
-		 // Wishbone transaction after finishing one -- fixed at
-		 // THR_MASK>>1 clocks, or uniform over [0, THR_MASK] when
-		 // THR_RAND is set.  **Both modes have the same mean**, which is
-		 // the whole point: a fixed gap and a random gap of equal mean
-		 // differ in the phase relationship between master and CPU
-		 // cycles and in nothing else, so running both separates "rate"
-		 // from "alignment".  Driven from a board-level source register
-		 // so one bitstream covers the whole sweep and placement cannot
-		 // vary between points.
-		 //
-		 input [7:0] 	   THR_MASK,
-		 input 		   THR_RAND,
 
 		 input 		   wb_cyc_i,
 		 input 		   wb_stb_i,
@@ -194,21 +178,6 @@ module sun2_dvma(input             CLK,
    wire 			   lo_needed = |wb_sel_i[1:0];
    wire 			   hi_needed = |wb_sel_i[3:2];
 
-   // The throttle.  thr_ctr counts down to zero and gates the *start* of the
-   // next transaction only; nothing about an access already under way changes,
-   // so the 68010 protocol below is untouched.  Staying longer in S_IDLE is
-   // what the bus-grant fix already does, which is why this is a safe place to
-   // add a wait and the only safe place.
-   reg [7:0] 			   thr_ctr;
-   reg [15:0] 			   thr_lfsr;
-   wire 			   thr_ok   = (thr_ctr == 8'd0);
-   // x^16+x^14+x^13+x^11+1, maximal length, so the random mode never settles
-   // into a short cycle that would alias with the workload.
-   wire 			   thr_fb   = thr_lfsr[15] ^ thr_lfsr[13] ^
-					      thr_lfsr[12] ^ thr_lfsr[10];
-   wire [7:0] 			   thr_load = THR_RAND ? (thr_lfsr[7:0] & THR_MASK)
-					              : (THR_MASK >> 1);
-
    // Bus request.  Two-wire arbitration: hold it for as long as we want the
    // bus, and the Suska core stays in its GRANT state meanwhile.  We keep it
    // across both halves of one Wishbone access rather than re-arbitrating
@@ -296,8 +265,6 @@ module sun2_dvma(input             CLK,
 	     dvma_err <= 1'b0;
 	     adr_lat  <= 22'h0; dat_lat <= 32'h0;
 	     dbg_n_xact <= 32'd0; dbg_n_adr_move <= 32'd0; dbg_n_dat_move <= 32'd0;
-	     thr_ctr  <= 8'd0;
-	     thr_lfsr <= 16'hACE1;   // any non-zero seed
 	  end
 	else
 	  begin
@@ -308,17 +275,10 @@ module sun2_dvma(input             CLK,
 	     if (ether_reset)
 	       dvma_err <= 1'b0;
 
-	     // The LFSR free-runs so the random mode does not correlate with
-	     // where in a transfer we happen to be.  thr_ctr counts down here;
-	     // S_ACK's reload below is a later nonblocking assignment in the
-	     // same block and therefore wins on the clock a transaction ends.
-	     thr_lfsr <= {thr_lfsr[14:0], thr_fb};
-	     if (thr_ctr != 8'd0) thr_ctr <= thr_ctr - 8'd1;
-
 	     // Latched at the moment the request is taken, compared for as long
 	     // as the transaction runs.
 	     if (state == S_IDLE) begin
-		if (wb_cyc_i & wb_stb_i & ~wb_ack_o & ~wb_err_o & thr_ok) begin
+		if (wb_cyc_i & wb_stb_i & ~wb_ack_o & ~wb_err_o) begin
 		   adr_lat    <= wb_adr_i;
 		   dat_lat    <= wb_dat_i;
 		   dbg_n_xact <= dbg_n_xact + 32'd1;
@@ -331,7 +291,7 @@ module sun2_dvma(input             CLK,
 
 	     case (state)
 	       S_IDLE:
-		 if (wb_cyc_i & wb_stb_i & ~wb_ack_o & ~wb_err_o & thr_ok)
+		 if (wb_cyc_i & wb_stb_i & ~wb_ack_o & ~wb_err_o)
 		   begin
 		      if (~EN_DVMA | dvma_err)
 			begin
@@ -456,7 +416,6 @@ module sun2_dvma(input             CLK,
 		    wb_err_o <= err_cyc;
 		    rd_lo    <= 16'h0;
 		    rd_hi    <= 16'h0;
-		    thr_ctr  <= thr_load;
 		    state    <= S_IDLE;
 		 end
 

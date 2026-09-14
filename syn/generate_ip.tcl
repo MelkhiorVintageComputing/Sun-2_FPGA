@@ -195,18 +195,12 @@ puts "== sun2_ila: $got probes =="
 # 205 us and the fault being counted happens a few times per minute, so no
 # trigger could ever have bridged that -- see the trap in CLAUDE.md.
 #
-# Inputs read counters out; the one output drives the master-traffic throttle
-# in sun2_dvma -- bits [7:0] THR_MASK, bit [8] THR_RAND.  A runtime knob rather
-# than a generic so one bitstream covers a whole sweep: placement has flipped
-# outcomes twice in this tree, and a rebuild per point would confound the sweep
-# with re-placement.  It powers up at 0, which is the machine without it.
+# Inputs only: the counters are read out, and nothing here drives the machine.
 create_ip -name vio -vendor xilinx.com -library ip -module_name sun2_vio \
     -dir $ipdir -force
 set_property -dict [list \
     CONFIG.C_NUM_PROBE_IN  {49} \
-    CONFIG.C_NUM_PROBE_OUT {1} \
-    CONFIG.C_PROBE_OUT0_WIDTH {9} \
-    CONFIG.C_PROBE_OUT0_INIT_VAL {0x000} \
+    CONFIG.C_NUM_PROBE_OUT {0} \
     CONFIG.C_PROBE_IN0_WIDTH {32} \
     CONFIG.C_PROBE_IN1_WIDTH {32} \
     CONFIG.C_PROBE_IN2_WIDTH {32} \
@@ -261,7 +255,7 @@ set_property -dict [list \
 
 ] [get_ips sun2_vio]
 generate_target all [get_ips sun2_vio]
-puts "== sun2_vio: 49 input probes, 1 output probe (throttle) =="
+puts "== sun2_vio: 49 input probes =="
 
 generate_target {instantiation_template synthesis simulation} [get_ips sun2_ila]
 
