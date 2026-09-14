@@ -1255,6 +1255,113 @@ module tb_sun2 #(
       end
    end
 
+   // -----------------------------------------------------------------------
+   // The same check, sampled from the machine's own signals.
+   // -----------------------------------------------------------------------
+   // dbg_bus exists only to be looked at, and it is going away.  This is the
+   // identical check driven by hierarchical name instead, running *beside* the
+   // dbg_bus copy so the two can be compared inside one simulation rather than
+   // across a commit boundary -- which is much the stronger evidence, and it
+   // puts the risky edit on a commit where no RTL moved.  When dbg_bus goes,
+   // the copy above goes with it and this one keeps the numbers.
+   //
+   // Every name here is already proved by the packing check above, which
+   // compares dbg_bus against these same signals on every clock edge.  The
+   // field correspondence is:
+   //   dbg_bus[47]    P_AS_n        [46]     P_RW_n       [0]      MATCH_MEM
+   //   dbg_bus[101]   dvma_active   [17:6]   ma_pmap2devices
+   //   dbg_bus[73:51] P_A[23:1]     [51]     P_A[1]       [89:74]  P_DOUT
+   // so h_pa[0] is P_A[1], the half select, exactly as cyc[51] was.
+   //
+   int h_lw_total = 0, h_lw_split = 0, h_dvma_cycles = 0;
+   int h_mem_rd = 0, h_match_a = 0;
+   int h_dvma_rd = 0, h_dvma_lag = 0, h_dvma_now = 0;
+
+   reg        h_in_cyc = 1'b0, h_dvma_between = 1'b0;
+   reg        h_dvma, h_rw, h_mm;
+   reg [11:0] h_ma;
+   reg [22:0] h_pa;
+   reg [15:0] h_dat;
+   reg [22:0] h_last_cpu_a = 23'h0;
+   reg        h_last_cpu_rd = 1'b0;
+   reg [11:0] h_prev_ma; reg [22:0] h_prev_pa; reg h_prev_valid = 1'b0;
+   reg [15:0] h_prev_exp;
+
+   always @(posedge dut.C100) begin
+      if (!dut.sun2.P_AS_n) begin
+         h_in_cyc <= 1'b1;
+         h_dvma   <= dut.dvma_active;
+         h_rw     <= dut.sun2.P_RW_n;
+         h_mm     <= dut.sun2.MATCH_MEM;
+         h_ma     <= dut.sun2.ma_pmap2devices;
+         h_pa     <= dut.sun2.P_A;
+         h_dat    <= dut.sun2.P_DOUT;
+      end else if (h_in_cyc) begin
+         h_in_cyc <= 1'b0;
+         if (h_dvma) begin
+            h_dvma_cycles++;
+            h_dvma_between <= 1'b1;
+            if (h_rw && h_mm && !$isunknown(h_ma)) begin
+               logic [31:0] dw;
+               dw = mem_word(h_ma, h_pa);
+               if (h_prev_valid && !$isunknown(h_dat)) begin
+                  logic [15:0] own;
+                  own = h_pa[0] ? {dw[31:24], dw[23:16]} : {dw[15:8], dw[7:0]};
+                  h_dvma_rd++;
+                  if (h_dat === h_prev_exp) h_dvma_lag++;
+                  if (h_dat === own)        h_dvma_now++;
+               end
+               h_prev_ma    <= h_ma;
+               h_prev_pa    <= h_pa;
+               h_prev_exp   <= h_pa[0] ? {dw[31:24], dw[23:16]} : {dw[15:8], dw[7:0]};
+               h_prev_valid <= 1'b1;
+            end
+         end else begin
+            if (h_rw && h_mm && !$isunknown(h_ma) && !$isunknown(h_dat)) begin
+               logic [31:0] w;
+               logic [15:0] wa;
+               w  = mem_word(h_ma, h_pa);
+               wa = h_pa[0] ? {w[31:24], w[23:16]} : {w[15:8], w[7:0]};
+               if (h_prev_valid) begin
+                  h_mem_rd++;
+                  if (h_dat === h_prev_exp) h_match_a++;
+               end
+               h_prev_ma    <= h_ma;
+               h_prev_pa    <= h_pa;
+               h_prev_exp   <= wa;
+               h_prev_valid <= 1'b1;
+            end
+
+            if (h_last_cpu_rd && h_rw && h_pa == h_last_cpu_a + 23'd1) begin
+               h_lw_total++;
+               if (h_dvma_between) h_lw_split++;
+            end
+            h_last_cpu_a   <= h_pa;
+            h_last_cpu_rd  <= h_rw;
+            h_dvma_between <= 1'b0;
+         end
+      end
+   end
+
+   // The two must agree counter for counter.  A disagreement is a line in this
+   // run's own output, not a regression discovered six commits later.
+   final begin
+      int bad;
+      bad = 0;
+      if (h_lw_total    != lw_total)    begin bad++; $display("CHECKER MISMATCH lw_total    %0d vs %0d", h_lw_total, lw_total); end
+      if (h_lw_split    != lw_split)    begin bad++; $display("CHECKER MISMATCH lw_split    %0d vs %0d", h_lw_split, lw_split); end
+      if (h_dvma_cycles != dvma_cycles) begin bad++; $display("CHECKER MISMATCH dvma_cycles %0d vs %0d", h_dvma_cycles, dvma_cycles); end
+      if (h_mem_rd      != mem_rd)      begin bad++; $display("CHECKER MISMATCH mem_rd      %0d vs %0d", h_mem_rd, mem_rd); end
+      if (h_match_a     != match_a)     begin bad++; $display("CHECKER MISMATCH match_a     %0d vs %0d", h_match_a, match_a); end
+      if (h_dvma_rd     != dvma_rd)     begin bad++; $display("CHECKER MISMATCH dvma_rd     %0d vs %0d", h_dvma_rd, dvma_rd); end
+      if (h_dvma_now    != dvma_now)    begin bad++; $display("CHECKER MISMATCH dvma_now    %0d vs %0d", h_dvma_now, dvma_now); end
+      if (h_dvma_lag    != dvma_lag)    begin bad++; $display("CHECKER MISMATCH dvma_lag    %0d vs %0d", h_dvma_lag, dvma_lag); end
+      if (bad == 0)
+        $display("memory checker: hierarchical sampling agrees with dbg_bus on all 8 counters");
+      else
+        $display("memory checker: %0d counters DISAGREE -- the hierarchical rewrite is wrong", bad);
+   end
+
    task automatic lw_report();
       $display("longword reads: %0d, of which %0d split by DVMA (%0d master cycles seen)",
                lw_total, lw_split, dvma_cycles);
