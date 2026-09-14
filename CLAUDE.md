@@ -2342,8 +2342,28 @@ it were all of it. The probe script says so itself ("the bridge is loading, so
 the master's capture strobe is dead"). It is live on a MultiBus build, where
 `xy_dvma` or `sc_dvma` drives it.
 
-*Left open.* The DECA's other two bitstreams -- MultiBus+XY450 at 1024 MiB and
-MultiBus+SCSI at 512 MiB, both with `BLKTRACE=1` -- are built and not yet run.
+**MultiBus+SCSI at 512 MiB is clean too, with the master-capture check live.**
+That cell gave 83 and then 102 unfixed; fixed it gives **0 of 8,388,608**, and
+because this is a MultiBus build `sc_dvma` drives the probe the VME build ties
+off -- 41,984 captures, **wrong words 0**, against the 88 it read on the
+unfixed 90-word run. The block seam went from 1 sector to 32,769 with its
+byte count unmoved at 506, and write verify, `unexpected`, `wrong lane` and
+the double read are all 0.
+
+**Its filesystem needed `fsck -y` first, and the damage was metadata.** The
+512 MiB copy had been written by corrupting bitstreams for weeks; its first
+fixed boot stopped at `PARTIALLY ALLOCATED INODE I=55418` /
+`UNEXPECTED INCONSISTENCY; RUN fsck MANUALLY` and dropped to single user with
+root read-only. `fsck -y` cleared the inode, and the machine then booted
+multi-user with `/patwr` intact at its reference checksum. That is the same
+shape as the Wukong's 1024 MiB copy, now seen on the other board: **an unfixed
+bitstream damages the filesystem's structure, not only file contents**, so a
+copy is not a usable instrument until it has been checked or rewritten. Reboot
+with `-n` after repairing a mounted root, or the stale in-core superblock is
+written back over the repair.
+
+*Left open.* The DECA's MultiBus+XY450 bitstream at 1024 MiB is built and not
+yet run.
 `sun2_clobber` did not elaborate under Quartus at all until
 `VERILOG_CONSTANT_LOOP_LIMIT` was raised; see the trap. Filesystems written by unfixed bitstreams can carry silent damage in
 metadata as well as data -- the 1024 MiB copy failed its boot fsck with an
