@@ -2362,8 +2362,33 @@ copy is not a usable instrument until it has been checked or rewritten. Reboot
 with `-n` after repairing a mounted root, or the stale in-core superblock is
 written back over the repair.
 
-*Left open.* The DECA's MultiBus+XY450 bitstream at 1024 MiB is built and not
-yet run.
+**And MultiBus+XY450 at 1024 MiB closes the set: 0 of 8,388,608.** That is the
+densest master this project has -- four bytes per DVMA transaction, back to
+back, the configuration that produced the highest rates anywhere in this
+investigation. Block seam 2 -> 32,770 sectors with its byte count unmoved at
+1010, master capture `wrong words` 0, write verify, `unexpected`, `wrong lane`
+and double read all 0.
+
+**The machine also compiled its own instrument, which is the older failure
+re-run.** `/patwr` was missing from that root and the build has no network, so
+`tools/patwr.c` went over the console and `cc -O` built it on the machine:
+no diagnostics, and the result is **byte-identical to the reference binary**
+(`sum` 52827, 24576 bytes). That is `cpp`, `ccom`, `as` and `ld` plus dozens of
+short-lived processes paging off the disk under test -- the workload that used
+to give `ld: dhrystone.o: premature EOF` and an intermittent SIGILL.
+
+So the fix is measured clean on **five cells across both boards**:
+
+| board | machine + controller | offset | unfixed | fixed |
+|---|---|---|---|---|
+| Wukong | MultiBus + XY450, netbooted | 1024 MiB | 140, 149, 177 | **0** |
+| Wukong | MultiBus + XY450, disk-booted | 2048 MiB | -- | **0** |
+| DECA | VME + SCSI | 1536 MiB | 120 | **0** |
+| DECA | MultiBus + SCSI | 512 MiB | 83, 102 | **0** |
+| DECA | MultiBus + XY450 | 1024 MiB | -- | **0** |
+
+Two FPGA vendors, two toolchains, two DDR3 controllers, two machines and two
+disk controllers, on one RTL change.
 `sun2_clobber` did not elaborate under Quartus at all until
 `VERILOG_CONSTANT_LOOP_LIMIT` was raised; see the trap. Filesystems written by unfixed bitstreams can carry silent damage in
 metadata as well as data -- the 1024 MiB copy failed its boot fsck with an
@@ -2513,6 +2538,15 @@ device decode, and it is a different `sun2_dvma` instance. So this is not
 literally the same logic exercised two ways; it is the same *shared modules*
 exercised by a different master, which is weaker but still decisive at a rate
 ratio above 700 to 1.
+
+**Measured 2026-09-14: 500 B/s straight loses 8% of the file, a line at a time
+at 200 B/s loses none.** Sending `patwr.c` (14,799 bytes) into `cat > file` at
+500 B/s delivered 13,545 bytes with the tty ringing its bell throughout -- the
+input queue overflowing, because `cat` blocks on the SD card while bytes keep
+arriving and the link has no flow control. Sending one line at a time, pausing
+`len/200 + 0.08` seconds after each, delivered all 14,799 with `sum` matching
+the host. Pause per line rather than per byte: the point is to let the queue
+drain after the write blocks, not to average a slower rate.
 
 **A third caution, about the instrument itself.** Transferring the source over
 the 9600-baud console dropped a run of text on the first attempt and the compile
