@@ -89,7 +89,6 @@ module tb_orphan_ack;
        .dbg_wb_n_load (), .dbg_wb_n_adrbad (), .dbg_wb_n_outpat (), .dbg_wb_n_outbad (),
        .dbg_wb_dout (), .dbg_match_mem (),
        .dbg_wb_n_blk (), .dbg_wb_n_blk_bad (), .dbg_wb_blk_off (), .dbg_wb_blk_adr (),
-       .dbg_clob_dvma (1'b0), .dbg_clob_trig (), .dbg_clob_n (), .dbg_clob_rec (),
        .wb_cyc_o (wb_cyc), .wb_stb_o (wb_stb), .wb_adr_o (wb_adr),
        .wb_dat_o (wb_dat_m2s), .wb_sel_o (wb_sel), .wb_we_o (wb_we),
        .wb_dat_i (wb_dat_s2m), .wb_ack_i (wb_ack)

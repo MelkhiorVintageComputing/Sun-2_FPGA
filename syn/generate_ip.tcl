@@ -145,7 +145,7 @@ create_ip -name ila -vendor xilinx.com -library ip \
 # validated as a whole, so naming C_PROBE8_WIDTH while the core still has eight
 # probes invalidates the entire dict -- silently: the IP keeps its old
 # configuration and only the generated .xci shows it.
-set_property CONFIG.C_NUM_OF_PROBES {18} [get_ips sun2_ila]
+set_property CONFIG.C_NUM_OF_PROBES {17} [get_ips sun2_ila]
 
 set_property -dict [list \
     CONFIG.C_DATA_DEPTH        {1024} \
@@ -172,7 +172,6 @@ set_property -dict [list \
     CONFIG.C_PROBE14_WIDTH {32} \
     CONFIG.C_PROBE15_WIDTH {32} \
     CONFIG.C_PROBE16_WIDTH {1} \
-    CONFIG.C_PROBE17_WIDTH {6} \
 ] [get_ips sun2_ila]
 
 # And check it took.  The properties above are validated as a whole and can be
@@ -180,8 +179,8 @@ set_property -dict [list \
 # that setting it worked -- the failure mode is a bitstream that cannot be
 # built and a message that points at the wrong file.
 set got [get_property CONFIG.C_NUM_OF_PROBES [get_ips sun2_ila]]
-if {$got != 18} {
-    puts "ERROR: sun2_ila has $got probes, not the 18 asked for -- the"
+if {$got != 17} {
+    puts "ERROR: sun2_ila has $got probes, not the 17 asked for -- the"
     puts "       configuration was rejected.  wukong_top.sv drives probe17,"
     puts "       so synthesis would fail on a stale stub instead."
     exit 1
@@ -281,7 +280,7 @@ generate_target {instantiation_template synthesis simulation} [get_ips sun2_ila]
 file delete -force $ipdir/sun2_busila
 create_ip -name ila -vendor xilinx.com -library ip \
           -module_name sun2_busila -dir $ipdir
-set_property CONFIG.C_NUM_OF_PROBES {13} [get_ips sun2_busila]
+set_property CONFIG.C_NUM_OF_PROBES {12} [get_ips sun2_busila]
 set_property -dict [list \
     CONFIG.C_DATA_DEPTH        {8192} \
     CONFIG.C_INPUT_PIPE_STAGES {2} \
@@ -301,13 +300,12 @@ set_property -dict [list \
     CONFIG.C_PROBE8_WIDTH  {8} \
     CONFIG.C_PROBE9_WIDTH  {22} \
     CONFIG.C_PROBE10_WIDTH {1} \
-    CONFIG.C_PROBE11_WIDTH {6} \
-    CONFIG.C_PROBE12_WIDTH {1} \
+    CONFIG.C_PROBE11_WIDTH {1} \
 ] [get_ips sun2_busila]
 set got  [get_property CONFIG.C_NUM_OF_PROBES [get_ips sun2_busila]]
 set gotd [get_property CONFIG.C_DATA_DEPTH    [get_ips sun2_busila]]
-if {$got != 13 || $gotd != 8192} {
-    puts "ERROR: sun2_busila has $got probes and depth $gotd, not 13 and 8192 --"
+if {$got != 12 || $gotd != 8192} {
+    puts "ERROR: sun2_busila has $got probes and depth $gotd, not 12 and 8192 --"
     puts "       the configuration was rejected."
     exit 1
 }

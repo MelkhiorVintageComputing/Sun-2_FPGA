@@ -337,7 +337,6 @@ bridge)
 	# memory cycle immediately after another with no fetch between them.  See
 	# the header of tb/tb_wb_bridge.sv for why that is the only case that can
 	# leave `done' set across a cycle boundary.
-	step xvlog "$top/rtl/sun2-common/sun2_clobber.v"
 	step xvlog "$top/rtl/sun2-common/sun2_wishbone_bridge.v"
 	step xvlog --sv "$top/tb/tb_wb_bridge.sv"
 	step xelab -debug off --timescale 1ns/1ps work.tb_wb_bridge -s bridge_sim
@@ -362,7 +361,7 @@ orphan)
 		"$top/rtl/sun2-vme/sun2_phy_status.v" "$top/rtl/sun2-common/sun2_fb_ctl.v" \
 		"$top/rtl/sun2-common/ttl_am9513.v" "$top/rtl/sun2-common/mm58167.v" \
 		"$top/rtl/sun2-common/ttl_74F151.v" "$top/rtl/sun2-common/ttl_74LS148.v" \
-		"$top/rtl/sun2-common/sun2_wishbone_bridge.v" "$top/rtl/sun2-common/sun2_clobber.v" \
+		"$top/rtl/sun2-common/sun2_wishbone_bridge.v" \
 		"$top/rtl/sun2-common/tolog.v"
 	step xvlog --sv "${odefs[@]}" -i "$top/rtl/sun2-common" -i "$top/build/rom" \
 		"$top/build/inputs/z8530_scc/z8530_scc.sv" \

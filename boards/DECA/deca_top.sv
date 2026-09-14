@@ -316,11 +316,6 @@ module deca_top #(
    wire [23:0] xy_dva_adr;
    wire [31:0] dv_n_xact, dv_n_adr_move, dv_n_dat_move;
    wire        dv_arrived_bad;
-   // sun2_clobber's write history.  Read on the Wukong; left for the tools to
-   // prune here, like the counters above.
-   wire [5:0]   clob_trig;
-   wire [383:0] clob_n;
-   wire [127:0] clob_rec;
 
    // The DDR3 adapter's read accounting, appended *below* dvma_probe in the
    // ISSP word so every existing offset in tools/deca_dvmaprobe.tcl stays put.
@@ -379,9 +374,6 @@ module deca_top #(
        .dv_n_adr_move  (dv_n_adr_move),
        .dv_n_dat_move  (dv_n_dat_move),
        .dv_arrived_bad (dv_arrived_bad),
-       .clob_trig      (clob_trig),
-       .clob_n         (clob_n),
-       .clob_rec       (clob_rec),
 
        .eth_crs_stuck  (eth_crs_stuck),
        .fb_video_en    (fb_video_en),

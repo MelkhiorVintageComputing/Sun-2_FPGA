@@ -93,7 +93,7 @@ module tb_wb_bridge;
        .SET_ENABLE (SET_ENABLE), .RESET_n (RESET_n), .CLK (CLK),
        .P_ADR_IN (P_ADR_IN), .P_DATA_IN (P_DATA_IN), .P_DATA_OUT (P_DATA_OUT),
        .P_RW_n (P_RW_n), .EN_LBYTE (EN_LBYTE), .EN_UBYTE (EN_UBYTE),
-       .FB_PAGE (6'h0), .DVMA (1'b0),
+       .FB_PAGE (6'h0),
        .MATCH_MEM (MATCH_MEM), .MATCH_FB (MATCH_FB), .W_ACK (W_ACK),
        .wb_cyc_o (wb_cyc_o), .wb_stb_o (wb_stb_o), .wb_adr_o (wb_adr_o),
        .wb_dat_o (wb_dat_o), .wb_sel_o (wb_sel_o), .wb_we_o (wb_we_o),

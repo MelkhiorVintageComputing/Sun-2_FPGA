@@ -154,7 +154,6 @@ xvlog --work sun2 \
 	"$top/rtl/sun2-common/ttl_74F151.v" \
 	"$top/rtl/sun2-common/ttl_74LS148.v" \
 	"$top/rtl/sun2-common/sun2_wishbone_bridge.v" \
-	"$top/rtl/sun2-common/sun2_clobber.v" \
 	"$top/rtl/sun2-common/sun2_dvma_probe.v" \
 	"$top/rtl/sun2-common/tolog.v"
 

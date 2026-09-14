@@ -169,14 +169,6 @@ module sun2_fpga(input         cpu_clk,
 		 output [31:0]   dbg_wb_n_blk_bad,
 		 output [8:0]    dbg_wb_blk_off,
 		 output [22:0]   dbg_wb_blk_adr,
-		 // sun2_clobber, inside the bridge: one bit of write history per
-		 // 512-byte block.  dbg_clob_dvma is the same bit as
-		 // dbg_dvma_active, deliberately outside the SUN2_ILA guard -- see
-		 // dbg_wb_load above for what a guarded debug port costs.
-		 input           dbg_clob_dvma,
-		 output [5:0]    dbg_clob_trig,
-		 output [383:0]  dbg_clob_n,
-		 output [127:0]  dbg_clob_rec,
 		 /* wishbone */
 		 output        wb_cyc_o,
 		 output        wb_stb_o,
@@ -1243,10 +1235,6 @@ module sun2_fpga(input         cpu_clk,
 							   .dbg_n_blk_bad(dbg_wb_n_blk_bad),
 							   .dbg_blk_off(dbg_wb_blk_off),
 							   .dbg_blk_adr(dbg_wb_blk_adr),
-							   .DVMA(dbg_clob_dvma),
-							   .dbg_clob_trig(dbg_clob_trig),
-							   .dbg_clob_n(dbg_clob_n),
-							   .dbg_clob_rec(dbg_clob_rec),
 				// Power-up state, not reset state.  ENABLE is armed
 				// when the monitor writes LED code 0x8F and gates
 				// wb_cyc/wb_stb, so while it is clear main memory
