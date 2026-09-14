@@ -2314,12 +2314,38 @@ means the block was handed on rather than damaged. And `INCOMPLETE 1` in 16,849
 blocks, first miss at offset 0xff, is the boundary artefact this file already
 records: a block closed early because the kernel interleaved, not a lost write.
 
-*Left open.* The DECA shares the RTL. It is **built** with the fix now -- three
-bitstreams, VME+SCSI at 1536 MiB, MultiBus+XY450 at 1024 MiB and MultiBus+SCSI
-at 512 MiB, all with `BLKTRACE=1` so `WRITE_VERIFY` and the ISSP probes are
-available -- and none of them has been on hardware yet. `sun2_clobber` did not
-elaborate under Quartus at all until `VERILOG_CONSTANT_LOOP_LIMIT` was raised;
-see the trap. Filesystems written by unfixed bitstreams can carry silent damage in
+*And it crosses vendors: the DECA is clean too.* The VME+SCSI build at 1536
+MiB, on the filesystem that gave **120 of 8,388,608** unfixed, on a MAX 10 with
+BrianHG's controller instead of Artix-7 and MIG:
+
+```
+  patwr                      0 of 8,388,608 words wrong
+  block seam, sectors seen   2 -> 32,770     (+32,768, exactly the file)
+  block seam, bytes wrong    1010 -> 1010    (+0)
+  write verify 0             adapter: unexpected 0, wrong lane 0
+```
+
+The seam figure is the strong one, because it is measured **in flight inside
+the FPGA** at the last point before `blk_sd` rather than inferred from a
+checksum after a reboot: every one of the 32,768 pattern sectors reached the
+card interface intact. The 1010 is the boot's own traffic false-arming the
+check before the test started -- the arming is gated on a sector's first two
+bytes -- and it did not move, which is why these counters are read as deltas.
+`fsck` also passed without repair on a copy written by corrupting bitstreams,
+where the Wukong's 1024 MiB copy had needed `fsck -y`.
+
+**The master-capture check reads 0 on a VME build because it is tied off, not
+because it saw nothing.** `top_fpga.v:276` leaves `dvma_latch` at 0 under
+`SUN2_VME` deliberately -- a VME machine has two masters behind an arbiter, and
+tying the probe to one of them would report a fraction of the traffic as though
+it were all of it. The probe script says so itself ("the bridge is loading, so
+the master's capture strobe is dead"). It is live on a MultiBus build, where
+`xy_dvma` or `sc_dvma` drives it.
+
+*Left open.* The DECA's other two bitstreams -- MultiBus+XY450 at 1024 MiB and
+MultiBus+SCSI at 512 MiB, both with `BLKTRACE=1` -- are built and not yet run.
+`sun2_clobber` did not elaborate under Quartus at all until
+`VERILOG_CONSTANT_LOOP_LIMIT` was raised; see the trap. Filesystems written by unfixed bitstreams can carry silent damage in
 metadata as well as data -- the 1024 MiB copy failed its boot fsck with an
 unknown inode type on the first fixed boot and needed `fsck -y`; any copy used
 for a pristine source should be checked or rewritten. The fixed Wukong build met
