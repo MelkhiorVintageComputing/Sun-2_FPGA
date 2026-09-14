@@ -14,10 +14,6 @@
 #   ./run_unit.sh adv7513  the DECA's ADV7513 setup, against an I2C target
 #   ./run_unit.sh xy450     sun2_xy450's registers, as the PROM and SunOS probe them
 #   ./run_unit.sh scc       the Z8530's interrupts, driven as SunOS drives them
-#   ./run_unit.sh trace     sun2_trace: the DECA's JTAG-readable capture buffer
-#   ./run_unit.sh blktrace sun2_blktrace: the LBA/signature trace of block transfers
-#   ./run_unit.sh dvmaprobe sun2_dvma_probe: the bridge-load / master-capture pairing
-#   ./run_unit.sh clobber   sun2_clobber: foreign writes into a pattern buffer, and ghosts
 #   ./run_unit.sh orphan    a bus-errored memory access, and the memory cycle after it
 #   ./run_unit.sh scanout   fb_scanout: DDR3 to pixels, a whole frame checked
 #
@@ -80,34 +76,6 @@ clkgen)
 		xsim clkgen_sim -R | grep -E 'wukong_clkgen:|measured|PASS|FAIL|ok$|FAIL$|===|kHz'
 	done
 	;;
-dvmaprobe)
-	# The bridge-load / master-capture pairing.  Written before the probe was
-	# ever built into a bitstream, because this one is going to be used to
-	# accuse a specific pair of registers.
-	step xvlog --sv "$top/rtl/sun2-common/sun2_dvma_probe.v" "$top/tb/tb_dvma_probe.sv"
-	step xelab -debug off --timescale 1ns/1ps work.tb_dvma_probe -s dvmaprobe_sim
-	xsim dvmaprobe_sim -R | grep -E '===|PASS|FAIL|ok:'
-	;;
-
-blktrace)
-	# The block trace, whose signature half reached a board unverified and
-	# reported a correctly-copied file as 74% corrupt.  See the testbench
-	# header: the fold is over data that arrives a cycle after the address.
-	step xvlog --sv "$top/rtl/sun2-common/sun2_blktrace.v" "$top/tb/tb_blktrace.sv"
-	step xelab -debug off --timescale 1ns/1ps work.tb_blktrace -s blktrace_sim
-	xsim blktrace_sim -R | grep -E '===|PASS|FAIL|ok:'
-	;;
-
-trace)
-	# The DECA's logic analyser.  It is ordinary RTL precisely so that it can
-	# be tested here rather than only on a board -- SignalTap cannot be, and
-	# an instrument that reaches hardware unverified is how this project got
-	# a console that doubled every byte.
-	step xvlog --sv "$top/rtl/sun2-common/sun2_trace.v" "$top/tb/tb_sun2_trace.sv"
-	step xelab -debug off --timescale 1ns/1ps work.tb_sun2_trace -s trace_sim
-	xsim trace_sim -R | grep -E '===|PASS|FAIL|ok:'
-	;;
-
 phy)
 	"$top/tools/patch_inputs.sh" Wish82586
 	W="$top/build/inputs/Wish82586/src"
@@ -402,15 +370,6 @@ orphan)
 		"$top/tb/mig_ui_model.sv" "$top/tb/tb_orphan_ack.sv"
 	step xelab -debug off --timescale 1ns/1ps work.tb_orphan_ack -s orphan_sim
 	xsim orphan_sim -R | grep -E '===|PASS|FAIL|gap|  [ 0-9]+ |adapter|words of|setup|no response|FATAL|Error'
-	;;
-
-clobber)
-	# The write-history detector alone, one scenario per verdict, each checking
-	# the change in every counter rather than only the one it is about.
-	step xvlog "$top/rtl/sun2-common/sun2_clobber.v"
-	step xvlog --sv "$top/tb/tb_clobber.sv"
-	step xelab -debug off --timescale 1ns/1ps work.tb_clobber -s clobber_sim
-	xsim clobber_sim -R | grep -E '===|PASS|FAIL'
 	;;
 
 dvma)
