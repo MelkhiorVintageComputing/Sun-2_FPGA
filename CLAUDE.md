@@ -3879,6 +3879,17 @@ wrong and so never sets `pre_ok`.
   years. Synthesis went from 3h 04m to 5m 11s when it was narrowed, because
   Quartus stopped grinding a 16384-way multiplexer into gates.
 
+* **Quartus stops at 5000 iterations of a constant loop, and Vivado says
+  nothing.** `sun2_clobber`'s table is 16384 entries zeroed by an `initial`
+  loop, which is the only way Verilog-2001 has to initialise an array; Quartus
+  refuses it outright -- `Error (10106): loop must terminate within 5000
+  iterations` -- and then cannot elaborate the module that instantiates it. The
+  module had been on the Wukong for three bitstreams before the DECA was rebuilt
+  and met it. `syn/quartus.tcl` sets `VERILOG_CONSTANT_LOOP_LIMIT 65536`: it is
+  the tool's limit on unrolling, not a statement about the design, so raising it
+  is better than writing the initialisation a second way for one vendor. Assume
+  any new array wider than 5000 entries needs it.
+
 * **`$random` in an unguarded `initial` is an error on one vendor and ignored on
   the other.** `ctx_reg.v` and `gen8bit_reg.v` powered up random on purpose --
   neither register has a reset on a real Sun-2 -- and Quartus stops with Error

@@ -435,6 +435,13 @@ set_global_assignment -name ENABLE_BOOT_SEL_PIN        OFF
 # is what rtl/sun2-common/sun2_attr.vh's Quartus arm relies on.
 set_global_assignment -name SYNCHRONIZER_IDENTIFICATION "FORCED IF ASYNCHRONOUS"
 
+# Quartus refuses a constant loop of more than 5000 iterations at elaboration
+# (Error 10106), and sun2_clobber's table is 16384 entries zeroed by an
+# `initial` loop -- which Vivado elaborates without comment.  It is the tool's
+# limit on unrolling, not a statement about the design, so raise it rather than
+# writing the initialisation a second way for one vendor.
+set_global_assignment -name VERILOG_CONSTANT_LOOP_LIMIT 65536
+
 # `include search path -- Vivado's -include_dirs.  build/rom holds the
 # generated boot PROM body, which bootrom.v includes by macro.
 set_global_assignment -name SEARCH_PATH $top/rtl/sun2-common
