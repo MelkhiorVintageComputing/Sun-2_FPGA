@@ -858,7 +858,7 @@ true for one clock, the adapter ran that orphan read, and the next memory cycle
 Found with a bus-history ILA, reproduced by `tb/tb_orphan_ack.sv`, fixed in
 `sun2_fpga.v` by holding the MMU's refusal for the rest of the cycle, and
 measured on the board at **0 of 8,388,608** where the same setup gave 140, 149
-and 177. See "Found and fixed" near the end of this investigation. The history
+and 177, and again at 0 on a machine booted from the filesystem under test. See "Found and fixed" near the end of this investigation. The history
 below is kept because the eliminations in it are real, but several of its
 theories (retention, write visibility, DM pins) are superseded by that result.
 
@@ -2285,8 +2285,41 @@ Wukong and the same 1024 MiB copy:
   iso / lone / PARTIAL     -                     0 / 0 / 0
 ```
 
-*Left open.* The DECA shares the RTL and has not been rebuilt or tested with
-the fix. Filesystems written by unfixed bitstreams can carry silent damage in
+*Confirmed on a machine booted from the filesystem under test.* The run above
+was netbooted, which was deliberate -- it excluded the disk from everything but
+the test file -- and it therefore also excluded the workload most likely to
+provoke the fault, since the orphan request follows a CPU page fault and a
+netbooted machine pages its text over NFS. Repeated on the **same board booted
+from `xy0a`**, a pristine 2048 MiB copy, `fsck` clean, multi-user, with the
+disk carrying root, the binaries and the paging as well as the 16 MiB test
+file:
+
+```
+  patwr                 0 of 8,388,608 words wrong
+  in a run              8,388,608      = the file's halfwords, the control
+  pattern writes       16,847,081
+  ARRIVED BAD / GHOST   0 / 0
+  iso / iso_behind / lone / PARTIAL / collide      0 / 0 / 0 / 0 / 0
+  DISAGREED / OUTSIDE   0 / 0
+  candidates          552, all by the master       INCOMPLETE 1
+```
+
+Two non-zeros, and neither is the fault. **552 candidates, every one the
+master's**, is what a disk-booted machine is supposed to show and the netbooted
+one could not: a candidate is a non-pattern write into a block whose last write
+was the pattern, and here the master really does write filesystem metadata and
+paged-in text into blocks the test file used to hold. They all resolved as
+*reuse* -- iso, iso-behind and lone are zero -- which is the resolution that
+means the block was handed on rather than damaged. And `INCOMPLETE 1` in 16,849
+blocks, first miss at offset 0xff, is the boundary artefact this file already
+records: a block closed early because the kernel interleaved, not a lost write.
+
+*Left open.* The DECA shares the RTL. It is **built** with the fix now -- three
+bitstreams, VME+SCSI at 1536 MiB, MultiBus+XY450 at 1024 MiB and MultiBus+SCSI
+at 512 MiB, all with `BLKTRACE=1` so `WRITE_VERIFY` and the ISSP probes are
+available -- and none of them has been on hardware yet. `sun2_clobber` did not
+elaborate under Quartus at all until `VERILOG_CONSTANT_LOOP_LIMIT` was raised;
+see the trap. Filesystems written by unfixed bitstreams can carry silent damage in
 metadata as well as data -- the 1024 MiB copy failed its boot fsck with an
 unknown inode type on the first fixed boot and needed `fsck -y`; any copy used
 for a pristine source should be checked or rewritten. The fixed Wukong build met
