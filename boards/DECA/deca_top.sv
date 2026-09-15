@@ -47,17 +47,6 @@ module deca_top #(
     parameter int CPU_CLK_HZ = 12_500_000,
     parameter int CPU_DIV    = 0,
     parameter int CPU_DUTY   = 50,
-    // The trace recorder's trigger, as A[23:11] -- the 2 KiB page a bus cycle
-    // is on.  0x1DC5 is 0xEE2800, the Sun-2/50's SCSI registers, which is what
-    // sdprobe touches and what stops raising a bus error above 12.5 MHz.
-    parameter int TRACE_PAGE = 'h1DC5,
-    parameter int TRACE_POST = 960,
-    parameter int TRACE_DEPTH = 10,
-    // Function code to qualify the trigger on, and whether to.  Defaults to 5,
-    // supervisor data, which is what a device probe is -- the untypical case
-    // is wanting *any* function code, not wanting one.
-    parameter int TRACE_FC    = 5,
-    parameter int TRACE_FC_EN = 1,
     // Where the emulated disk starts on the micro-SD card, in 512-byte
     // sectors.  Zero puts block 0 of the Sun's disk at sector 0 of the card,
     // which is what every build before this one did.
@@ -411,20 +400,8 @@ module deca_top #(
    assign cmd_wdata_a[0]     = w_cmd_wdata;
    assign cmd_wmask_a[0]     = w_cmd_wmask;
 
-   // Every read issued twice and compared, in the BLKTRACE bitstream only:
-   // it halves DVMA read bandwidth, which the disk path can spare and an
-   // ordinary build should not pay.
-`ifdef SUN2_BLKTRACE
-   // The double read is off: it asks whether the controller is self-consistent,
-   // and a write that has not landed makes both of its reads agree, so it can
-   // never see the fault now suspected.  The write verify asks the question
-   // that is left -- is a write there afterwards.
-   localparam bit DDR3_DOUBLE_READ  = 1'b0;
-   localparam bit DDR3_WRITE_VERIFY = 1'b1;
-`else
    localparam bit DDR3_DOUBLE_READ  = 1'b0;
    localparam bit DDR3_WRITE_VERIFY = 1'b0;
-`endif
 
    deca_wb_to_ddr3 #(.DOUBLE_READ(DDR3_DOUBLE_READ),
                      .WRITE_VERIFY(DDR3_WRITE_VERIFY),
@@ -726,137 +703,6 @@ module deca_top #(
        .source (jtag_reset)
    );
 
-`ifdef SUN2_TRACE
-   // ------------------------------------------------------------------
-   // The MMU trace recorder, read out over JTAG.
-   //
-   // The Wukong has an ILA on exactly this bus and the DECA cannot: SignalTap
-   // is a GUI artefact, `quartus_stp' will run an acquisition but will not
-   // create one, and this project's flow is scripted end to end.  So the
-   // buffer is plain RTL -- see rtl/sun2-common/sun2_trace.v -- and comes out
-   // through In-System Sources and Probes, which tools/deca_reset.tcl already
-   // uses and tools/deca_trace.tcl decodes.
-   //
-   // Fitted only under TRACE=1.  The bare dbg_bus port cost the Wukong 8 LUTs
-   // and 17 ps of hold margin in a build with no ILA in it, and the same
-   // argument applies here with a 30 kbit buffer attached to it.
-   // ------------------------------------------------------------------
-   // 1024 samples, not 256.  A 68010 bus-error frame is 29 words and each push
-   // is nine clocks, so the whole exception is about 260 clocks -- and the
-   // words that matter (status register, PC, format/vector, special status
-   // word, fault address) are pushed *last*, at the bottom of the frame.  A
-   // 256-sample buffer catches the top of the frame and stops exactly before
-   // the interesting part, which is how the first capture of it read.
-   // Depth is a build knob because a capture that must hold *both* halves of
-   // one fault -- the frame going down and the same frame being read back --
-   // needs to span the kernel's handling in between, which 1024 samples (about
-   // 61 us here) does not.
-   localparam TRC_DEPTH_LOG2 = TRACE_DEPTH;
-   // Post-trigger sample count.  960 of 1024 keeps what happened *after* the
-   // event, which is what a device probe wants.  A fault wants the opposite --
-   // the cycles that led into it -- so this is a build knob rather than a
-   // constant.
-   localparam TRC_POST       = TRACE_POST;
-
-   wire [117:0] trc_rd_data;
-   wire [TRC_DEPTH_LOG2-1:0] trc_wr_ptr;
-   wire         trc_triggered, trc_done;
-   wire [63:0]  trc_src;
-
-   // The source carries the whole instrument's controls, not just a read
-   // address:
-   //
-   //   [9:0]   sample index          [11:10] which word: 0 low, 1 high, 2 status
-   //   [24:12] trigger page          [25]    hold (clears and holds the capture)
-   //   [28:26] trigger function code [29]    qualify on it
-   //   [30]    require a DVMA cycle -- an alternate master's, not the CPU's
-   //   [31]    trigger page is physical (ma_pmap) rather than virtual
-   //   [41:32] A[10:1] within the page      [42]    match on it as well
-   //   [43]    require ERR -- the cycle must be one the machine is failing
-   //   [45:44] sample index bits 11:10, for buffers deeper than 1024
-   //   [60:48] capture filter: keep only this page   [61] apply it
-   //   [62]    store one sample per bus cycle, not per clock
-   //
-   // The address field exists because every 68010 exception vector shares one
-   // 2 KiB page: an address error vectors through VBR+0xC and the level-5
-   // clock through VBR+0x74, so a page-granular trigger catches the next timer
-   // tick rather than the fault being chased.
-   //
-   // The status word carries DEPTH_LOG2 and POST as well as the pointer, so the
-   // reader never has to be told the buffer's shape.  The first version had
-   // them as constants in the Tcl, which is two places for one fact and the
-   // sort of drift that makes a capture silently point at the wrong sample.
-   //
-   // `hold' rather than `arm' so that a source of all zeros -- which is what a
-   // freshly configured device has, and what a boot with nobody attached runs
-   // with -- means *running, on the page the bitstream was built with*.  An
-   // arm-high polarity would have made every unattended capture empty.
-   wire [12:0] trc_page = (trc_src[24:12] != 13'd0) ? trc_src[24:12]
-                                                    : TRACE_PAGE[12:0];
-
-   // A concatenation cannot be part-selected in place, so it is named first.
-   wire [11:0] trc_rd_index = {trc_src[45:44], trc_src[9:0]};
-
-   sun2_trace #(.WIDTH(118), .DEPTH_LOG2(TRC_DEPTH_LOG2),
-                .POST(TRC_POST)) u_trace (
-       .clk       (cpu_clk),
-       .rst       (board_reset),
-       .dbg_bus   (dbg_bus),
-       .trig_page (trc_page),
-       // As with the page: the source wins when the host has set it, and the
-       // build-time default applies until then -- which is the only thing that
-       // works for a *cold* boot, where configuring the device zeroes the
-       // source and the probe happens before any host can write one.  A JTAG
-       // reset is no substitute: it is a warm reset, and the PROM's
-       // non-power-up path skips the device probes entirely.
-       .trig_fc   (trc_src[29] ? trc_src[28:26] : TRACE_FC[2:0]),
-       .trig_fc_en(trc_src[29] | (TRACE_FC_EN != 0)),
-       .trig_dvma_en(trc_src[30]),
-       .trig_phys_en(trc_src[31]),
-       .trig_addr   (trc_src[41:32]),
-       .trig_addr_en(trc_src[42]),
-       .trig_err_en (trc_src[43]),
-       .filt_page   (trc_src[60:48]),
-       .filt_en     (trc_src[61]),
-       .one_per_cycle(trc_src[62]),
-       .arm       (~trc_src[25]),
-       // The index is 10 bits in its original place and grows upward into two
-       // spare bits, so every other field keeps the offset the tool already
-       // knows.  Renumbering them would have silently mis-decoded every
-       // existing capture script.
-       .rd_addr   (trc_rd_index[TRC_DEPTH_LOG2-1:0]),
-       .rd_data   (trc_rd_data),
-       .wr_ptr    (trc_wr_ptr),
-       .triggered (trc_triggered),
-       .done      (trc_done));
-
-   // 118 bits does not fit a 64-bit probe, so the source's top bit picks the
-   // half.  The status rides in the high half rather than in a third read,
-   // because a reader that has to issue three transfers per sample to learn
-   // whether the capture even finished will issue them 256 times.
-   altsource_probe #(
-       .sld_auto_instance_index ("YES"),
-       .instance_id             ("TRAC"),
-       .probe_width             (64),
-       .source_width            (64),
-       .source_initial_value    ("0"),
-       .enable_metastability    ("YES")
-   ) u_trace_issp (
-       .source_clk (cpu_clk),
-       .probe  ((trc_src[11:10] == 2'd0) ? trc_rd_data[63:0]
-              : (trc_src[11:10] == 2'd1) ? {10'd0, trc_rd_data[117:64]}
-              // The write pointer is padded to a fixed 16 bits rather than
-              // being DEPTH_LOG2 wide.  It used to be the latter, which packed
-              // to exactly 64 bits at depth 10 and to *66* at depth 12 -- so a
-              // deeper buffer silently shifted every field below it and the
-              // host read "not triggered" from a capture that had triggered.
-              : {trc_done, trc_triggered,
-                 {{(16 - TRC_DEPTH_LOG2){1'b0}}, trc_wr_ptr},
-                 TRC_DEPTH_LOG2[3:0], TRC_POST[15:0], 26'd0}),
-       .source (trc_src)
-   );
-`endif
-
    // ------------------------------------------------------------------
    // The disk: a Xylogics 450's media, on the micro-SD slot
    //
@@ -916,64 +762,6 @@ module deca_top #(
        .sd_miso_i (SD_MISO)
    );
 
- `ifdef SUN2_BLKTRACE
-   // Every block transfer, in order, read out after the fact.  Tapped on
-   // blk_req_media rather than blk_req, so the LBA recorded is the one the card
-   // is actually given -- DISK_LBA_OFFSET included.  That is the number a
-   // filesystem image taken off the card afterwards can be compared against.
-   wire [10:0] bt_src;
-   wire [31:0] bt_data;
-   wire [15:0] bt_pat_sectors, bt_pat_bad;
-   wire [8:0]  bt_pat_off;
-   wire [7:0]  bt_pat_exp, bt_pat_got;
-   wire [31:0] bt_pat_lba;
-   wire [15:0] bt_wp, bt_nx;
-
-   sun2_blktrace #(.DEPTH_LOG2(10)) blktrace (
-       .clk           (cpu_clk),
-       .rst           (sys_reset),
-       .blk_start     (blk_req_media.start),
-       .blk_we        (blk_req_media.we),
-       .blk_lba       (blk_req_media.lba),
-       .blk_done      (blk_rsp.done),
-       .blk_buf_we    (blk_rsp.buf_we),
-       .blk_buf_addr  (blk_rsp.buf_addr),
-       .blk_buf_wdata (blk_rsp.buf_wdata),
-       .blk_buf_rdata (blk_req_media.buf_rdata),
-       .rd_addr       (bt_src[9:0]),
-       .rd_half       (bt_src[10]),
-       .rd_data       (bt_data),
-       .wr_ptr        (bt_wp),
-       .n_xfer        (bt_nx),
-       .pat_sectors   (bt_pat_sectors),
-       .pat_bad       (bt_pat_bad),
-       .pat_first_lba (bt_pat_lba),
-       .pat_first_off (bt_pat_off),
-       .pat_first_exp (bt_pat_exp),
-       .pat_first_got (bt_pat_got));
-
-   // 32 + 16 + 16 = 64.  Count it whenever a field changes width: a probe
-   // narrower than its concatenation truncates in silence and every field
-   // below the cut reads as nonsense.
-   altsource_probe #(
-       .sld_auto_instance_index ("YES"),
-       .instance_id             ("BLKT"),
-       .probe_width             (64),
-       .source_width            (11),
-       .source_initial_value    ("0"),
-       // source_clk clocks the hardening registers enable_metastability asks
-       // for, and without it the source never leaves its initial value: the
-       // first readout of this trace returned entry 0 for every index, with
-       // the signature equal to the low half of the LBA, because both halves
-       // were answering a select stuck at zero.  The SUN2 instance above
-       // carries the same note, having been bitten first.
-       .enable_metastability    ("YES")
-   ) u_blktrace_issp (
-       .source_clk (cpu_clk),
-       .probe  ({bt_data, bt_wp, bt_nx}),
-       .source (bt_src));
-
- `endif
 `else
    // No Xylogics, so no media.  The card is left deselected rather than
    // undriven: these pins are assigned in deca_pins.qsf whether or not a disk

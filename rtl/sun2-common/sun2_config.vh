@@ -302,22 +302,6 @@
 //`define SUN2_MB_SCSI
 
 //---------------------------------------------------------------------
-// A trace of every block transfer
-//---------------------------------------------------------------------
-// rtl/sun2-common/sun2_blktrace.v: a circular buffer of the last 1024 block
-// transfers -- read or write, which LBA, and a signature of the bytes -- read
-// out over In-System Sources and Probes after the machine has been halted.
-//
-// It free-runs rather than triggering, because ISSP and the JTAG console
-// cannot both hold the chain: a probe armed from the host cannot be armed
-// while somebody is typing the command that provokes the fault.
-//
-// Board builds only, and off by default: it is an instrument for the
-// write-corruption hunt, not part of any machine.
-//
-//`define SUN2_BLKTRACE
-
-//---------------------------------------------------------------------
 // RD68011's loop buffer
 //---------------------------------------------------------------------
 // Zero is an MC68010 and the default: the core holds no instructions of its

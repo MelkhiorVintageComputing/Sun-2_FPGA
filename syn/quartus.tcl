@@ -46,16 +46,10 @@ array set opt {
     -cpu_hz    12500000
     -cpu_div   0
     -cpu_duty  50
-    -trace     0
-    -trace_page 0
-    -trace_fc  5
-    -trace_post 960
-    -trace_depth 10
     -disk_off_mib 0
     -xy450     0
     -vme_scsi  0
     -mb_scsi   0
-    -blktrace  0
     -loopbuf   0
     -rte_loop  0
     -rte_buf   1
@@ -222,20 +216,6 @@ if {$opt(-mb_scsi) != 0} {
     lappend defines SUN2_MB_SCSI
     puts "== MultiBus SCSI adapter fitted, media on the micro-SD slot =="
 }
-# A trace of every block transfer, for the write-corruption hunt.  Needs a
-# disk, obviously; without one it would compile to a buffer nothing fills.
-if {$opt(-blktrace) != 0} {
-    if {$opt(-xy450) == 0 && $opt(-vme_scsi) == 0 && $opt(-mb_scsi) == 0} {
-        puts "ERROR: -blktrace needs a disk controller (-xy450, -vme_scsi or -mb_scsi)"
-        exit 1
-    }
-    lappend defines SUN2_BLKTRACE
-    puts "== block trace fitted: the last 1024 transfers, read over ISSP =="
-    # The source itself is added further down, with the rest of them.  It
-    # cannot go here: `sv' is created by `set sv [list ...]' below, so a
-    # lappend at this point is silently thrown away and the define reaches a
-    # module nothing compiled -- the same shape as fb_video_en and HDMI30.
-}
 # Only when given.  Empty means "let sun2_config.vh choose", which it does per
 # machine, and both of its answers are inside this range by construction.
 if {$opt(-mem_pages) ne "" && ($opt(-mem_pages) < 8 || $opt(-mem_pages) > 4096)} {
@@ -256,16 +236,6 @@ if {$opt(-cpu_div) != 0} {
 # forcing a number here would silently take that away.
 if {$opt(-mem_pages) ne ""} { lappend defines MEM_PAGES=$opt(-mem_pages) }
 lappend defines SUN2_QUARTUS
-# The trace recorder taps dbg_bus, which only exists under SUN2_ILA -- so
-# asking for one implies the other.  Making the caller pass both would be one
-# more way to build a bitstream with the instrument silently absent, which is
-# the failure mode this project has recorded three times over.
-if {$opt(-trace) != 0} {
-    lappend defines SUN2_ILA
-    lappend defines SUN2_TRACE
-    puts "== trace buffer [expr {1 << $opt(-trace_depth)}] samples, POST $opt(-trace_post) =="
-    puts "== trace recorder fitted, trigger page A\[23:11\] = [format 0x%04X [expr {$opt(-trace_page)}]] = addresses [format 0x%06X [expr {$opt(-trace_page) << 11}]].., FC $opt(-trace_fc) =="
-}
 if {$opt(-eth5) != 224} { lappend defines SUN2_IDPROM_ETH5=$opt(-eth5) }
 if {$opt(-cpu) eq "rd68011"} { lappend defines SUN2_CPU_RD68011 }
 
@@ -384,21 +354,6 @@ if {$opt(-topent) ne "top"} {
     # are the same expression -- this project has shipped three builds whose
     # banner disagreed with their logic.
     set_parameter -name DISK_LBA_OFFSET [expr {$opt(-disk_off_mib) * 2048}]
-    if {$opt(-trace_page) != 0} {
-        # Decimal, not "0x1DC5".  Tcl is happy to compare and print a 0x
-        # string, and set_parameter is happy to store one, and Verilog then
-        # does not read it as the number meant -- the trigger came up as page
-        # 0x333 and a capture of the wrong page looks exactly like a machine
-        # that never touched the right one.  expr collapses it to an integer
-        # here, and the banner below prints what was actually set.
-        set_parameter -name TRACE_PAGE [expr {$opt(-trace_page)}]
-    }
-    set_parameter -name TRACE_FC [expr {$opt(-trace_fc)}]
-    # How much of the 1024-sample buffer is kept *after* the trigger.  A device
-    # probe wants nearly all of it; a fault wants nearly none, because the
-    # interesting cycles are the ones that led in.
-    set_parameter -name TRACE_POST [expr {$opt(-trace_post)}]
-    set_parameter -name TRACE_DEPTH [expr {$opt(-trace_depth)}]
 }
 set_global_assignment -name NUM_PARALLEL_PROCESSORS $opt(-jobs)
 
@@ -462,7 +417,6 @@ set v2001 [list \
     $top/rtl/sun2-common/top_fpga.v \
     $top/rtl/sun2-common/sun2_fpga.v \
     $top/rtl/sun2-common/sun2_mmu.v \
-    $top/rtl/sun2-common/sun2_trace.v \
     $top/rtl/sun2-common/ctx_reg.v \
     $top/rtl/sun2-common/pmap.v \
     $top/rtl/sun2-common/smap.v \
@@ -533,11 +487,6 @@ if {$opt(-vme_scsi) != 0 || $opt(-mb_scsi) != 0} {
                $top/rtl/sun2-common/sun2_scsi_core.sv
     if {$opt(-vme_scsi) != 0} { lappend sv $top/rtl/sun2-vme/sun2_vme_scsi.sv }
     if {$opt(-mb_scsi)  != 0} { lappend sv $top/rtl/sun2-multibus/sun2_mb_scsi.sv }
-}
-
-# The block trace, guarded far above where the define is set.
-if {$opt(-blktrace) != 0} {
-    lappend sv $top/rtl/sun2-common/sun2_blktrace.v
 }
 
 # The CPU core.
