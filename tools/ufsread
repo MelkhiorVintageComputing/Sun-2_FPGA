@@ -219,7 +219,7 @@ def main(argv):
 
     if args.command == "blocks":
         # Where a file's data *should* be, to line up against where the machine
-        # actually wrote -- tools/deca_blktrace.tcl gives the other half.
+        # actually wrote.
         #
         # The chain is inode block pointer -> fragment -> sector, plus the
         # partition start and then the image's own offset on the medium.  Each

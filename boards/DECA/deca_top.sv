@@ -435,7 +435,7 @@ module deca_top #(
        // another 256, with PORT_CACHE_SMART supposed to push a write into any
        // read cache line covering the same address.  On this machine that
        // combination produces a **read-after-write hazard**, caught on the
-       // board with rtl/sun2-common/sun2_trace.v: the boot PROM's sdprobe
+       // board with a trace buffer on the bus, since removed: the PROM's sdprobe
        // wrote 2 to its loop counter at 0x000F28 and the `cmpi.l #2' that
        // follows read the same address back as **1** forty-seven clocks later,
        // so the loop's bound check failed, it indexed one past the end of

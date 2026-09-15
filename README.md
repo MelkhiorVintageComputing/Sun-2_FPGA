@@ -817,8 +817,7 @@ front panel — the RESET-instruction stall in `patches/Suska_Configware/0001`.
 
 `BRINGUP.md` is the staged procedure — what to check, in what order, and what
 each failure looks like given that almost all of them are silent at the
-console. It is also where the deferred debugging tooling lives, the ILA
-included.
+console.
 
 Each combination gets its own output directory,
 `build/syn/vivado/<machine>-cpu<MHz>/`; the DECA's Quartus builds land beside

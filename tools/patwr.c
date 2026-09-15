@@ -134,7 +134,7 @@ long  lseek();
  *
  * That looks like a downgrade -- it throws away the sector field, so a bad word
  * no longer says which sector it came from -- and it buys something no software
- * check can have: **the FPGA can verify it**.  sun2_blktrace already sees every
+ * check can have: **the FPGA can verify it**.  Anything that sees every
  * byte going to the card with its buffer address, and with a pattern that
  * depends only on the offset within the sector the expected byte is
  * `addr[0] ? addr[8:1] : 8'h80' -- a comparison in a few LUTs, with no
@@ -142,7 +142,7 @@ long  lseek();
  * happens*, at the last point inside the FPGA before the SD card, instead of
  * being inferred from a checksum after a reboot.
  *
- * Use -u with the hardware checker, and the default encoding when the
+ * Use -u with a hardware checker, and the default encoding when the
  * displacement of a bad word matters more.
  */
 

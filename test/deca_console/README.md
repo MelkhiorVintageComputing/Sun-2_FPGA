@@ -91,5 +91,5 @@ The order that makes each failure mean one thing:
 If step 2 fails, SignalTap is the next instrument — `quartus_stp` is present in
 this Lite installation. Qualify the capture on `av_chipselect` or `rx_valid`
 rather than free-running: a 9600-baud bit is 512 clocks and a byte is 5,120, so
-an unqualified window shows a fraction of one character. That is the same lesson
-`syn/ila_capture.tcl` records as `iackseq`.
+an unqualified window shows a fraction of one character -- the same lesson as
+qualifying an interrupt capture on FC 7 rather than capturing clocks.

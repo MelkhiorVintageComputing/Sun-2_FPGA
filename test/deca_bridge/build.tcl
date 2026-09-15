@@ -64,7 +64,6 @@ set_global_assignment -name SEARCH_PATH $bhg
 # The Sun-2's own two blocks, which is the point of this test: neither has ever
 # been exercised on hardware without the whole machine around it.
 set_global_assignment -name VERILOG_FILE       $root/rtl/sun2-common/sun2_wishbone_bridge.v
-set_global_assignment -name VERILOG_FILE       $root/rtl/sun2-common/sun2_clobber.v
 set_global_assignment -name SYSTEMVERILOG_FILE $root/boards/DECA/deca_wb_to_ddr3.sv
 set_global_assignment -name SEARCH_PATH        $root/rtl/sun2-common
 set_global_assignment -name SYSTEMVERILOG_FILE $here/deca_bridge_test_top.sv
