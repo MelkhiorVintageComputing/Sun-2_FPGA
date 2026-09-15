@@ -336,12 +336,6 @@ module wukong_top #(
    wire [117:0] dbg_bus;
 `endif
 
-   // sun2_dvma_probe's counters.  Declared and left for the tools to prune:
-   // this board has no In-System Sources and Probes, and an unconnected port
-   // is how `fb_video_en' reached a bitstream dead for the life of the frame
-   // buffer -- so it is connected to a named wire rather than left off.
-   wire [182:0] dvma_probe;
-
    // The adapter's clock-crossing check.  Declared here, above the ILA, because
    // the adapter is instantiated further down and xvlog rejects a wire used
    // before it is declared -- the same rule that has caught a dead term in this
@@ -350,14 +344,10 @@ module wukong_top #(
    wire [31:0] xchk_got, xchk_exp;
    wire [31:0] xchk_n_read, xchk_n_pat, xchk_n_bad;
    wire [31:0] xchk_n_wpat, xchk_n_wbad;
-   wire [31:0] dv_n_mux, dv_n_mux_bad, dv_n_pat32, dv_n_pat32_bad;
-   wire [31:0] dv_n_arm32, dv_n_arm32_bad;
    wire [31:0] xy_n_sb, xy_n_sb_bad, xy_n_sb_iso, xy_n_drop, xy_n_rd, xy_n_rd_bad;
    wire [31:0] xy_n_dva, xy_n_dva_bad;
    wire [23:0] xy_dva_adr;
-   wire [31:0] dv_n_xact, dv_n_adr_move, dv_n_dat_move;
    wire [31:0] rr_n, rr_bad, rr_v1, rr_v2;
-   wire        dv_arrived_bad;
 `ifdef SUN2_ILA
    // Named wires rather than slices straight into the core, because the
    // Hardware Manager names a probe after the net it is driven from -- and
@@ -401,21 +391,21 @@ module wukong_top #(
        .probe_in8  (32'd0),
        .probe_in9  (32'd0),
        .probe_in10 (32'd0),
-       .probe_in11 (dv_n_mux),
-       .probe_in12 (dv_n_mux_bad),
-       .probe_in13 (dv_n_pat32),
-       .probe_in14 (dv_n_pat32_bad),
+       .probe_in11 (32'd0),
+       .probe_in12 (32'd0),
+       .probe_in13 (32'd0),
+       .probe_in14 (32'd0),
        .probe_in15 (xy_n_sb),
        .probe_in16 (xy_n_sb_bad),
        .probe_in17 (xy_n_sb_iso),
        .probe_in18 (xy_n_drop),
        .probe_in19 (xy_n_rd),
        .probe_in20 (xy_n_rd_bad),
-       .probe_in21 (dv_n_arm32),
-       .probe_in22 (dv_n_arm32_bad),
-       .probe_in23 (dv_n_xact),
-       .probe_in24 (dv_n_adr_move),
-       .probe_in25 (dv_n_dat_move),
+       .probe_in21 (32'd0),
+       .probe_in22 (32'd0),
+       .probe_in23 (32'd0),
+       .probe_in24 (32'd0),
+       .probe_in25 (32'd0),
        .probe_in26 (rr_n),
        .probe_in27 (rr_bad),
        .probe_in28 (32'd0),
@@ -445,7 +435,7 @@ module wukong_top #(
        .probe13(xchk_bad),
        .probe14(xchk_got),
        .probe15(xchk_exp),
-       .probe16(dv_arrived_bad)
+       .probe16(1'b0)
    );
 
    // The bus history (syn/generate_ip.tcl, sun2_busila): the 68010 bus and the
@@ -460,7 +450,7 @@ module wukong_top #(
    // High on a clock whose sampled value differs from the clock before.  As
    // the storage qualifier it keeps every distinct state and drops idle clocks.
    wire [127:0] bh_now = {dbg_addr, dbg_fc, dbg_hand, dbg_cs, dbg_data, dbg_dvma,
-                          dbg_ma, bw_dat, bw_ctl, bw_adr, dv_arrived_bad};
+                          dbg_ma, bw_dat, bw_ctl, bw_adr, 1'b0};
    reg  [127:0] bh_prev;
    always @(posedge cpu_clk) bh_prev <= bh_now;
    wire        bh_chg = (bh_now != bh_prev);
@@ -477,7 +467,7 @@ module wukong_top #(
        .probe7 (bw_dat),
        .probe8 (bw_ctl),
        .probe9 (bw_adr),
-       .probe10(dv_arrived_bad),
+       .probe10(1'b0),
        .probe11(bh_chg)
    );
 `endif
@@ -613,18 +603,6 @@ module wukong_top #(
 `ifdef SUN2_ILA
        .dbg_bus        (dbg_bus),
 `endif
-       // Outside the guard: SUN2_ILA is only defined under TRACE=1, and this
-       // probe has to exist in an ordinary build.  Four separate places had
-       // this same connection inside that guard -- the port and the wiring in
-       // sun2_fpga, and both again here -- and each read back as a healthy
-       // machine because an undriven wire is all zeros.
-       .dvma_probe     (dvma_probe),
-       .dv_n_mux       (dv_n_mux),
-       .dv_n_mux_bad   (dv_n_mux_bad),
-       .dv_n_pat32     (dv_n_pat32),
-       .dv_n_pat32_bad (dv_n_pat32_bad),
-       .dv_n_arm32     (dv_n_arm32),
-       .dv_n_arm32_bad (dv_n_arm32_bad),
        .xy_n_sb        (xy_n_sb),
        .xy_n_sb_bad    (xy_n_sb_bad),
        .xy_n_sb_iso    (xy_n_sb_iso),
@@ -634,10 +612,6 @@ module wukong_top #(
        .xy_n_dva       (xy_n_dva),
        .xy_n_dva_bad   (xy_n_dva_bad),
        .xy_dva_adr     (xy_dva_adr),
-       .dv_n_xact      (dv_n_xact),
-       .dv_n_adr_move  (dv_n_adr_move),
-       .dv_n_dat_move  (dv_n_dat_move),
-       .dv_arrived_bad (dv_arrived_bad),
 
 
        .eth_crs_stuck (eth_crs_stuck),

@@ -289,34 +289,15 @@ module deca_top #(
    wire [117:0] dbg_bus;
 `endif
 
-   // sun2_dvma_probe's counters, and the ISSP source that reads them out.
-   //
-   // **Declared outside the SUN2_ILA guard, and that was the last of five
-   // places this same signal had to be moved out of it.**  SUN2_ILA is only
-   // defined under TRACE=1; inside the guard this declaration disappeared in an
-   // ordinary build and every reference below became an *implicit one-bit net*,
-   // silently.  Quartus reports it, and only in the map report's port
-   // connectivity check: "Output port (80 bits) is wider than the port
-   // expression (1 bits) it drives; bit(s) dvma_probe[79..1] have no fanout".
-   // From the JTAG side it looked like a healthy machine with every counter at
-   // zero, because bit 0 was the only bit with a path.
-   wire [182:0] dvma_probe;
-
-   wire [31:0] dv_n_mux, dv_n_mux_bad, dv_n_pat32, dv_n_pat32_bad;
-   wire [31:0] dv_n_arm32, dv_n_arm32_bad;
    wire [31:0] xy_n_sb, xy_n_sb_bad, xy_n_sb_iso, xy_n_drop, xy_n_rd, xy_n_rd_bad;
    wire [31:0] xy_n_dva, xy_n_dva_bad;
    wire [23:0] xy_dva_adr;
-   wire [31:0] dv_n_xact, dv_n_adr_move, dv_n_dat_move;
-   wire        dv_arrived_bad;
 
-   // The DDR3 adapter's read accounting, appended *below* dvma_probe in the
-   // ISSP word so every existing offset in tools/deca_dvmaprobe.tcl stays put.
+   // The DDR3 adapter's read accounting.
    wire [15:0]  ddr3_rd_issued, ddr3_rd_ready, ddr3_rd_unexpected, ddr3_lane_bad;
    wire [15:0]  ddr3_reread_bad, ddr3_wv_bad;
    wire [29:0]  ddr3_rr_adr;
    wire [31:0]  ddr3_rr_v1, ddr3_rr_v2;
-   wire         dvmp_src;   // the ISSP's source, unused but connected
 
    top machine (
        .cpu_clk        (cpu_clk),
@@ -334,18 +315,6 @@ module deca_top #(
 `ifdef SUN2_ILA
        .dbg_bus        (dbg_bus),
 `endif
-       // Outside the guard: SUN2_ILA is only defined under TRACE=1, and this
-       // probe has to exist in an ordinary build.  Four separate places had
-       // this same connection inside that guard -- the port and the wiring in
-       // sun2_fpga, and both again here -- and each read back as a healthy
-       // machine because an undriven wire is all zeros.
-       .dvma_probe     (dvma_probe),
-       .dv_n_mux       (dv_n_mux),
-       .dv_n_mux_bad   (dv_n_mux_bad),
-       .dv_n_pat32     (dv_n_pat32),
-       .dv_n_pat32_bad (dv_n_pat32_bad),
-       .dv_n_arm32     (dv_n_arm32),
-       .dv_n_arm32_bad (dv_n_arm32_bad),
        .xy_n_sb        (xy_n_sb),
        .xy_n_sb_bad    (xy_n_sb_bad),
        .xy_n_sb_iso    (xy_n_sb_iso),
@@ -355,10 +324,6 @@ module deca_top #(
        .xy_n_dva       (xy_n_dva),
        .xy_n_dva_bad   (xy_n_dva_bad),
        .xy_dva_adr     (xy_dva_adr),
-       .dv_n_xact      (dv_n_xact),
-       .dv_n_adr_move  (dv_n_adr_move),
-       .dv_n_dat_move  (dv_n_dat_move),
-       .dv_arrived_bad (dv_arrived_bad),
 
        .eth_crs_stuck  (eth_crs_stuck),
        .fb_video_en    (fb_video_en),
@@ -1019,38 +984,6 @@ module deca_top #(
        .source_clk (cpu_clk),
        .probe  ({bt_data, bt_wp, bt_nx}),
        .source (bt_src));
-
-   // The pairing counters, read with tools/deca_dvmaprobe.tcl.  A separate
-   // instance rather than extra bits on the block trace's probe: that one is
-   // indexed by a source and adding fields to it shifts every existing offset,
-   // which this project has already silently invalidated a decode by doing.
-   altsource_probe #(
-       .sld_auto_instance_index ("YES"),
-       .instance_id             ("DVMP"),
-       .source_initial_value    ("0"),
-       .probe_width             (469),
-       .source_width            (1),
-       .enable_metastability    ("YES")
-   ) u_dvmaprobe_issp (
-       .source_clk (cpu_clk),
-       // 183 + 16+16+16+16 + 16+16+30+32+32 + 16+16+32+16+8+8 = **469**.  Count it every time: the
-       // first version of this line said 366, having dropped the two 8-bit
-       // fields, and a probe narrower than its concatenation truncates in
-       // silence -- every field shifts and the readout is plausible nonsense
-       // (bridge loads 0 beside late_load 39240).  Nothing warns.  Appended at the end, so every
-       // offset tools/deca_dvmaprobe.tcl already decodes is unchanged.
-       .probe      ({dvma_probe, ddr3_rd_unexpected,
-                    ddr3_rd_ready, ddr3_rd_issued, ddr3_lane_bad,
-                    ddr3_reread_bad, ddr3_wv_bad,
-                    ddr3_rr_adr, ddr3_rr_v1, ddr3_rr_v2,
-                    // the in-flight pattern checker, appended last
-                    bt_pat_sectors, bt_pat_bad, bt_pat_lba,
-                    {7'd0, bt_pat_off}, bt_pat_exp, bt_pat_got}),
-       // Connected, not left open.  Both instances on this board that read back
-       // correctly -- SUN2 and BLKT -- drive a real wire here, and this one did
-       // not; with it open the probe returned a fixed ...0001 whatever was
-       // wired to it, including a hardcoded constant.
-       .source     (dvmp_src));
 
  `endif
 `else

@@ -136,26 +136,6 @@ module sun2_fpga(input         cpu_clk,
 		 input         dbg_dvma_active,
 `endif
 
-		 // The Wishbone bridge's P_DATA_OUT load enable, for
-		 // sun2_dvma_probe in top_fpga: the other half of the pairing
-		 // lives up there, on the master.
-		 //
-		 // **Outside the SUN2_ILA guard, and that is the whole point.**
-		 // It was inside it first.  SUN2_ILA is only defined under
-		 // TRACE=1, so in an ordinary build the port did not exist, the
-		 // connection in top_fpga bound to nothing, and the wire sat
-		 // undriven at zero -- a probe reporting a perfectly healthy
-		 // machine because it was watching a constant.  The counter for
-		 // bridge loads is what caught it: the CPU makes those on every
-		 // memory read, so zero there could only be the instrument.
-		 output          dbg_wb_load,
-		 // ... and which half that load took.
-		 output          dbg_wb_load_half,
-		 // The MATCH_MEM arm of the P_DOUT mux, and whether it is the
-		 // one selected: sun2_dvma_probe compares what the master
-		 // actually captured against it.
-		 output [15:0]   dbg_wb_dout,
-		 output          dbg_match_mem,
 		 /* wishbone */
 		 output        wb_cyc_o,
 		 output        wb_stb_o,
@@ -1212,8 +1192,6 @@ module sun2_fpga(input         cpu_clk,
    assign L_M_MAP_SEEN = (leds == 8'h8F); 
    
    sun2_wishbone_bridge #(.FB_WB_BASE(`FB_WB_BASE)) wbridge(.CLK(C100),
-							   .dbg_load(dbg_wb_load),
-							   .dbg_load_half(dbg_wb_load_half),
 				// Power-up state, not reset state.  ENABLE is armed
 				// when the monitor writes LED code 0x8F and gates
 				// wb_cyc/wb_stb, so while it is clear main memory
@@ -1617,8 +1595,6 @@ module sun2_fpga(input         cpu_clk,
 
    // Answering the CPU
    // bus muxer. CPU has priority via DATA_EN, otherwise whomever is matched own the bus
-   assign dbg_wb_dout   = wishbone_out;
-   assign dbg_match_mem = MATCH_MEM;
 
    assign P_DOUT = DATA_EN         ? P_DIN : // loopback
 		   MATCH_CTX       ? ctx_out :

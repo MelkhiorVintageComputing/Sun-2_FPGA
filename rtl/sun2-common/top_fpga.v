@@ -18,22 +18,6 @@ module top(input         cpu_clk,
 	   output [117:0] dbg_bus,
 `endif
 
-	   // sun2_dvma_probe: {seen, n_latch, n_no_load, n_late_load,
-	   // first_a[23:1], first_d}.  Zero in a build with no bus master.
-	   //
-	   // Outside the SUN2_ILA guard that dbg_bus sits in, deliberately: the
-	   // DECA does not define it -- that guard is for the Wukong's Xilinx
-	   // ILA -- and this probe has to exist on the board where the fault it
-	   // watches for actually happens.
-	   output [182:0] dvma_probe,
-	   // sun2_dvma_probe's mux check: the last span between the bridge's
-	   // registered word and what the master captures.
-	   output [31:0]  dv_n_mux,
-	   output [31:0]  dv_n_mux_bad,
-	   output [31:0]  dv_n_pat32,
-	   output [31:0]  dv_n_pat32_bad,
-	   output [31:0]  dv_n_arm32,
-	   output [31:0]  dv_n_arm32_bad,
 	   // sun2_xy450's sector-buffer pattern check.
 	   output [31:0]  xy_n_sb,
 	   output [31:0]  xy_n_sb_bad,
@@ -44,11 +28,6 @@ module top(input         cpu_clk,
 	   output [31:0]  xy_n_dva,
 	   output [31:0]  xy_n_dva_bad,
 	   output [23:0]  xy_dva_adr,
-	   // sun2_dvma request-stability, the device-to-memory direction.
-	   output [31:0]  dv_n_xact,
-	   output [31:0]  dv_n_adr_move,
-	   output [31:0]  dv_n_dat_move,
-	   output         dv_arrived_bad,
 
 	   /* Ethernet diagnostics, for the board top to surface: a PHY that
 	    holds carrier sense asserted stops transmission dead, and it is the
@@ -238,72 +217,6 @@ module top(input         cpu_clk,
    wire        EN_DVMA, dvma_active, dvma_as_n, dvma_rw_n, dvma_uds_n, dvma_lds_n;
    wire [23:1] dvma_a;
 
-   // The pairing sun2_dvma_probe watches: the bridge's P_DATA_OUT load and the
-   // master's capture of dvma_din one clock later.  dvma_latch is driven by
-   // whichever master this build has, and is 0 in a build with none -- the
-   // probe then counts nothing, which is the honest reading of a machine that
-   // never masters the bus.
-   wire        dbg_wb_load;
-   wire [15:0] dbg_wb_dout;
-   wire        dbg_match_mem;
-   wire        dbg_wb_load_half;
-   wire        dvma_latch;
-   wire        dvma_busy;
-   // Driven by whichever MultiBus master this build has -- xy_dvma or sc_dvma,
-   // which are exclusive arms of the same ifdef -- and tied off when it has
-   // neither.  Both guards are needed: with only the MB_SCSI one, an XY450
-   // build has xy_dvma *and* this assign driving the same wire.
-   //
-   // A VME build is deliberately left out.  It has two masters behind an
-   // arbiter, and tying the probe to one of them would report a fraction of the
-   // traffic as though it were all of it, which is worse than reporting none.
-`ifndef SUN2_MB_SCSI
- `ifndef SUN2_XY450
-   assign dvma_latch = 1'b0;
-   assign dvma_busy  = 1'b0;
- `endif
-`endif
-
-   sun2_dvma_probe dvma_probe_i(
-       // sys_reset, not machine_reset: sun2_blktrace uses sys_reset and works,
-       // and a counter held in a reset the rest of the instrument does not
-       // share reads exactly like a signal that never toggles.
-       .clk(C100), .rst(sys_reset),
-       .brg_load(dbg_wb_load),
-       .brg_half(dbg_wb_load_half),
-       .dvma_busy(dvma_busy),
-       .dvma_latch(dvma_latch),
-       .dvma_din(P_DOUT),
-       .dvma_a(dvma_a),
-       .brg_dout(dbg_wb_dout),
-       .match_mem(dbg_match_mem),
-       .n_mux(dv_n_mux),
-       .n_mux_bad(dv_n_mux_bad),
-       .n_pat32(dv_n_pat32),
-       .n_pat32_bad(dv_n_pat32_bad),
-       .n_arm32(dv_n_arm32),
-       .n_arm32_bad(dv_n_arm32_bad),
-       .arrived_bad(dv_arrived_bad),
-       // Four counters and nothing else, 64 bits -- the same width as the
-       // block trace's probe, which is known to read back correctly.  The
-       // first-event capture came out while the readout itself was in doubt:
-       // an instrument whose numbers cannot be trusted should carry as few
-       // fields as possible until they can.
-       // 96 + 16+16+16+16+23 = 183.  Widths added up and checked against the
-       // port: a probe narrower than what feeds it truncates in silence and
-       // shifts every field, which cost a build once already.
-       .n_pat_a(dvma_probe[182:167]),
-       .n_pat_b(dvma_probe[166:151]),
-       .n_pat_bad(dvma_probe[150:135]),
-       .n_pat_first(dvma_probe[134:119]),
-       .n_pat_faddr(dvma_probe[118:96]),
-       .n_half_bad(dvma_probe[95:80]),
-       .n_clk(dvma_probe[79:64]),
-       .n_latch(dvma_probe[63:48]),
-       .n_no_load(dvma_probe[47:32]),
-       .n_late_load(dvma_probe[31:16]),
-       .n_load(dvma_probe[15:0]),
-       .first_a(), .first_d(), .seen());
    wire [2:0]  dvma_fc;
    wire [15:0] dvma_dout;
    wire        ether_core_reset_n, ether_loopback_n, ether_ca, ether_int_en;
@@ -410,14 +323,6 @@ module top(input         cpu_clk,
 		  // The one thing sun2_fpga cannot see about its own bus.
 		  .dbg_dvma_active(dvma_active),
 `endif
-		  // Outside the guard, with the port it drives.  This connection
-		  // was inside it, which made three layers -- port, connection,
-		  // and the same pair one level up in top_fpga -- that each had
-		  // to be moved out before the probe saw a single bridge load.
-		  .dbg_wb_load(dbg_wb_load),
-		  .dbg_wb_dout(dbg_wb_dout),
-		  .dbg_match_mem(dbg_match_mem),
-		  .dbg_wb_load_half(dbg_wb_load_half),
 				
 		  // wishbone
 		  .wb_cyc_o(wb_cyc_o),
@@ -1085,12 +990,7 @@ module top(input         cpu_clk,
 		     .cpu_as_n(cpu_as_n),
 
 		     .dvma_active(dvma_active),
-		     .dbg_latch(dvma_latch),
-		     .dbg_busy(dvma_busy),
 		     .dvma_a(dvma_a),
-		     .dbg_n_xact(dv_n_xact),
-		     .dbg_n_adr_move(dv_n_adr_move),
-		     .dbg_n_dat_move(dv_n_dat_move),
 		     
 		     .dvma_fc(dvma_fc),
 		     .dvma_as_n(dvma_as_n),
@@ -1194,8 +1094,6 @@ module top(input         cpu_clk,
 		     .cpu_as_n(cpu_as_n),
 
 		     .dvma_active(dvma_active),
-		     .dbg_latch(dvma_latch),
-		     .dbg_busy(dvma_busy),
 		     .dvma_a(dvma_a),
 		     .dvma_fc(dvma_fc),
 		     .dvma_as_n(dvma_as_n),
@@ -1240,9 +1138,6 @@ module top(input         cpu_clk,
    assign xy_n_dva       = 32'h0;
    assign xy_n_dva_bad   = 32'h0;
    assign xy_dva_adr     = 24'h0;
-   assign dv_n_xact      = 32'h0;
-   assign dv_n_adr_move  = 32'h0;
-   assign dv_n_dat_move  = 32'h0;
  `endif
 
  `ifndef SUN2_MB_SCSI
