@@ -289,9 +289,6 @@ module deca_top #(
    wire [117:0] dbg_bus;
 `endif
 
-   wire [31:0] xy_n_sb, xy_n_sb_bad, xy_n_sb_iso, xy_n_drop, xy_n_rd, xy_n_rd_bad;
-   wire [31:0] xy_n_dva, xy_n_dva_bad;
-   wire [23:0] xy_dva_adr;
 
    // The DDR3 adapter's read accounting.
    wire [15:0]  ddr3_rd_issued, ddr3_rd_ready, ddr3_rd_unexpected, ddr3_lane_bad;
@@ -315,15 +312,6 @@ module deca_top #(
 `ifdef SUN2_ILA
        .dbg_bus        (dbg_bus),
 `endif
-       .xy_n_sb        (xy_n_sb),
-       .xy_n_sb_bad    (xy_n_sb_bad),
-       .xy_n_sb_iso    (xy_n_sb_iso),
-       .xy_n_drop      (xy_n_drop),
-       .xy_n_rd        (xy_n_rd),
-       .xy_n_rd_bad    (xy_n_rd_bad),
-       .xy_n_dva       (xy_n_dva),
-       .xy_n_dva_bad   (xy_n_dva_bad),
-       .xy_dva_adr     (xy_dva_adr),
 
        .eth_crs_stuck  (eth_crs_stuck),
        .fb_video_en    (fb_video_en),

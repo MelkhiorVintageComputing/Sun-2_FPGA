@@ -166,51 +166,6 @@ module sun2_xy450 #(
     output wire [31:0] wb_dat_o,
     input  wire [31:0] wb_dat_i,
 
-    // The byte going into the sector buffer, checked against tools/patwr -u's
-    // pattern.  This is the split that decides the last span: the master's
-    // capture is proven correct (sun2_dvma_probe's mux check) and the byte is
-    // proven wrong at the card (sun2_blktrace), so the damage is between them.
-    // Wrong here indicts sun2_dvma's assembly and the Wishbone handoff, which
-    // the SCSI card shares; right here puts it in the buffer or blk_sd.
-    output reg  [31:0] dbg_n_sb,
-    output reg  [31:0] dbg_n_sb_bad,     // every mismatch, including runs
-    output reg  [31:0] dbg_n_sb_iso,     // ... only the isolated ones
-
-    // Writes the buffer port silently threw away.  buf_we is
-    // `blk_busy ? blk_buf_we : dma_buf_we', so a DMA write offered while
-    // blk_sd holds the port does not happen at all -- and that byte keeps the
-    // PREVIOUS sector's value.  One wrong byte per sector, rarely, carrying
-    // old content, at whatever offset the race lands on: the whole signature.
-    // Invisible to dbg_n_sb, which checks the byte offered, not the byte
-    // stored.  E_IN_PUT's own comment argues the last write lands "so it
-    // lands" -- this counts whether it does.
-    output reg  [31:0] dbg_n_drop,
-
-    // The byte as it is read back OUT, checked against the same pattern.
-    // Written-correct is already measured; this is the other end, and having
-    // both on one board closes a bracket that until now spanned two: the
-    // Wukong proved the write side and the DECA the read side, on different
-    // cards.  buf_q answers the *previous* blk_buf_addr (block.md:58), so the
-    // expectation is computed from a registered copy of it.
-    output reg  [31:0] dbg_n_rd,
-    output reg  [31:0] dbg_n_rd_bad,
-
-    // Does a DVMA access ever land outside the buffer this transfer declared?
-    //
-    // The mirror of the CPU-side coverage check, and the one direction nothing
-    // in this tree watches: every instrument so far follows memory-to-device,
-    // while a disk *read* is device-to-memory and writes memory.  Disk content
-    // on this card is binaries, which is exactly what the intruding values
-    // 584f (addqw #4,%sp), 2f2d and 2e2e are, so a DVMA write landing one word
-    // outside its buffer would drop program text into a neighbouring page --
-    // one word, not a page, which is the shape the fault actually has and the
-    // shape a mapping error cannot produce.
-    //
-    // Data transfers only: the IOPB fetch and the status writeback use bus_va
-    // too and legitimately sit outside the data buffer.
-    output reg  [31:0] dbg_n_dva,      // data DVMA accesses checked
-    output reg  [31:0] dbg_n_dva_bad,  // ... outside [data_lo, data_hi)
-    output reg  [23:0] dbg_dva_adr,
     input  wire        wb_ack_i,
     input  wire        wb_err_i,
     // sun2_dvma latches a bus error and refuses further cycles until this is
@@ -361,46 +316,6 @@ module sun2_xy450 #(
    wire       buf_we    = blk_busy ? blk_buf_we    : dma_buf_we;
    wire [8:0] buf_addr  = blk_busy ? blk_buf_addr  : dma_addr;
    wire [7:0] buf_wdata = blk_busy ? blk_buf_wdata : dma_buf_wdata;
-
-   // Armed by a sector whose byte 0 is 0x80, so ordinary traffic -- metadata,
-   // anything that is not the pattern -- cannot be counted.  Counting every
-   // byte without arming is the mistake that reported 1018 false positives on
-   // the DECA's first crossing check.
-   // Raw mismatches over-count badly: the first board run read 214 against a
-   // disk that took 5 wrong words, because a sector that is not the pattern --
-   // metadata, an indirect block -- keeps being checked while sb_armed is
-   // still set from the sector before.  A run of mismatches is ordinary
-   // traffic; a real corruption is one wrong byte with correct ones either
-   // side.  dbg_n_sb_iso counts only those, dbg_n_sb_bad keeps the raw figure
-   // so the two can be compared.
-   reg        sb_armed, sb_prev_ok, sb_pend;
-   wire [7:0] sb_exp = dma_addr[0] ? dma_addr[8:1] : 8'h80;
-   wire       sb_ok  = (dma_buf_wdata == sb_exp);
-   always @(posedge CLK)
-     if (RESET) begin
-        sb_armed <= 1'b0;  sb_prev_ok <= 1'b0;  sb_pend <= 1'b0;
-        dbg_n_sb <= 32'd0; dbg_n_sb_bad <= 32'd0; dbg_n_sb_iso <= 32'd0;
-        dbg_n_drop <= 32'd0;
-     end else begin
-        if (dma_buf_we && blk_busy) dbg_n_drop <= dbg_n_drop + 32'd1;
-        if (dma_buf_we) begin
-        if (dma_addr == 9'd0) sb_armed <= (dma_buf_wdata == 8'h80);
-        if (sb_armed || dma_addr == 9'd0) begin
-           dbg_n_sb   <= dbg_n_sb + 32'd1;
-           sb_prev_ok <= sb_ok;
-           if (!sb_ok) dbg_n_sb_bad <= dbg_n_sb_bad + 32'd1;
-           if (sb_ok) begin
-              if (sb_pend) begin        // a miss closed by a match: isolated
-                 sb_pend      <= 1'b0;
-                 dbg_n_sb_iso <= dbg_n_sb_iso + 32'd1;
-              end
-           end else if (sb_prev_ok && !sb_pend)
-             sb_pend <= 1'b1;           // candidate, not yet counted
-           else
-             sb_pend <= 1'b0;           // two in a row: not the pattern
-        end
-        end
-     end
 
    always @(posedge CLK) begin
       if (buf_we) sbuf[buf_addr] <= buf_wdata;
@@ -555,72 +470,6 @@ module sun2_xy450 #(
    reg [31:0] rd_stage;     // a read chunk, waiting to be scattered
 
    wire [23:0] chunk_va   = data_va + {14'h0, db};
-
-   // The bounds this transfer declared, latched when the data phase starts and
-   // compared for every data access it makes.  data_va advances a sector at a
-   // time, so the window is the sector being moved rather than the whole
-   // transfer -- which is tighter, and catches a stray word without needing to
-   // know how many sectors are left.
-   wire [23:0] dva_lo = data_va;
-   wire [23:0] dva_hi = data_va + 24'd512;
-   wire        dva_fire = bus_req && (est == E_IN_REQ || est == E_OUT_REQ ||
-                                      est == E_IN_W   || est == E_OUT_W);
-   reg         dva_seen;
-   always @(posedge CLK)
-     if (RESET) begin
-        dbg_n_dva <= 32'd0; dbg_n_dva_bad <= 32'd0; dbg_dva_adr <= 24'd0;
-        dva_seen <= 1'b0;
-     end else begin
-        dva_seen <= dva_fire;
-        if (dva_fire && !dva_seen) begin      // once per request, not per clock
-           dbg_n_dva <= dbg_n_dva + 32'd1;
-           if (bus_va < dva_lo || bus_va >= dva_hi) begin
-              dbg_n_dva_bad <= dbg_n_dva_bad + 32'd1;
-              dbg_dva_adr   <= bus_va;
-           end
-        end
-     end
-
-   // One cycle late, so the address buf_q answers is the one held last clock:
-   // rq_addr and buf_q lag blk_buf_addr by the same clock, so they align.
-   //
-   // Counted **once per byte**, not once per clock.  blk_buf_addr moves only
-   // when blk_sd consumes a byte -- one per SPI byte, every eight-odd clocks --
-   // so counting every clock inflated the control forty-fold and made the flag
-   // fire once per sector: 2046 against 1024 sectors x 2 passes = 2048.  The
-   // sample taken is the comparison registered on the clock *before* the
-   // address moves, which is the last and most settled one for that byte.
-   reg [8:0]  rq_addr, addr_q;
-   reg        rd_armed, rd_prev_ok, rd_pend, ok_q;
-   wire [7:0] rd_exp = rq_addr[0] ? rq_addr[8:1] : 8'h80;
-   wire       rd_ok  = (buf_q == rd_exp);
-   wire       byte_done = blk_busy && blk_we && (blk_buf_addr != addr_q);
-   always @(posedge CLK)
-     if (RESET) begin
-        rq_addr <= 9'd0; addr_q <= 9'd0; ok_q <= 1'b0;
-        rd_armed <= 1'b0; rd_prev_ok <= 1'b0; rd_pend <= 1'b0;
-        dbg_n_rd <= 32'd0; dbg_n_rd_bad <= 32'd0;
-     end else begin
-        if (blk_busy) rq_addr <= blk_buf_addr;
-        addr_q <= blk_buf_addr;
-        ok_q   <= rd_ok;
-        if (byte_done) begin
-           if (addr_q == 9'd0) rd_armed <= ok_q;
-           if (rd_armed || addr_q == 9'd0) begin
-              dbg_n_rd   <= dbg_n_rd + 32'd1;
-              rd_prev_ok <= ok_q;
-              if (ok_q) begin
-                 if (rd_pend) begin
-                    rd_pend      <= 1'b0;
-                    dbg_n_rd_bad <= dbg_n_rd_bad + 32'd1;
-                 end
-              end else if (rd_prev_ok && !rd_pend)
-                rd_pend <= 1'b1;
-              else
-                rd_pend <= 1'b0;
-           end
-        end
-     end
 
    wire [1:0]  chunk_lane = chunk_va[1:0];
    wire [2:0]  chunk_room = 3'd4 - {1'b0, chunk_lane};

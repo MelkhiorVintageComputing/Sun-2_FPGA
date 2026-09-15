@@ -344,9 +344,6 @@ module wukong_top #(
    wire [31:0] xchk_got, xchk_exp;
    wire [31:0] xchk_n_read, xchk_n_pat, xchk_n_bad;
    wire [31:0] xchk_n_wpat, xchk_n_wbad;
-   wire [31:0] xy_n_sb, xy_n_sb_bad, xy_n_sb_iso, xy_n_drop, xy_n_rd, xy_n_rd_bad;
-   wire [31:0] xy_n_dva, xy_n_dva_bad;
-   wire [23:0] xy_dva_adr;
    wire [31:0] rr_n, rr_bad, rr_v1, rr_v2;
 `ifdef SUN2_ILA
    // Named wires rather than slices straight into the core, because the
@@ -395,12 +392,12 @@ module wukong_top #(
        .probe_in12 (32'd0),
        .probe_in13 (32'd0),
        .probe_in14 (32'd0),
-       .probe_in15 (xy_n_sb),
-       .probe_in16 (xy_n_sb_bad),
-       .probe_in17 (xy_n_sb_iso),
-       .probe_in18 (xy_n_drop),
-       .probe_in19 (xy_n_rd),
-       .probe_in20 (xy_n_rd_bad),
+       .probe_in15 (32'd0),
+       .probe_in16 (32'd0),
+       .probe_in17 (32'd0),
+       .probe_in18 (32'd0),
+       .probe_in19 (32'd0),
+       .probe_in20 (32'd0),
        .probe_in21 (32'd0),
        .probe_in22 (32'd0),
        .probe_in23 (32'd0),
@@ -412,9 +409,9 @@ module wukong_top #(
        .probe_in29 (32'd0),
        .probe_in30 (32'd0),
        .probe_in31 (32'd0),
-       .probe_in32 (xy_n_dva),
-       .probe_in33 (xy_n_dva_bad),
-       .probe_in34 ({8'd0, xy_dva_adr})
+       .probe_in32 (32'd0),
+       .probe_in33 (32'd0),
+       .probe_in34 (32'd0)
    );
 
    sun2_ila u_ila (
@@ -603,15 +600,6 @@ module wukong_top #(
 `ifdef SUN2_ILA
        .dbg_bus        (dbg_bus),
 `endif
-       .xy_n_sb        (xy_n_sb),
-       .xy_n_sb_bad    (xy_n_sb_bad),
-       .xy_n_sb_iso    (xy_n_sb_iso),
-       .xy_n_drop      (xy_n_drop),
-       .xy_n_rd        (xy_n_rd),
-       .xy_n_rd_bad    (xy_n_rd_bad),
-       .xy_n_dva       (xy_n_dva),
-       .xy_n_dva_bad   (xy_n_dva_bad),
-       .xy_dva_adr     (xy_dva_adr),
 
 
        .eth_crs_stuck (eth_crs_stuck),
