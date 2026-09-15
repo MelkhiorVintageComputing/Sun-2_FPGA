@@ -35,10 +35,7 @@ set disk_off_mib 0
 set cpu      suska
 set ila      0
 set hdmimode 1280x1024
-set fbdebug  0
 set allowpw  0
-set fbprobe  0
-set fbforce  0
 set eth5     224
 set cpu_div  0
 set mb_3c400 0
@@ -51,16 +48,13 @@ if {[llength $argv] > 5} { set xy450    [lindex $argv 5] }
 if {[llength $argv] > 6} { set cpu      [lindex $argv 6] }
 if {[llength $argv] > 7} { set ila      [lindex $argv 7] }
 if {[llength $argv] > 8} { set hdmimode [lindex $argv 8] }
-if {[llength $argv] > 9} { set fbdebug  [lindex $argv 9] }
-if {[llength $argv] > 10} { set allowpw [lindex $argv 10] }
-if {[llength $argv] > 11} { set fbprobe [lindex $argv 11] }
-if {[llength $argv] > 12} { set fbforce [lindex $argv 12] }
-if {[llength $argv] > 13} { set eth5    [lindex $argv 13] }
-if {[llength $argv] > 14} { set cpu_div [lindex $argv 14] }
-if {[llength $argv] > 15} { set mb_3c400 [lindex $argv 15] }
-if {[llength $argv] > 16} { set vme_scsi [lindex $argv 16] }
-if {[llength $argv] > 17} { set mb_scsi  [lindex $argv 17] }
-if {[llength $argv] > 18} { set disk_off_mib [lindex $argv 18] }
+if {[llength $argv] > 9} { set allowpw [lindex $argv 9] }
+if {[llength $argv] > 10} { set eth5    [lindex $argv 10] }
+if {[llength $argv] > 11} { set cpu_div [lindex $argv 11] }
+if {[llength $argv] > 12} { set mb_3c400 [lindex $argv 12] }
+if {[llength $argv] > 13} { set vme_scsi [lindex $argv 13] }
+if {[llength $argv] > 14} { set mb_scsi  [lindex $argv 14] }
+if {[llength $argv] > 15} { set disk_off_mib [lindex $argv 15] }
 
 # CPU_DIV names the MMCM divider directly and wins over CPU_HZ in
 # wukong_clkgen.sv:63, so from here on cpu_hz has to mean the clock that will
@@ -183,8 +177,6 @@ if {$fb == 1} {
 #              not work in the full design; see the trap in CLAUDE.md.
 #   1080p30    the *same* raster at half the clock.  Not every sink takes it:
 #              the monitor on this bench rejects 30 Hz outright.
-#   720p60     1650x750 at the same half clock, a raster more sinks accept.
-#              Diagnostic only -- 900 lines do not fit in 720 -- so FBDEBUG=1.
 #
 # Only when there is a display to apply it to.  Without FB=1 the mode is not a
 # question at all -- every consumer of these defines is inside `ifdef SUN2_FB --
@@ -197,60 +189,12 @@ if {$fb == 1} {
     1080p60   { }
     1080p30   { lappend defines SUN2_HDMI_HALFRATE }
     1280x1024 { lappend defines SUN2_HDMI_SXGA }
-    720p60    {
-        if {$fbdebug != 1} {
-            puts "ERROR: HDMI_MODE=720p60 needs FBDEBUG=1 -- 1152x900 does not"
-            puts "       fit in 720 lines, so there is no honest way to show"
-            puts "       the frame buffer at that raster"
-            exit 1
-        }
-        lappend defines SUN2_HDMI_HALFRATE
-        lappend defines SUN2_HDMI_720P
-    }
     default {
-        puts "ERROR: HDMI_MODE must be 1080p60, 1080p30, 720p60 or 1280x1024,"
+        puts "ERROR: HDMI_MODE must be 1080p60, 1080p30 or 1280x1024,"
         puts "       not '$hdmimode'"
         exit 1
     }
  }
-}
-
-# FBDEBUG=1: drive the display from a test pattern rather than fb_scanout, and
-# put the video domain on the LED header in place of todebug.  For finding out
-# why a display that test/hdmi drives happily shows nothing from the Sun-2.
-if {$fbdebug == 1} {
-    if {$fb != 1} {
-        puts "ERROR: FBDEBUG needs FB=1"
-        exit 1
-    }
-    lappend defines SUN2_FB_DEBUG
-}
-
-# FBPROBE=1: the real display, with the path to it on the LED header instead
-# of todebug.  For a screen that is black inside a raster the monitor accepts,
-# which is what every link in the chain looks like from outside -- DISPEN, the
-# fetch, the answer, the data, the pixel.  One latch each; see wukong_top.sv.
-if {$fbprobe == 1} {
-    if {$fb != 1} {
-        puts "ERROR: FBPROBE needs FB=1"
-        exit 1
-    }
-    if {$fbdebug == 1} {
-        puts "ERROR: FBPROBE and FBDEBUG both drive extra_leds0; pick one"
-        exit 1
-    }
-    lappend defines SUN2_FB_PROBE
-}
-
-# FBFORCE=1: tie the scan-out's DISPEN high, leaving the video control
-# register itself alone.  Diagnostic: it asks whether everything downstream of
-# DISPEN works, without waiting to find out why the machine has not set it.
-if {$fbforce == 1} {
-    if {$fb != 1} {
-        puts "ERROR: FBFORCE needs FB=1"
-        exit 1
-    }
-    lappend defines SUN2_FB_FORCE_EN
 }
 
 # The Xylogics 450 is a MultiBus card; a 2/50 takes a 451 on the VME bus, which
@@ -313,7 +257,7 @@ set ipdir   $top/build/ip/$board
 # not exist, and `make program' failed with "no such bitstream".  The failure is
 # loud only because the two names differ; had make looked where Vivado wrote,
 # the wrong machine would have been programmed silently.
-set outdir  $top/build/syn/vivado/$board-$machine[expr {$vme_scsi == 1 ? "-vmescsi" : ""}][expr {$mb_scsi == 1 ? "-mbscsi" : ""}][expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$mb_3c400 == 1 ? "-3c400" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu$cputag[expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$fbdebug == 1 ? "-fbdbg" : ""}][expr {$fbprobe == 1 ? "-fbprobe" : ""}][expr {$fbforce == 1 ? "-fbforce" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}][expr {$disk_off_mib != 0 ? "-off${disk_off_mib}m" : ""}]
+set outdir  $top/build/syn/vivado/$board-$machine[expr {$vme_scsi == 1 ? "-vmescsi" : ""}][expr {$mb_scsi == 1 ? "-mbscsi" : ""}][expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$mb_3c400 == 1 ? "-3c400" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu$cputag[expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}][expr {$disk_off_mib != 0 ? "-off${disk_off_mib}m" : ""}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir

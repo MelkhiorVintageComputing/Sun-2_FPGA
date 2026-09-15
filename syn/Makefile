@@ -101,23 +101,8 @@ ILA ?= 0
 #   1080p60    what the board is wired for and what does NOT work in the full
 #              design -- 742 MHz past a BUFG's 628.  Needs ALLOW_PW=1.
 #   1080p30    the 1080p60 raster at half the clock; many sinks reject 30 Hz.
-#   720p60     half the clock at a raster more sinks take.  FBDEBUG=1 only.
 #
 HDMI_MODE ?= 1280x1024
-
-# Drive the display from a test pattern instead of the frame buffer, and put
-# the video domain on the LED header.  Needs FB=1.  See test/hdmi/README.md.
-FBDEBUG ?= 0
-
-# Drive the real display, but put the path to it on the LED header: DISPEN, the
-# DDR3 fetch, its answer, whether that answer was non-zero, and whether a
-# non-black pixel came out.  For a black screen the monitor is happy to sync
-# on.  Needs FB=1, and is exclusive with FBDEBUG.
-FBPROBE ?= 0
-
-# Tie the scan-out's DISPEN high, leaving the video control register alone.
-# Answers "is everything past DISPEN sound?" on its own.  Needs FB=1.
-FBFORCE ?= 0
 
 # Build even though a clock exceeds the rating of the resource carrying it.
 # 1080p60's TMDS clock does, by 245 ps on the BUFG, and works on the bench --
@@ -167,7 +152,7 @@ ETH5_D  = $(shell printf '%d' 0x$(ETH5))
 SYNDIR  = $(TOP)/build/syn
 
 TAG     = $(if $(filter 1,$(VME_SCSI)),-vmescsi,)$(if $(filter 1,$(MB_SCSI)),-mbscsi,)$(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)
-OUTDIR  = $(SYNDIR)/vivado/$(BOARD)-$(MACHINE)$(TAG)-cpu$(CPU_MHZ_TAG)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(ILA)),-ila,)$(if $(filter 1,$(FB)),-$(HDMI_MODE),)$(if $(filter 1,$(FBDEBUG)),-fbdbg,)$(if $(filter 1,$(FBPROBE)),-fbprobe,)$(if $(filter 1,$(FBFORCE)),-fbforce,)$(if $(filter-out e0,$(ETH5)),-eth$(ETH5),)$(if $(CPU_DIV),-div$(CPU_DIV),)$(if $(filter 0,$(DISK_OFF_MIB)),,-off$(DISK_OFF_MIB)m)
+OUTDIR  = $(SYNDIR)/vivado/$(BOARD)-$(MACHINE)$(TAG)-cpu$(CPU_MHZ_TAG)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(ILA)),-ila,)$(if $(filter 1,$(FB)),-$(HDMI_MODE),)$(if $(filter-out e0,$(ETH5)),-eth$(ETH5),)$(if $(CPU_DIV),-div$(CPU_DIV),)$(if $(filter 0,$(DISK_OFF_MIB)),,-off$(DISK_OFF_MIB)m)
 # Absolute, because the recipes below run Vivado from $(WORKDIR) and $(OUTDIR)
 # is relative to here: a relative path resolves against the wrong directory and
 # program.tcl reports a bitstream that was never at that address.
@@ -209,7 +194,7 @@ inputs:
 
 bitstream: ip rom inputs $(if $(filter 1,$(ILA)),ip-ila,) | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
-		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB) $(XY450) $(CPU) $(ILA) $(HDMI_MODE) $(FBDEBUG) $(ALLOW_PW) $(FBPROBE) $(FBFORCE) $(ETH5_D) $(if $(CPU_DIV),$(CPU_DIV),0) $(MB_3C400) $(VME_SCSI) $(MB_SCSI) $(DISK_OFF_MIB)
+		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB) $(XY450) $(CPU) $(ILA) $(HDMI_MODE) $(ALLOW_PW) $(ETH5_D) $(if $(CPU_DIV),$(CPU_DIV),0) $(MB_3C400) $(VME_SCSI) $(MB_SCSI) $(DISK_OFF_MIB)
 	@echo "bitstream: $(BIT)"
 
 # Programming.  Same knobs as bitstream, so `make program ILA=1 CPU=rd68011

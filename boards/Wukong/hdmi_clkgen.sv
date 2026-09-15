@@ -36,7 +36,7 @@
 //   (default)  1080p60, 148.4375 / 742.1875 MHz.  Kept because it is what the
 //              board is wired for and what QMTech's reference design does, and
 //              because it works with little else in the part.  Needs ALLOW_PW.
-//   HALFRATE   74.21875 / 371.09375 MHz, for 1080p30 and 720p60 alike.
+//   HALFRATE   74.21875 / 371.09375 MHz, for 1080p30.
 //   SXGA       108.125 / 540.625 MHz, 1280x1024 at 60 Hz.
 //
 // SXGA is the one to reach for.  1152x900 is the Sun-2's screen and no CEA
