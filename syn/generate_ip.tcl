@@ -1,20 +1,12 @@
 # Generate the Xilinx IP the board build needs.
 #
-#   vivado -mode batch -source syn/generate_ip.tcl [-tclargs BOARD [WHICH]]
+#   vivado -mode batch -source syn/generate_ip.tcl [-tclargs BOARD]
 #
 # BOARD is v1 (default) or v3; see syn/boards.tcl.
-# WHICH is all (default), mig, or ila -- MIG takes minutes to generate and the
-# ILA seconds, so they are separable.
 #
-# Two cores.  The MIG 7 Series DDR3 controller, configured from
-# syn/mig/sun2_mig.prj, is in every build; the ILA is the debug instrument,
-# fitted only by ILA=1 and sampling the bus described in
-# rtl/sun2-common/sun2_fpga.v's dbg_bus.
-#
-# MIG's .prj is the source of truth for it and is committed; everything MIG
-# emits from it lands in build/ip/<board> and is not.  The ILA has no .prj --
-# an ILA is configured entirely through CONFIG.* properties, so this file is
-# its source of truth.
+# One core: the MIG 7 Series DDR3 controller, configured from
+# syn/mig/sun2_mig.prj.  The .prj is the source of truth for it and is
+# committed; everything MIG emits from it lands in build/ip/<board> and is not.
 #
 # The two Wukong revisions want the same DDR3 in every respect -- same
 # MT41K128M16, same 47 pins, same 3000 ps -- and differ only in the FPGA speed
@@ -31,17 +23,11 @@ set top  [file normalize $here/..]
 source $here/boards.tcl
 
 set board v1
-set which all
 if {[llength $argv] > 0} { set board [lindex $argv 0] }
-if {[llength $argv] > 1} { set which [lindex $argv 1] }
 board_check $board
 if {[board_vendor $board] ne "xilinx"} {
     puts "ERROR: BOARD=$board is an [board_vendor $board] board; this is the"
     puts "       Vivado flow.  Use: make -C syn quartus BOARD=$board"
-    exit 1
-}
-if {$which ne "all" && $which ne "mig" && $which ne "ila"} {
-    puts "ERROR: WHICH must be all, mig or ila, not '$which'"
     exit 1
 }
 
@@ -50,8 +36,6 @@ set mig_part  [board_mig_part $board]
 set ipdir     $top/build/ip/$board
 
 file mkdir $ipdir
-
-if {$which eq "all" || $which eq "mig"} {
 
 # The committed .prj with the target substituted.  Keep this free of XML
 # comments: MIG's parser fails on them, reports the target device as empty and
@@ -99,219 +83,3 @@ if {[llength $ds]} {
 
 puts "== done; generated under $ipdir/sun2_mig =="
 
-}
-
-if {$which eq "all" || $which eq "ila"} {
-
-if {![llength [current_project -quiet]]} {
-    create_project -in_memory -part $part
-    set_property target_language Verilog [current_project]
-    set_property ip_output_repo $ipdir [current_project]
-}
-
-puts "== generating sun2_ila for Wukong $board ($part) =="
-
-# The instrument for the MMU.  Unlike MIG there is no .prj: an ILA is
-# configured entirely through CONFIG.* properties, so this is the source of
-# truth for it and there is nothing else to keep in step.
-#
-# Eight probes, because the field boundaries are what make a capture readable
-# and the basic trigger unit ANDs one comparator per probe -- ERR and FC == 1
-# in one condition, without the advanced trigger unit.  Widths must match the
-# slices in boards/Wukong/wukong_top.sv; Vivado checks them at elaboration.
-#
-# Capture control (C_EN_STRG_QUAL) is what makes 4096 samples enough: the
-# machine is idle between bus cycles, so the interesting window is a few
-# hundred clocks spread over millions.  The qualifier is set at run time from
-# the Hardware Manager -- ~P_AS_n to keep only bus cycles.
-#
-# Two input pipeline stages, because this samples wide combinational cones --
-# the map outputs and the protection terms -- and the ILA must not be what
-# fails timing.  It costs two clocks of latency, uniformly across every probe,
-# so the relative timing a capture shows is unaffected.
-
-# Delete any previous copy first.  create_ip over an existing IP of the same
-# name reuses it, and then only some of the properties below take: changing the
-# probe count from 11 to 12 left C_NUM_OF_PROBES at 11 while C_PROBE11_WIDTH
-# was accepted, so the core kept eleven probes, this script printed "done", and
-# synthesis failed much later with "named port connection 'probe11' does not
-# exist" against a stale stub.  Regenerating from nothing costs seconds.
-file delete -force $ipdir/sun2_ila
-
-create_ip -name ila -vendor xilinx.com -library ip \
-          -module_name sun2_ila -dir $ipdir
-
-# The probe count first, on its own.  set_property -dict is atomic and
-# validated as a whole, so naming C_PROBE8_WIDTH while the core still has eight
-# probes invalidates the entire dict -- silently: the IP keeps its old
-# configuration and only the generated .xci shows it.
-set_property CONFIG.C_NUM_OF_PROBES {17} [get_ips sun2_ila]
-
-set_property -dict [list \
-    CONFIG.C_DATA_DEPTH        {1024} \
-    CONFIG.C_INPUT_PIPE_STAGES {2} \
-    CONFIG.C_EN_STRG_QUAL      {1} \
-    CONFIG.C_ADV_TRIGGER       {false} \
-    CONFIG.C_TRIGOUT_EN        {false} \
-    CONFIG.C_TRIGIN_EN         {false} \
-    CONFIG.ALL_PROBE_SAME_MU_CNT {2} \
-    CONFIG.C_PROBE0_WIDTH {23} \
-    CONFIG.C_PROBE1_WIDTH {3} \
-    CONFIG.C_PROBE2_WIDTH {6} \
-    CONFIG.C_PROBE3_WIDTH {4} \
-    CONFIG.C_PROBE4_WIDTH {8} \
-    CONFIG.C_PROBE5_WIDTH {12} \
-    CONFIG.C_PROBE6_WIDTH {12} \
-    CONFIG.C_PROBE7_WIDTH {6} \
-    CONFIG.C_PROBE8_WIDTH {16} \
-    CONFIG.C_PROBE9_WIDTH {8} \
-    CONFIG.C_PROBE10_WIDTH {3} \
-    CONFIG.C_PROBE11_WIDTH {1} \
-    CONFIG.C_PROBE12_WIDTH {16} \
-    CONFIG.C_PROBE13_WIDTH {1} \
-    CONFIG.C_PROBE14_WIDTH {32} \
-    CONFIG.C_PROBE15_WIDTH {32} \
-    CONFIG.C_PROBE16_WIDTH {1} \
-] [get_ips sun2_ila]
-
-# And check it took.  The properties above are validated as a whole and can be
-# rejected in silence, so read the one that matters back rather than trusting
-# that setting it worked -- the failure mode is a bitstream that cannot be
-# built and a message that points at the wrong file.
-set got [get_property CONFIG.C_NUM_OF_PROBES [get_ips sun2_ila]]
-if {$got != 17} {
-    puts "ERROR: sun2_ila has $got probes, not the 17 asked for -- the"
-    puts "       configuration was rejected.  wukong_top.sv drives probe17,"
-    puts "       so synthesis would fail on a stale stub instead."
-    exit 1
-}
-puts "== sun2_ila: $got probes =="
-
-# ---------------------------------------------------------------------------
-# The VIO.  An ILA answers "what happened around this event"; a VIO answers
-# "what does this register hold now", which is what a counter needs and what
-# the DECA's In-System Sources and Probes gave for free.  A capture window is
-# 205 us and the fault being counted happens a few times per minute, so no
-# trigger could ever have bridged that -- see the trap in CLAUDE.md.
-#
-# Inputs only: the counters are read out, and nothing here drives the machine.
-create_ip -name vio -vendor xilinx.com -library ip -module_name sun2_vio \
-    -dir $ipdir -force
-set_property -dict [list \
-    CONFIG.C_NUM_PROBE_IN  {49} \
-    CONFIG.C_NUM_PROBE_OUT {0} \
-    CONFIG.C_PROBE_IN0_WIDTH {32} \
-    CONFIG.C_PROBE_IN1_WIDTH {32} \
-    CONFIG.C_PROBE_IN2_WIDTH {32} \
-    CONFIG.C_PROBE_IN3_WIDTH {32} \
-    CONFIG.C_PROBE_IN4_WIDTH {32} \
-    CONFIG.C_PROBE_IN5_WIDTH {32} \
-    CONFIG.C_PROBE_IN6_WIDTH {32} \
-    CONFIG.C_PROBE_IN7_WIDTH {32} \
-    CONFIG.C_PROBE_IN8_WIDTH {32} \
-    CONFIG.C_PROBE_IN9_WIDTH {32} \
-    CONFIG.C_PROBE_IN10_WIDTH {32} \
-    CONFIG.C_PROBE_IN11_WIDTH {32} \
-    CONFIG.C_PROBE_IN12_WIDTH {32} \
-    CONFIG.C_PROBE_IN13_WIDTH {32} \
-    CONFIG.C_PROBE_IN14_WIDTH {32} \
-    CONFIG.C_PROBE_IN15_WIDTH {32} \
-    CONFIG.C_PROBE_IN16_WIDTH {32} \
-    CONFIG.C_PROBE_IN17_WIDTH {32} \
-    CONFIG.C_PROBE_IN18_WIDTH {32} \
-    CONFIG.C_PROBE_IN19_WIDTH {32} \
-    CONFIG.C_PROBE_IN20_WIDTH {32} \
-    CONFIG.C_PROBE_IN21_WIDTH {32} \
-    CONFIG.C_PROBE_IN22_WIDTH {32} \
-    CONFIG.C_PROBE_IN23_WIDTH {32} \
-    CONFIG.C_PROBE_IN24_WIDTH {32} \
-    CONFIG.C_PROBE_IN25_WIDTH {32} \
-    CONFIG.C_PROBE_IN26_WIDTH {32} \
-    CONFIG.C_PROBE_IN27_WIDTH {32} \
-    CONFIG.C_PROBE_IN28_WIDTH {32} \
-    CONFIG.C_PROBE_IN29_WIDTH {32} \
-    CONFIG.C_PROBE_IN30_WIDTH {32} \
-    CONFIG.C_PROBE_IN31_WIDTH {32} \
-    CONFIG.C_PROBE_IN32_WIDTH {32} \
-    CONFIG.C_PROBE_IN33_WIDTH {32} \
-    CONFIG.C_PROBE_IN34_WIDTH {32} \
-    CONFIG.C_PROBE_IN35_WIDTH {32} \
-    CONFIG.C_PROBE_IN36_WIDTH {32} \
-    CONFIG.C_PROBE_IN37_WIDTH {32} \
-    CONFIG.C_PROBE_IN38_WIDTH {32} \
-    CONFIG.C_PROBE_IN39_WIDTH {32} \
-    CONFIG.C_PROBE_IN40_WIDTH {32} \
-    CONFIG.C_PROBE_IN41_WIDTH {32} \
-    CONFIG.C_PROBE_IN42_WIDTH {32} \
-    CONFIG.C_PROBE_IN43_WIDTH {32} \
-    CONFIG.C_PROBE_IN44_WIDTH {32} \
-    CONFIG.C_PROBE_IN45_WIDTH {32} \
-    CONFIG.C_PROBE_IN46_WIDTH {32} \
-    CONFIG.C_PROBE_IN47_WIDTH {64} \
-    CONFIG.C_PROBE_IN48_WIDTH {64} \
-
-
-
-] [get_ips sun2_vio]
-generate_target all [get_ips sun2_vio]
-puts "== sun2_vio: 49 input probes =="
-
-generate_target {instantiation_template synthesis simulation} [get_ips sun2_ila]
-
-# ---------------------------------------------------------------------------
-# The bus history: every value on the 68010 bus *and* on the memory side of
-# the bridge, as deep as the device allows, for the question a write-side
-# capture could not answer -- when the master reads a wrong word, was that
-# value anywhere on the bus, or in a DDR3 word the CPU never sees half of,
-# in the moments before?
-#
-# A second core rather than more probes on sun2_ila, so every capture mode that
-# indexes sun2_ila's ports keeps working.  The BRAM comes from sun2_ila, cut
-# from 4096 to 1024 samples: the capture machine sat at 107.5 of 135 tiles with
-# sun2_ila at 4096 x 190 bits, and 8192 x 135 bits needs about 30.
-#
-# Probe 12 is a change strobe computed in wukong_top: high on any clock whose
-# sampled value differs from the clock before.  Used as the storage qualifier
-# it keeps every distinct bus state and drops the idle clocks in between, which
-# stretches 8192 samples over several times the 410 us they cover at 20 MHz
-# otherwise.  Unqualified, the capture is literally every clock.
-#
-# Widths must match the named wires in boards/Wukong/wukong_top.sv.
-file delete -force $ipdir/sun2_busila
-create_ip -name ila -vendor xilinx.com -library ip \
-          -module_name sun2_busila -dir $ipdir
-set_property CONFIG.C_NUM_OF_PROBES {12} [get_ips sun2_busila]
-set_property -dict [list \
-    CONFIG.C_DATA_DEPTH        {8192} \
-    CONFIG.C_INPUT_PIPE_STAGES {2} \
-    CONFIG.C_EN_STRG_QUAL      {1} \
-    CONFIG.C_ADV_TRIGGER       {false} \
-    CONFIG.C_TRIGOUT_EN        {false} \
-    CONFIG.C_TRIGIN_EN         {false} \
-    CONFIG.ALL_PROBE_SAME_MU_CNT {2} \
-    CONFIG.C_PROBE0_WIDTH  {23} \
-    CONFIG.C_PROBE1_WIDTH  {3} \
-    CONFIG.C_PROBE2_WIDTH  {6} \
-    CONFIG.C_PROBE3_WIDTH  {4} \
-    CONFIG.C_PROBE4_WIDTH  {16} \
-    CONFIG.C_PROBE5_WIDTH  {1} \
-    CONFIG.C_PROBE6_WIDTH  {12} \
-    CONFIG.C_PROBE7_WIDTH  {32} \
-    CONFIG.C_PROBE8_WIDTH  {8} \
-    CONFIG.C_PROBE9_WIDTH  {22} \
-    CONFIG.C_PROBE10_WIDTH {1} \
-    CONFIG.C_PROBE11_WIDTH {1} \
-] [get_ips sun2_busila]
-set got  [get_property CONFIG.C_NUM_OF_PROBES [get_ips sun2_busila]]
-set gotd [get_property CONFIG.C_DATA_DEPTH    [get_ips sun2_busila]]
-if {$got != 12 || $gotd != 8192} {
-    puts "ERROR: sun2_busila has $got probes and depth $gotd, not 12 and 8192 --"
-    puts "       the configuration was rejected."
-    exit 1
-}
-generate_target {instantiation_template synthesis simulation} [get_ips sun2_busila]
-puts "== sun2_busila: $got probes, depth $gotd =="
-
-puts "== done; generated under $ipdir/sun2_ila =="
-
-}

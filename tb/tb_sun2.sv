@@ -205,7 +205,6 @@ module tb_sun2 #(
    // plainly; Vivado would have invented the wire and said nothing, which is
    // the whole reason this signal needed a test.
    wire        fb_video_en;
-   wire [117:0] dbg_bus;
 
    wire        wb_cyc, wb_stb, wb_we, wb_ack;
    wire [29:0] wb_adr;
@@ -268,7 +267,6 @@ module tb_sun2 #(
            .en_boot(en_boot),
            .todebug(todebug),
            .fb_video_en(fb_video_en),
-           .dbg_bus(dbg_bus),
 
            .eth_crs_stuck(eth_crs_stuck),
 
@@ -538,52 +536,6 @@ module tb_sun2 #(
    always @(todebug)
      $display("[%t] todebug = %08b", $realtime, todebug);
 
-   //
-   // dbg_bus: the wide bus the board's ILA samples.  It is compiled into every
-   // build -- only the ILA instantiation in wukong_top.sv is conditional -- so
-   // the packing can and should be proved here, where a mismatch is a line of
-   // output rather than a bench session with a field one bit out.
-   //
-   // Compared against the signals it is supposed to carry, by hierarchical
-   // name, on every edge of the whole boot.  `!==' so that X matches X: before
-   // the maps are written their outputs are X, which is a correct reading of
-   // the machine and not a packing error.
-   int dbg_bad = 0;
-   always @(posedge dut.C100 or negedge dut.C100) begin
-      if (dbg_bus !== {dut.sun2.EN_INT,
-                       dut.sun2.IPL2_n, dut.sun2.IPL1_n, dut.sun2.IPL0_n,
-                       dut.sun2.INT7_n, dut.sun2.INT6_n,
-                       dut.sun2.INT5_n, dut.sun2.INT4_n,
-                       dut.sun2.INT3_n, dut.sun2.INT2_n, dut.sun2.INT1_n,
-                       dut.sun2.timer_int[5], dut.sun2.timer_int[4],
-                       dut.sun2.timer_int[3], dut.sun2.timer_int[2],
-                       dut.sun2.timer_int[1],
-                       dut.dvma_active,
-                       dut.sun2.cx_dbg,
-                       dut.sun2.ctx_out[11:8], dut.sun2.ctx_out[3:0],
-                       (dut.sun2.P_RW_n ? dut.sun2.P_DOUT : dut.sun2.P_DIN),
-                       dut.sun2.P_A, dut.sun2.P_FC,
-                       dut.sun2.P_AS_n, dut.sun2.P_RW_n,
-                       dut.sun2.P_UDS_n, dut.sun2.P_LDS_n,
-                       dut.sun2.P_DTACK_n, dut.sun2.P_BERR_n,
-                       dut.sun2.C_S4, dut.sun2.C_S6,
-                       dut.sun2.C_S8, dut.sun2.C_S24,
-                       dut.sun2.ia_smap2pmap, dut.sun2.ps_pmap2devices,
-                       dut.sun2.ma_pmap2devices,
-                       dut.sun2.VALID, dut.sun2.PROTERR_raw, dut.sun2.PROTERR,
-                       dut.sun2.TIMEOUT, dut.sun2.ERR, dut.sun2.MATCH_MEM}) begin
-         dbg_bad = dbg_bad + 1;
-         if (dbg_bad <= 5)
-           $display("[%t] dbg_bus MISPACKED: %0118b", $realtime, dbg_bus);
-      end
-   end
-   final begin
-      if (dbg_bad != 0)
-        $display("dbg_bus: MISPACKED on %0d edges -- the ILA field map in sun2_fpga.v is wrong", dbg_bad);
-      else
-        $display("dbg_bus: packing verified on every clock edge");
-   end
-
    // Every clock edge over a window, for pinning down the timing of one bus
    // cycle: +cycle_from=<ns> +cycle_to=<ns>.  Both edges, because the 68000
    // bus runs on both -- the odd C_S are clocked on negedge and the even on
@@ -612,22 +564,6 @@ module tb_sun2 #(
                 dut.sun2.C_S7, dut.sun2.C_S8,
                 dut.sun2.MATCH_PROM_BOOT, dut.sun2.VALID,
                 dut.sun2.PROTERR, dut.sun2.ERR);
-
-   // The same cycle as the board's ILA will show it, decoded out of dbg_bus
-   // rather than out of the design -- so a capture from hardware and a line
-   // from simulation can be read side by side, and so the field boundaries are
-   // exercised on a cycle whose answer is already known.
-   always @(posedge dut.C100 or negedge dut.C100)
-     if (cyc_to > 0.0 && $realtime >= cyc_from && $realtime <= cyc_to)
-       $display("[%t] %s   ila: A=%06x FC=%0d AS=%0d RW=%0d UDS=%0d LDS=%0d DTACK=%0d BERR=%0d | S4=%0d S6=%0d S8=%0d S24=%0d | smap=%02x ps=%03x ma=%03x | V=%0d Praw=%0d P=%0d T=%0d E=%0d MEM=%0d",
-                $realtime, dut.C100 ? "^" : "v",
-                {dbg_bus[73:51], 1'b0}, dbg_bus[50:48],
-                ~dbg_bus[47], ~dbg_bus[46], ~dbg_bus[45], ~dbg_bus[44],
-                ~dbg_bus[43], ~dbg_bus[42],
-                dbg_bus[41], dbg_bus[40], dbg_bus[39], dbg_bus[38],
-                dbg_bus[37:30], dbg_bus[29:18], dbg_bus[17:6],
-                dbg_bus[5], dbg_bus[4], dbg_bus[3],
-                dbg_bus[2], dbg_bus[1], dbg_bus[0]);
 
 `ifdef SUSKA_PEEK
    // Suska's own view of the same cycle -- EXTRA_DEFINES=SUSKA_PEEK, and only
@@ -1082,8 +1018,12 @@ module tb_sun2 #(
    // simulation passes, and it is worth knowing before any more time goes on
    // reproducing it here.
    //
-   // Read straight off dbg_bus, which is the same view the board's ILA has:
-   // bit 101 is dvma_active, 73:51 the address, 47 AS, 46 RW, 43 DTACK.
+   // Sampled from the machine by hierarchical name -- AS, RW, MATCH_MEM, the
+   // physical page, the address and the data -- plus top_fpga's dvma_active,
+   // which is the one thing sun2_fpga cannot tell about its own bus.  It was
+   // once read off the ILA's debug bus instead; the two ran side by side over
+   // every reference boot and agreed on every counter before that bus was
+   // removed.
    int lw_total = 0, lw_split = 0, dvma_cycles = 0;
 
    //
@@ -1098,7 +1038,11 @@ module tb_sun2 #(
    // ILA captures read cleanly and this did not.  Latching the last clock with
    // AS asserted gets the settled view on both.
    //
-   reg [117:0] cyc;                  // the final clock of the cycle in progress
+   // The final clock of the cycle in progress.
+   reg         cyc_dvma, cyc_rw, cyc_mm;
+   reg [11:0]  cyc_ma;                 // ma_pmap2devices, the physical page
+   reg [22:0]  cyc_pa;                 // P_A[23:1]; cyc_pa[0] is P_A[1], the half
+   reg [15:0]  cyc_dat;                // P_DOUT
    reg         in_cyc = 1'b0;
    reg         dvma_between = 1'b0;
    reg [22:0]  last_cpu_a = 23'h0;
@@ -1122,7 +1066,7 @@ module tb_sun2 #(
    // still wrong and nothing should be concluded from it.  The first attempt
    // scored 7101 and 46253 out of 198889, which is that verdict.
    //
-   // What it was missing: **dbg_data lags by one transaction.**  P_DATA_OUT is
+   // What it was missing: **the data bus lags by one transaction.**  P_DATA_OUT is
    // a register the bridge loads when a transaction is acknowledged, so during
    // a cycle the bus carries the *previous* memory transaction's data and this
    // cycle's own arrives during the next one.  The PROM's page-sizing loop
@@ -1147,12 +1091,17 @@ module tb_sun2 #(
    endfunction
 
    always @(posedge dut.C100) begin
-      if (!dbg_bus[47]) begin
-         in_cyc <= 1'b1;
-         cyc    <= dbg_bus;
+      if (!dut.sun2.P_AS_n) begin
+         in_cyc   <= 1'b1;
+         cyc_dvma <= dut.dvma_active;
+         cyc_rw   <= dut.sun2.P_RW_n;
+         cyc_mm   <= dut.sun2.MATCH_MEM;
+         cyc_ma   <= dut.sun2.ma_pmap2devices;
+         cyc_pa   <= dut.sun2.P_A;
+         cyc_dat  <= dut.sun2.P_DOUT;
       end else if (in_cyc) begin
          in_cyc <= 1'b0;
-         if (cyc[101]) begin
+         if (cyc_dvma) begin
             dvma_cycles++;
             dvma_between <= 1'b1;
             // A master's memory read loads P_DATA_OUT too, so it becomes the
@@ -1163,7 +1112,7 @@ module tb_sun2 #(
             // observation lagging, not the machine losing data, and it would
             // have been a false finding at exactly the address under
             // suspicion.
-            if (cyc[46] && cyc[0] && !$isunknown(cyc[17:6])) begin
+            if (cyc_rw && cyc_mm && !$isunknown(cyc_ma)) begin
                logic [31:0] dw;
                // ...and check what this cycle is *carrying* as well as
                // recording what it asked for.
@@ -1176,7 +1125,7 @@ module tb_sun2 #(
                // which was ever checked.  That is the direction a disk *write*
                // uses, and the one place a corrupted master read would not have
                // been noticed by anything in this tree.
-               dw = mem_word(cyc[17:6], cyc[73:51]);
+               dw = mem_word(cyc_ma, cyc_pa);
                // Score *both* candidate mappings and let the run say which,
                // rather than assuming the CPU branch's one-transaction lag
                // applies here too.  It does not: a first attempt compared a
@@ -1188,28 +1137,28 @@ module tb_sun2 #(
                // relationship from the CPU's and worth measuring rather than
                // guessing.  A run where neither score is near the total means
                // this is still wrong and nothing may be concluded from it.
-               if (prev_valid && !$isunknown(cyc[89:74])) begin
+               if (prev_valid && !$isunknown(cyc_dat)) begin
                   logic [15:0] own;
-                  own = cyc[51] ? {dw[31:24], dw[23:16]} : {dw[15:8], dw[7:0]};
+                  own = cyc_pa[0] ? {dw[31:24], dw[23:16]} : {dw[15:8], dw[7:0]};
                   dvma_rd++;
-                  if (cyc[89:74] === prev_exp) dvma_lag++;
-                  if (cyc[89:74] === own)      dvma_now++;
-                  if (cyc[89:74] !== prev_exp && cyc[89:74] !== own
+                  if (cyc_dat === prev_exp) dvma_lag++;
+                  if (cyc_dat === own)      dvma_now++;
+                  if (cyc_dat !== prev_exp && cyc_dat !== own
                       && dvma_shown < 12) begin
                      dvma_shown++;
                      $display("[%t] MASTER read: carried %04x, this cycle holds %04x, previous %04x",
-                              $realtime, cyc[89:74], own, prev_exp);
+                              $realtime, cyc_dat, own, prev_exp);
                   end
                end
-               prev_ma    <= cyc[17:6];
-               prev_pa    <= cyc[73:51];
-               prev_exp   <= cyc[51] ? {dw[31:24], dw[23:16]} : {dw[15:8], dw[7:0]};
+               prev_ma    <= cyc_ma;
+               prev_pa    <= cyc_pa;
+               prev_exp   <= cyc_pa[0] ? {dw[31:24], dw[23:16]} : {dw[15:8], dw[7:0]};
                prev_dvma  <= 1'b1;
                prev_valid <= 1'b1;
             end
          end else begin
             // every CPU read from memory, against both candidate mappings
-            if (cyc[46] && cyc[0] && !$isunknown(cyc[17:6]) && !$isunknown(cyc[89:74])) begin
+            if (cyc_rw && cyc_mm && !$isunknown(cyc_ma) && !$isunknown(cyc_dat)) begin
                logic [31:0] w;
                logic [15:0] wa, wb;
                // Expectation is taken when the read happens, not when it is
@@ -1218,27 +1167,27 @@ module tb_sun2 #(
                // against its new value and reported as corruption.  That was
                // the whole of the residual 7% on the calibration run, all of
                // it at one address being rewritten in a loop.
-               w  = mem_word(cyc[17:6], cyc[73:51]);
-               wa = cyc[51] ? {w[31:24], w[23:16]} : {w[15:8], w[7:0]};
+               w  = mem_word(cyc_ma, cyc_pa);
+               wa = cyc_pa[0] ? {w[31:24], w[23:16]} : {w[15:8], w[7:0]};
                if (prev_valid) begin
                   mem_rd++;
-                  if (cyc[89:74] === prev_exp) match_a++;
+                  if (cyc_dat === prev_exp) match_a++;
                   else if (shown < 12) begin
                      shown++;
                      $display("[%t] read of %06x (page %03x) carried %04x, memory held %04x%s",
-                              $realtime, {prev_pa,1'b0}, prev_ma, cyc[89:74], prev_exp,
+                              $realtime, {prev_pa,1'b0}, prev_ma, cyc_dat, prev_exp,
                               prev_dvma ? "   <== a master's cycle was inside it" : "");
                   end
                end
-               prev_ma    <= cyc[17:6];
-               prev_pa    <= cyc[73:51];
+               prev_ma    <= cyc_ma;
+               prev_pa    <= cyc_pa;
                prev_exp   <= wa;
                prev_dvma  <= dvma_between;
                prev_valid <= 1'b1;
             end
 
             // a longword read is two consecutive word reads at A and A+2
-            if (last_cpu_rd && cyc[46] && cyc[73:51] == last_cpu_a + 23'd1) begin
+            if (last_cpu_rd && cyc_rw && cyc_pa == last_cpu_a + 23'd1) begin
                lw_total++;
                if (dvma_between) begin
                   lw_split++;
@@ -1247,118 +1196,11 @@ module tb_sun2 #(
                              $realtime, {last_cpu_a, 1'b0});
                end
             end
-            last_cpu_a   <= cyc[73:51];
-            last_cpu_rd  <= cyc[46];
+            last_cpu_a   <= cyc_pa;
+            last_cpu_rd  <= cyc_rw;
             dvma_between <= 1'b0;
          end
       end
-   end
-
-   // -----------------------------------------------------------------------
-   // The same check, sampled from the machine's own signals.
-   // -----------------------------------------------------------------------
-   // dbg_bus exists only to be looked at, and it is going away.  This is the
-   // identical check driven by hierarchical name instead, running *beside* the
-   // dbg_bus copy so the two can be compared inside one simulation rather than
-   // across a commit boundary -- which is much the stronger evidence, and it
-   // puts the risky edit on a commit where no RTL moved.  When dbg_bus goes,
-   // the copy above goes with it and this one keeps the numbers.
-   //
-   // Every name here is already proved by the packing check above, which
-   // compares dbg_bus against these same signals on every clock edge.  The
-   // field correspondence is:
-   //   dbg_bus[47]    P_AS_n        [46]     P_RW_n       [0]      MATCH_MEM
-   //   dbg_bus[101]   dvma_active   [17:6]   ma_pmap2devices
-   //   dbg_bus[73:51] P_A[23:1]     [51]     P_A[1]       [89:74]  P_DOUT
-   // so h_pa[0] is P_A[1], the half select, exactly as cyc[51] was.
-   //
-   int h_lw_total = 0, h_lw_split = 0, h_dvma_cycles = 0;
-   int h_mem_rd = 0, h_match_a = 0;
-   int h_dvma_rd = 0, h_dvma_lag = 0, h_dvma_now = 0;
-
-   reg        h_in_cyc = 1'b0, h_dvma_between = 1'b0;
-   reg        h_dvma, h_rw, h_mm;
-   reg [11:0] h_ma;
-   reg [22:0] h_pa;
-   reg [15:0] h_dat;
-   reg [22:0] h_last_cpu_a = 23'h0;
-   reg        h_last_cpu_rd = 1'b0;
-   reg [11:0] h_prev_ma; reg [22:0] h_prev_pa; reg h_prev_valid = 1'b0;
-   reg [15:0] h_prev_exp;
-
-   always @(posedge dut.C100) begin
-      if (!dut.sun2.P_AS_n) begin
-         h_in_cyc <= 1'b1;
-         h_dvma   <= dut.dvma_active;
-         h_rw     <= dut.sun2.P_RW_n;
-         h_mm     <= dut.sun2.MATCH_MEM;
-         h_ma     <= dut.sun2.ma_pmap2devices;
-         h_pa     <= dut.sun2.P_A;
-         h_dat    <= dut.sun2.P_DOUT;
-      end else if (h_in_cyc) begin
-         h_in_cyc <= 1'b0;
-         if (h_dvma) begin
-            h_dvma_cycles++;
-            h_dvma_between <= 1'b1;
-            if (h_rw && h_mm && !$isunknown(h_ma)) begin
-               logic [31:0] dw;
-               dw = mem_word(h_ma, h_pa);
-               if (h_prev_valid && !$isunknown(h_dat)) begin
-                  logic [15:0] own;
-                  own = h_pa[0] ? {dw[31:24], dw[23:16]} : {dw[15:8], dw[7:0]};
-                  h_dvma_rd++;
-                  if (h_dat === h_prev_exp) h_dvma_lag++;
-                  if (h_dat === own)        h_dvma_now++;
-               end
-               h_prev_ma    <= h_ma;
-               h_prev_pa    <= h_pa;
-               h_prev_exp   <= h_pa[0] ? {dw[31:24], dw[23:16]} : {dw[15:8], dw[7:0]};
-               h_prev_valid <= 1'b1;
-            end
-         end else begin
-            if (h_rw && h_mm && !$isunknown(h_ma) && !$isunknown(h_dat)) begin
-               logic [31:0] w;
-               logic [15:0] wa;
-               w  = mem_word(h_ma, h_pa);
-               wa = h_pa[0] ? {w[31:24], w[23:16]} : {w[15:8], w[7:0]};
-               if (h_prev_valid) begin
-                  h_mem_rd++;
-                  if (h_dat === h_prev_exp) h_match_a++;
-               end
-               h_prev_ma    <= h_ma;
-               h_prev_pa    <= h_pa;
-               h_prev_exp   <= wa;
-               h_prev_valid <= 1'b1;
-            end
-
-            if (h_last_cpu_rd && h_rw && h_pa == h_last_cpu_a + 23'd1) begin
-               h_lw_total++;
-               if (h_dvma_between) h_lw_split++;
-            end
-            h_last_cpu_a   <= h_pa;
-            h_last_cpu_rd  <= h_rw;
-            h_dvma_between <= 1'b0;
-         end
-      end
-   end
-
-   // The two must agree counter for counter.  A disagreement is a line in this
-   // run's own output, not a regression discovered six commits later.
-   final begin
-      int bad;
-      bad = 0;
-      if (h_lw_total    != lw_total)    begin bad++; $display("CHECKER MISMATCH lw_total    %0d vs %0d", h_lw_total, lw_total); end
-      if (h_lw_split    != lw_split)    begin bad++; $display("CHECKER MISMATCH lw_split    %0d vs %0d", h_lw_split, lw_split); end
-      if (h_dvma_cycles != dvma_cycles) begin bad++; $display("CHECKER MISMATCH dvma_cycles %0d vs %0d", h_dvma_cycles, dvma_cycles); end
-      if (h_mem_rd      != mem_rd)      begin bad++; $display("CHECKER MISMATCH mem_rd      %0d vs %0d", h_mem_rd, mem_rd); end
-      if (h_match_a     != match_a)     begin bad++; $display("CHECKER MISMATCH match_a     %0d vs %0d", h_match_a, match_a); end
-      if (h_dvma_rd     != dvma_rd)     begin bad++; $display("CHECKER MISMATCH dvma_rd     %0d vs %0d", h_dvma_rd, dvma_rd); end
-      if (h_dvma_now    != dvma_now)    begin bad++; $display("CHECKER MISMATCH dvma_now    %0d vs %0d", h_dvma_now, dvma_now); end
-      if (h_dvma_lag    != dvma_lag)    begin bad++; $display("CHECKER MISMATCH dvma_lag    %0d vs %0d", h_dvma_lag, dvma_lag); end
-      if (bad == 0)
-        $display("memory checker: hierarchical sampling agrees with dbg_bus on all 8 counters");
-      else
-        $display("memory checker: %0d counters DISAGREE -- the hierarchical rewrite is wrong", bad);
    end
 
    task automatic lw_report();

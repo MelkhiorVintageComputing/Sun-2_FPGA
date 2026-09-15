@@ -84,7 +84,6 @@ module tb_orphan_ack;
        .mbio_int (1'b0),
        .vec_int (1'b0), .vec_level (3'd0), .vec_num (8'h0),
        .diag_leds (), .en_boot (), .todebug (),
-       .dbg_bus (), .dbg_dvma_active (1'b0),
        .wb_cyc_o (wb_cyc), .wb_stb_o (wb_stb), .wb_adr_o (wb_adr),
        .wb_dat_o (wb_dat_m2s), .wb_sel_o (wb_sel), .wb_we_o (wb_we),
        .wb_dat_i (wb_dat_s2m), .wb_ack_i (wb_ack)

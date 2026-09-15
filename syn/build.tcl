@@ -1,6 +1,6 @@
 # Non-project Vivado build for the Sun-2 on a QMTech Wukong V1.
 #
-#   vivado -mode batch -source syn/build.tcl [-tclargs CPU_HZ MACHINE MB_ETHER BOARD FB XY450 CPU ILA]
+#   vivado -mode batch -source syn/build.tcl [-tclargs CPU_HZ MACHINE MB_ETHER BOARD FB XY450 CPU]
 #
 # MACHINE is multibus (default) or vme; see "Which machine" in the README.
 # MB_ETHER=1 fits the Sun-2 Ethernet card in the MultiBus cage.
@@ -9,8 +9,6 @@
 #      the 2/120's video board, which also carries the keyboard/mouse SCC.
 # XY450=1 fits the Xylogics 450 disk controller in the MultiBus cage.
 # CPU is suska (default) or rd68011.
-# ILA=1 fits the integrated logic analyser on the MMU's debug bus and writes
-#      the .ltx the Hardware Manager needs; see BRINGUP.md.
 #
 # Nothing generated is committed: the MIG IP comes from syn/mig/sun2_mig.prj
 # via syn/generate_ip.tcl, and everything lands in build/.
@@ -33,7 +31,6 @@ set vme_scsi 0
 set mb_scsi 0
 set disk_off_mib 0
 set cpu      suska
-set ila      0
 set hdmimode 1280x1024
 set allowpw  0
 set eth5     224
@@ -46,15 +43,14 @@ if {[llength $argv] > 3} { set board    [lindex $argv 3] }
 if {[llength $argv] > 4} { set fb       [lindex $argv 4] }
 if {[llength $argv] > 5} { set xy450    [lindex $argv 5] }
 if {[llength $argv] > 6} { set cpu      [lindex $argv 6] }
-if {[llength $argv] > 7} { set ila      [lindex $argv 7] }
-if {[llength $argv] > 8} { set hdmimode [lindex $argv 8] }
-if {[llength $argv] > 9} { set allowpw [lindex $argv 9] }
-if {[llength $argv] > 10} { set eth5    [lindex $argv 10] }
-if {[llength $argv] > 11} { set cpu_div [lindex $argv 11] }
-if {[llength $argv] > 12} { set mb_3c400 [lindex $argv 12] }
-if {[llength $argv] > 13} { set vme_scsi [lindex $argv 13] }
-if {[llength $argv] > 14} { set mb_scsi  [lindex $argv 14] }
-if {[llength $argv] > 15} { set disk_off_mib [lindex $argv 15] }
+if {[llength $argv] > 7} { set hdmimode [lindex $argv 7] }
+if {[llength $argv] > 8} { set allowpw [lindex $argv 8] }
+if {[llength $argv] > 9} { set eth5    [lindex $argv 9] }
+if {[llength $argv] > 10} { set cpu_div [lindex $argv 10] }
+if {[llength $argv] > 11} { set mb_3c400 [lindex $argv 11] }
+if {[llength $argv] > 12} { set vme_scsi [lindex $argv 12] }
+if {[llength $argv] > 13} { set mb_scsi  [lindex $argv 13] }
+if {[llength $argv] > 14} { set disk_off_mib [lindex $argv 14] }
 
 # CPU_DIV names the MMCM divider directly and wins over CPU_HZ in
 # wukong_clkgen.sv:63, so from here on cpu_hz has to mean the clock that will
@@ -236,13 +232,6 @@ if {$cpu eq "rd68011"} {
     lappend defines SUN2_CPU_RD68011
 }
 
-# The ILA.  Its own output directory, because a bitstream with a debug hub in
-# it is not the same artefact as one without and the two must never be
-# confused on a bench.
-if {$ila == 1} {
-    lappend defines SUN2_ILA
-}
-
 set part    [board_part $board]
 set ipdir   $top/build/ip/$board
 # NOTE: this expression is duplicated in syn/Makefile as OUTDIR, and the two
@@ -257,7 +246,7 @@ set ipdir   $top/build/ip/$board
 # not exist, and `make program' failed with "no such bitstream".  The failure is
 # loud only because the two names differ; had make looked where Vivado wrote,
 # the wrong machine would have been programmed silently.
-set outdir  $top/build/syn/vivado/$board-$machine[expr {$vme_scsi == 1 ? "-vmescsi" : ""}][expr {$mb_scsi == 1 ? "-mbscsi" : ""}][expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$mb_3c400 == 1 ? "-3c400" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu$cputag[expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$ila == 1 ? "-ila" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}][expr {$disk_off_mib != 0 ? "-off${disk_off_mib}m" : ""}]
+set outdir  $top/build/syn/vivado/$board-$machine[expr {$vme_scsi == 1 ? "-vmescsi" : ""}][expr {$mb_scsi == 1 ? "-mbscsi" : ""}][expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$mb_3c400 == 1 ? "-3c400" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu$cputag[expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}][expr {$disk_off_mib != 0 ? "-off${disk_off_mib}m" : ""}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir
@@ -412,63 +401,6 @@ if {[llength [get_ips sun2_mig]] == 0} {
 }
 synth_ip [get_ips sun2_mig]
 
-# The ILA, the same way and for the same reason.
-if {$ila == 1} {
-    set ilaxci $ipdir/sun2_ila/sun2_ila.xci
-    if {![file exists $ilaxci]} {
-        puts "ERROR: the ILA has not been generated. Run:"
-        puts "    make -C syn ip-ila BOARD=$board"
-        exit 1
-    }
-    read_ip $ilaxci
-    if {[llength [get_ips sun2_ila]] == 0} {
-        puts "ERROR: sun2_ila.xci did not load"
-        exit 1
-    }
-    # synth_ip refuses to overwrite its own .dcp, so a second bitstream build
-    # that does not regenerate the IP dies with "Overwrite of existing file
-    # isn't enabled".  Skipping it when the .dcp exists is the wrong fix -- the
-    # module is then never built into this project and synthesis fails with
-    # "module 'sun2_ila' not found".  Delete and re-synthesise; it costs
-    # seconds and is correct whatever state the IP directory is in.
-    file delete -force $ipdir/sun2_ila/sun2_ila.dcp
-    synth_ip [get_ips sun2_ila]
-    puts "== ILA fitted on the MMU debug bus =="
-
-    # The bus history, a second ILA core; see syn/generate_ip.tcl.
-    set busxci $ipdir/sun2_busila/sun2_busila.xci
-    if {![file exists $busxci]} {
-        puts "ERROR: the bus-history ILA has not been generated. Run:"
-        puts "    make -C syn ip-ila BOARD=$board"
-        exit 1
-    }
-    read_ip $busxci
-    if {[llength [get_ips sun2_busila]] == 0} {
-        puts "ERROR: sun2_busila.xci did not load"
-        exit 1
-    }
-    file delete -force $ipdir/sun2_busila/sun2_busila.dcp
-    synth_ip [get_ips sun2_busila]
-    puts "== bus-history ILA fitted =="
-
-    # The VIO rides with the ILA: both are the debug build, and a counter that
-    # has to be read after the run is the half an ILA cannot do.
-    set vioxci $ipdir/sun2_vio/sun2_vio.xci
-    if {![file exists $vioxci]} {
-        puts "ERROR: the VIO has not been generated. Run:"
-        puts "    make -C syn ip-ila BOARD=$board"
-        exit 1
-    }
-    read_ip $vioxci
-    if {[llength [get_ips sun2_vio]] == 0} {
-        puts "ERROR: sun2_vio.xci did not load"
-        exit 1
-    }
-    file delete -force $ipdir/sun2_vio/sun2_vio.dcp
-    synth_ip [get_ips sun2_vio]
-    puts "== VIO fitted on the adapter's crossing counters =="
-}
-
 # Revision file first, then the shared one: common creates the MII clocks and
 # then groups them, and a get_clocks for a clock that does not exist yet
 # returns nothing and drops the group silently.
@@ -536,43 +468,6 @@ if {$fb == 1 && [llength [get_cells -quiet -hier -filter {NAME =~ *hdmiclk*}]] =
 
 opt_design
 
-# The debug hub is inserted here, not by anything above: an IP-instantiated ILA
-# has no hub of its own, and opt_design adds one and connects it to the ILA's
-# clock.  That is the wrong clock.  cpu_clk is 20 MHz and a hub wants at least
-# 2.5x the JTAG clock, and it will not even be told 20 MHz -- the property
-# takes 25 MHz to 650 MHz and rejects anything slower outright.
-#
-# So the hub is moved onto clk50, which the board oscillator drives through an
-# explicit BUFG and which exists in every configuration.  A hub and the cores
-# it serves are allowed to be in different clock domains -- that is what the
-# per-core clock is for -- so the ILA goes on sampling cpu_clk, one sample per
-# CPU clock, which is the whole point of it.
-#
-# Declaring 25 MHz and leaving the hub on cpu_clk would also have built.  It
-# would also have been a lie, and the thing it lies about is exactly what
-# decides whether the hub answers JTAG at all.
-if {$ila == 1} {
-    set hub [get_debug_cores -quiet dbg_hub]
-    if {[llength $hub] == 0} {
-        puts "ERROR: ILA=1 but opt_design inserted no dbg_hub"
-        exit 1
-    }
-    set hubclk [get_nets -quiet -hierarchical clk50_g]
-    if {[llength $hubclk] == 0} {
-        puts "ERROR: no clk50_g net to clock the debug hub from"
-        exit 1
-    }
-    disconnect_debug_port dbg_hub/clk
-    connect_debug_port dbg_hub/clk [lindex $hubclk 0]
-    set_property C_CLK_INPUT_FREQ_HZ  50000000 $hub
-    set_property C_ENABLE_CLK_DIVIDER false    $hub
-    # opt_design generated the hub before any of that; re-run the step that
-    # generates it, or place_design stops with "debug core instances ... needs
-    # to be (re)generated" and names dbg_hub.
-    implement_debug_core
-    puts "== dbg_hub on clk50_g at 50 MHz; the ILA still samples cpu_clk =="
-}
-
 place_design -directive Explore
 phys_opt_design
 route_design -directive Explore
@@ -631,11 +526,3 @@ if {$wns < 0 || $whs < 0} {
 
 write_bitstream -force $outdir/sun2_wukong_$board.bit
 puts "== wrote $outdir/sun2_wukong_$board.bit =="
-
-# The probe file.  Without it the Hardware Manager finds the debug hub, cannot
-# name anything on it, and shows probe0..probe7 as anonymous buses -- so this
-# is not optional, it is half the instrument.
-if {$ila == 1} {
-    write_debug_probes -force $outdir/sun2_wukong_$board.ltx
-    puts "== wrote $outdir/sun2_wukong_$board.ltx =="
-}

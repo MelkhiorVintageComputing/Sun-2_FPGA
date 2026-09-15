@@ -274,9 +274,6 @@ module deca_top #(
    wire        phy_present, phy_cfg_done, phy_link, phy_fd;
    wire [1:0]  phy_speed;
    wire        ev_rx_valid, ev_wr_data, ev_rd_valid, ev_tx_start;
-`ifdef SUN2_ILA
-   wire [117:0] dbg_bus;
-`endif
 
 
 
@@ -293,9 +290,6 @@ module deca_top #(
        .diag_leds      (diag_leds),
        .en_boot        (en_boot),
        .todebug        (todebug),
-`ifdef SUN2_ILA
-       .dbg_bus        (dbg_bus),
-`endif
 
        .eth_crs_stuck  (eth_crs_stuck),
        .fb_video_en    (fb_video_en),

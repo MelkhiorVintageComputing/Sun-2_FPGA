@@ -124,17 +124,6 @@ module sun2_fpga(input         cpu_clk,
 		 output        en_boot,
 		 output [7:0]  todebug,
 
-`ifdef SUN2_ILA
-		 // Everything an ILA needs to answer one question: does the
-		 // page map output the protection check consumes match the
-		 // entry a later FC=3 read gets back?  Packed here, threaded
-		 // out the way todebug is, and sampled in the board layer --
-		 // see the field map at the assignment below.
-		 output [117:0] dbg_bus,
-		 // DVMA, which this module cannot work out for itself -- see the
-		 // field map below.  Debug only: nothing downstream of here reads it.
-		 input         dbg_dvma_active,
-`endif
 
 		 /* wishbone */
 		 output        wb_cyc_o,
@@ -445,7 +434,6 @@ module sun2_fpga(input         cpu_clk,
    wire [23:0] 			 pa_forshow; // more readbable as a wave, no functional use
    // MMU & control layers
    wire [15:0] 			 ctx_out;
-   wire [2:0] 			 cx_dbg;
    wire [7:0] 			 ia_smap2pmap;
    wire [11:0] 			 ma_pmap2devices;
    wire [11:0] 			 ps_pmap2devices;
@@ -489,7 +477,6 @@ module sun2_fpga(input         cpu_clk,
 		.P_RW_n(P_RW_n),
 		/* MMU outputs */
 		.ctx_out(ctx_out),
-		.cx_dbg(cx_dbg),
 		.ia_smap2pmap(ia_smap2pmap),
 		.ma_pmap2devices(ma_pmap2devices),
 		.ps_pmap2devices(ps_pmap2devices)
@@ -1870,102 +1857,6 @@ module sun2_fpga(input         cpu_clk,
    // (rsun/mon/kernel/trap.s:70).  Until that lands the Sun-2 front panel
    // stays at its reset value whatever the machine is doing.
    //
-`ifdef SUN2_ILA
-   //
-   // The debug bus.  Output-only, so it cannot change what the machine does.
-   //
-   // Behind the define even so.  It costs nothing at all here -- every signal
-   // on it already has a load -- but measured against a build without it, the
-   // bare port cost 8 LUTs and moved worst hold slack from 0.071 ns to 0.054
-   // ns.  Vivado is byte-deterministic on this design, so that is the port and
-   // not run-to-run noise, and hold is the number this build has least of.  An
-   // instrument that is switched off has no business spending it.
-   //
-   // Simulation always defines SUN2_ILA (sim/run_xsim.sh), because there the
-   // bus is free and it is what proves the packing.
-   //
-   // The fields, and why each is here.  SunOS panics creating process 1: the
-   // machine reported a protection violation as a bus timeout, and
-   // sys/sun2/trap.c reads BE_TIMEOUT as "the MMU was satisfied, the memory
-   // system failed", so it never tries to grow the stack.  tools/mmuprobe
-   // cannot reproduce it from a boot block, so the question moves to the
-   // board: sampled every clock of the failing cycle, does ps_pmap2devices in
-   // the C_S8 window match the entry getpgmap reads back afterwards?
-   //
-   //   73:51  P_A[23:1]          which access
-   //   50:48  P_FC               the discriminator -- the kernel's access is
-   //                             FC 1, every PROM device probe is FC 5
-   //   47:42  AS RW UDS LDS DTACK BERR, all active low as the bus has them
-   //   41:38  C_S4 C_S6 C_S8 C_S24    where in the cycle
-   //   37:30  ia_smap2pmap       segment map output, lookup stage 1
-   //   29:18  ps_pmap2devices    page map protection/status -- the answer
-   //   17:6   ma_pmap2devices    page map physical address
-   //    5:0   VALID PROTERR_raw PROTERR TIMEOUT ERR MATCH_MEM
-   //
-   // and, added after a session of inferring all three from bus behaviour:
-   //
-   //   89:74   the data on the bus -- what the CPU is writing, or what the
-   //           machine is returning.  Without it a capture can say a register
-   //           was written but not with what, which is the difference between
-   //           watching a context switch and knowing which context.
-   //   97:90   both context registers, supervisor half then user half.  They
-   //           share a word and are written a byte at a time; seeing them
-   //           apart is the only way to catch one write moving both.
-   //  100:98   the context the segment map was actually indexed with, which
-   //           is neither of the above but a choice between them made by
-   //           P_FC[2] -- and FC 3, control space, counts as user.
-   //
-   // MATCH_MEM is the term that decides TIMEOUT: memory is exempt from the bus
-   // timeout, so it says directly whether the cycle was headed for RAM or was
-   // left to time out.
-   //
-   //   101     dvma_active        whose cycle this is
-   //
-   // That bit has to be handed in.  top_fpga.v muxes the master onto these
-   // same wires deliberately, so that nothing downstream knows DVMA exists --
-   // which is right for the machine and blinding for a capture.  Chasing the
-   // VME Ethernet cost three captures for want of it: the chip's first fetch
-   // is from 0xFFFFF6, but so are the CPU's own writes while it builds the
-   // SCP there, and FC 5 covers both, so no combination of address and
-   // function code can separate them.  One bit does.
-   //
-   //
-   // 117:102  the interrupt path, added because the IACK side alone cannot
-   //          answer the question it looks like it answers.  A capture of
-   //          acknowledges shows what the CPU *took*; a request that is
-   //          asserted and never granted and one that is never asserted are
-   //          the same absence.  These are the request side.
-   //
-   //   117     EN_INT      sys_out[6], and it gates the encoder's EI_n -- with
-   //                       it clear *every* level is dead, level 7 included
-   //   116:114 IPL2_n..IPL0_n  what the encoder presents to the CPU
-   //   113:107 INT7_n..INT1_n  the seven request lines, all active low
-   //   106:102 timer_int[5:1]  the Am9513's own outputs, before any of it:
-   //                       counter 1 is INT7_n and counters 2..5 are INT5_n,
-   //                       so `the timer never asserted' and `the encoder ate
-   //                       it' are finally distinguishable
-   //
-   assign dbg_bus = { EN_INT,                                      //    117
-		      IPL2_n, IPL1_n, IPL0_n,                    // 116:114
-		      INT7_n, INT6_n, INT5_n, INT4_n,            // 113:110
-		      INT3_n, INT2_n, INT1_n,                    // 109:107
-		      timer_int[5], timer_int[4], timer_int[3],  // 106:104
-		      timer_int[2], timer_int[1],                // 103:102
-		      dbg_dvma_active,                              //    101
-		      cx_dbg,                                      // 100:98
-		      ctx_out[11:8], ctx_out[3:0],                //  97:90
-		      (P_RW_n ? P_DOUT : P_DIN),                  //  89:74
-		      P_A,                                        // 73:51
-		      P_FC,                                       // 50:48
-		      P_AS_n, P_RW_n, P_UDS_n, P_LDS_n,           // 47:44
-		      P_DTACK_n, P_BERR_n,                        // 43:42
-		      C_S4, C_S6, C_S8, C_S24,                    // 41:38
-		      ia_smap2pmap,                               // 37:30
-		      ps_pmap2devices,                            // 29:18
-		      ma_pmap2devices,                            // 17:6
-		      VALID, PROTERR_raw, PROTERR,                //  5:3
-		      TIMEOUT, ERR, MATCH_MEM };                  //  2:0
-`endif
 
    assign todebug = { hb_ctr[23],   // 7    cpu_clk runs at all (~0.75 Hz at 12.5 MHz)
 		      sys_reset,    // 6    the machine is still in reset

@@ -336,7 +336,7 @@ orphan)
 	# wb_ram_model forgets a request whose CYC drops, and the real adapters latch.
 	[ -f "$top/build/inputs/z8530_scc/z8530_scc.sv" ] || "$top/tools/patch_inputs.sh" z8530_scc
 	make -s -C "$top/tools"
-	odefs=(-d SUN2_SIM -d SUN2_ILA -d SUN2_MULTIBUS -d MEM_PAGES=512 -d SRAM_POWERUP_ZERO)
+	odefs=(-d SUN2_SIM -d SUN2_MULTIBUS -d MEM_PAGES=512 -d SRAM_POWERUP_ZERO)
 	step xvlog "${odefs[@]}" -i "$top/rtl/sun2-common" -i "$top/build/rom" \
 		"$top/rtl/sun2-common/sun2_fpga.v" "$top/rtl/sun2-common/sun2_mmu.v" \
 		"$top/rtl/sun2-common/ctx_reg.v" "$top/rtl/sun2-common/pmap.v" \

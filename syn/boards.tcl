@@ -41,10 +41,7 @@
 # board time, is a -2 build with a different placer directive: same part, same
 # clock, placement the only variable.
 #
-# Same XDC as v1, and the same MIG as v3 because the part is identical -- but
-# NOT the same ILA: build/ip/<board>/sun2_ila is per board, and seeding v1s1
-# from v3 brought a stale 11-probe core that failed synthesis with "probe11 does
-# not exist".  Regenerate it (make -C syn ip-ila BOARD=v1s1) rather than copy.
+# Same XDC as v1, and the same MIG as v3 because the part is identical.
 #
 # The board is also sold as an XC7A200T in the same package with the same
 # pinout.  Adding it would be one more entry below plus its own MIG generation;

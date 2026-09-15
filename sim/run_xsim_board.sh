@@ -55,9 +55,7 @@ mkdir -p "$rundir"
 
 make -s -C "$top/tools"
 
-# SUN2_SIM: this is a simulation, so keep the tolog VCD hook.  SUN2_ILA is not
-# set here -- the debug bus is fine, but wukong_top would then instantiate the
-# ILA IP, which this flow does not build.
+# SUN2_SIM: this is a simulation, so keep the tolog VCD hook.
 defargs=(-d SUN2_SIM)
 for d in ${SUN2_DEFINES:-}; do
 	defargs+=(-d "$d")

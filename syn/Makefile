@@ -1,7 +1,6 @@
 # FPGA build for the QMTech Wukong, V1 or V3.
 #
 #   make ip                 generate the MIG DDR3 controller from mig/sun2_mig.prj
-#   make ip-ila             generate the ILA (seconds, unlike MIG)
 #   make bitstream          build at the default 12.5 MHz CPU clock
 #   make bitstream CPU_HZ=40000000
 #   make bitstream MACHINE=vme
@@ -16,9 +15,7 @@
 #   make quartus RTE_LOOP=1       RD68011: an RTE restores loop mode (KNOWN BAD)
 #   make quartus RTE_BUF=0        RD68011: an RTE empties the loop buffer window
 #   make bitstream CPU=rd68011    with the RD68011 core instead of Suska
-#   make bitstream ILA=1          with the ILA on the MMU debug bus
 #   make program                  put the built bitstream on the board
-#   make hw                       ... and leave the Hardware Manager open on it
 #   make both               both CPU clocks
 #
 #   make clean              drop the Vivado output; clean-quartus for the other
@@ -86,11 +83,6 @@ BOARD ?= v1
 # mistaken for a build with the other.  Neither is a reference for the other.
 CPU ?= suska
 
-# Fit the integrated logic analyser on the MMU's debug bus.  Off by default and
-# in its own output directory: a bitstream with a debug hub in it is a
-# different artefact, and BRINGUP.md explains when it is worth building one.
-ILA ?= 0
-
 # The video mode.  On this part that is a question about the TMDS serial clock:
 # 1080p60 asks a global buffer rated for 628 MHz to carry 742, which works with
 # little else in the die and does not work in the full machine.  1280x1024 is
@@ -114,7 +106,6 @@ ALLOW_PW ?= 0
 HW_URL ?= localhost:3121
 
 IPDIR   = $(TOP)/build/ip/$(BOARD)/sun2_mig
-ILADIR  = $(TOP)/build/ip/$(BOARD)/sun2_ila
 # The last byte of the ID PROM Ethernet address, in hex.  e0 is the identity
 # this project has always had; anything else gets its own output directory, so
 # two identities can exist side by side without one overwriting the other.
@@ -152,12 +143,11 @@ ETH5_D  = $(shell printf '%d' 0x$(ETH5))
 SYNDIR  = $(TOP)/build/syn
 
 TAG     = $(if $(filter 1,$(VME_SCSI)),-vmescsi,)$(if $(filter 1,$(MB_SCSI)),-mbscsi,)$(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)
-OUTDIR  = $(SYNDIR)/vivado/$(BOARD)-$(MACHINE)$(TAG)-cpu$(CPU_MHZ_TAG)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(ILA)),-ila,)$(if $(filter 1,$(FB)),-$(HDMI_MODE),)$(if $(filter-out e0,$(ETH5)),-eth$(ETH5),)$(if $(CPU_DIV),-div$(CPU_DIV),)$(if $(filter 0,$(DISK_OFF_MIB)),,-off$(DISK_OFF_MIB)m)
+OUTDIR  = $(SYNDIR)/vivado/$(BOARD)-$(MACHINE)$(TAG)-cpu$(CPU_MHZ_TAG)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(FB)),-$(HDMI_MODE),)$(if $(filter-out e0,$(ETH5)),-eth$(ETH5),)$(if $(CPU_DIV),-div$(CPU_DIV),)$(if $(filter 0,$(DISK_OFF_MIB)),,-off$(DISK_OFF_MIB)m)
 # Absolute, because the recipes below run Vivado from $(WORKDIR) and $(OUTDIR)
 # is relative to here: a relative path resolves against the wrong directory and
 # program.tcl reports a bitstream that was never at that address.
 BIT     = $(abspath $(OUTDIR))/sun2_wukong_$(BOARD).bit
-LTX     = $(if $(filter 1,$(ILA)),$(abspath $(OUTDIR))/sun2_wukong_$(BOARD).ltx,)
 WORKDIR = $(SYNDIR)/vivado/work-$(BOARD)
 
 all: bitstream
@@ -171,15 +161,6 @@ $(IPDIR)/sun2_mig.xci: mig/sun2_mig.prj generate_ip.tcl | $(WORKDIR)
 
 ip: $(IPDIR)/sun2_mig.xci
 
-# Its own target, and its own recipe argument: `make ip' is keyed on the MIG
-# .xci and would not notice this one.  Generating the ILA takes seconds where
-# MIG takes minutes, so keeping them separable is worth the extra target.
-$(ILADIR)/sun2_ila.xci: generate_ip.tcl | $(WORKDIR)
-	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
-		-source $(HERE)/generate_ip.tcl -tclargs $(BOARD) ila
-
-ip-ila: $(ILADIR)/sun2_ila.xci
-
 # The boot PROM has to exist before synthesis: bootrom.v includes it.
 rom:
 	$(MAKE) -C $(TOP)/tools
@@ -192,23 +173,17 @@ inputs:
 	$(TOP)/tools/patch_inputs.sh hdmi
 	$(TOP)/tools/patch_inputs.sh z8530_scc
 
-bitstream: ip rom inputs $(if $(filter 1,$(ILA)),ip-ila,) | $(WORKDIR)
+bitstream: ip rom inputs | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
-		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB) $(XY450) $(CPU) $(ILA) $(HDMI_MODE) $(ALLOW_PW) $(ETH5_D) $(if $(CPU_DIV),$(CPU_DIV),0) $(MB_3C400) $(VME_SCSI) $(MB_SCSI) $(DISK_OFF_MIB)
+		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB) $(XY450) $(CPU) $(HDMI_MODE) $(ALLOW_PW) $(ETH5_D) $(if $(CPU_DIV),$(CPU_DIV),0) $(MB_3C400) $(VME_SCSI) $(MB_SCSI) $(DISK_OFF_MIB)
 	@echo "bitstream: $(BIT)"
 
-# Programming.  Same knobs as bitstream, so `make program ILA=1 CPU=rd68011
+# Programming.  Same knobs as bitstream, so `make program CPU=rd68011
 # MB_ETHER=1' puts on the board exactly what the matching build produced --
 # there is no separate place to say which artefact is meant.
 program: | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
-		-source $(HERE)/program.tcl -tclargs $(BIT) "$(LTX)" $(HW_URL)
-
-# The ILA session: program, then leave the Hardware Manager open on the device
-# to set triggers, arm and capture.
-hw: | $(WORKDIR)
-	cd $(WORKDIR) && $(VIVADO) -mode gui \
-		-source $(HERE)/program.tcl -tclargs $(BIT) "$(LTX)" $(HW_URL)
+		-source $(HERE)/program.tcl -tclargs $(BIT) $(HW_URL)
 
 # --- the Altera path ------------------------------------------------------
 #
@@ -322,6 +297,6 @@ clean-quartus:
 clean-ip:
 	rm -rf $(TOP)/build/ip
 
-.PHONY: all ip ip-ila rom inputs bitstream both program hw clean clean-ip \
+.PHONY: all ip rom inputs bitstream both program clean clean-ip \
 	clean-quartus \
 	quartus-run lint-quartus quartus quartus-eram-delta
