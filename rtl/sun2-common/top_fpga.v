@@ -26,15 +26,6 @@ module top(input         cpu_clk,
 	   // ILA -- and this probe has to exist on the board where the fault it
 	   // watches for actually happens.
 	   output [182:0] dvma_probe,
-	   // sun2_wishbone_bridge's address-integrity counters, straight out.
-	   output [31:0]  wb_n_load,
-	   output [31:0]  wb_n_adrbad,
-	   output [31:0]  wb_n_outpat,
-	   output [31:0]  wb_n_outbad,
-	   output [31:0]  wb_n_blk,
-	   output [31:0]  wb_n_blk_bad,
-	   output [8:0]   wb_blk_off,
-	   output [22:0]  wb_blk_adr,
 	   // sun2_dvma_probe's mux check: the last span between the bridge's
 	   // registered word and what the master captures.
 	   output [31:0]  dv_n_mux,
@@ -424,14 +415,6 @@ module top(input         cpu_clk,
 		  // and the same pair one level up in top_fpga -- that each had
 		  // to be moved out before the probe saw a single bridge load.
 		  .dbg_wb_load(dbg_wb_load),
-		  .dbg_wb_n_load(wb_n_load),
-		  .dbg_wb_n_adrbad(wb_n_adrbad),
-		  .dbg_wb_n_outpat(wb_n_outpat),
-		  .dbg_wb_n_outbad(wb_n_outbad),
-		  .dbg_wb_n_blk(wb_n_blk),
-		  .dbg_wb_n_blk_bad(wb_n_blk_bad),
-		  .dbg_wb_blk_off(wb_blk_off),
-		  .dbg_wb_blk_adr(wb_blk_adr),
 		  .dbg_wb_dout(dbg_wb_dout),
 		  .dbg_match_mem(dbg_match_mem),
 		  .dbg_wb_load_half(dbg_wb_load_half),

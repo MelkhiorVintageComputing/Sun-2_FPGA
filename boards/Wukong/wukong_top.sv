@@ -350,13 +350,6 @@ module wukong_top #(
    wire [31:0] xchk_got, xchk_exp;
    wire [31:0] xchk_n_read, xchk_n_pat, xchk_n_bad;
    wire [31:0] xchk_n_wpat, xchk_n_wbad;
-   // The bridge's address-integrity counters, the one span no pattern check
-   // can cover: they all predict the expected word from the address.
-   wire [31:0] wb_n_load, wb_n_adrbad;
-   wire [31:0] wb_n_outpat, wb_n_outbad;
-   wire [31:0] wb_n_blk, wb_n_blk_bad;
-   wire [8:0]  wb_blk_off;
-   wire [22:0] wb_blk_adr;
    wire [31:0] dv_n_mux, dv_n_mux_bad, dv_n_pat32, dv_n_pat32_bad;
    wire [31:0] dv_n_arm32, dv_n_arm32_bad;
    wire [31:0] xy_n_sb, xy_n_sb_bad, xy_n_sb_iso, xy_n_drop, xy_n_rd, xy_n_rd_bad;
@@ -404,10 +397,10 @@ module wukong_top #(
        .probe_in4  (xchk_exp),
        .probe_in5  (xchk_n_wpat),
        .probe_in6  (xchk_n_wbad),
-       .probe_in7  (wb_n_load),
-       .probe_in8  (wb_n_adrbad),
-       .probe_in9  (wb_n_outpat),
-       .probe_in10 (wb_n_outbad),
+       .probe_in7  (32'd0),
+       .probe_in8  (32'd0),
+       .probe_in9  (32'd0),
+       .probe_in10 (32'd0),
        .probe_in11 (dv_n_mux),
        .probe_in12 (dv_n_mux_bad),
        .probe_in13 (dv_n_pat32),
@@ -425,10 +418,10 @@ module wukong_top #(
        .probe_in25 (dv_n_dat_move),
        .probe_in26 (rr_n),
        .probe_in27 (rr_bad),
-       .probe_in28 (wb_n_blk),
-       .probe_in29 (wb_n_blk_bad),
-       .probe_in30 ({23'd0, wb_blk_off}),
-       .probe_in31 ({9'd0, wb_blk_adr}),
+       .probe_in28 (32'd0),
+       .probe_in29 (32'd0),
+       .probe_in30 (32'd0),
+       .probe_in31 (32'd0),
        .probe_in32 (xy_n_dva),
        .probe_in33 (xy_n_dva_bad),
        .probe_in34 ({8'd0, xy_dva_adr})
@@ -626,14 +619,6 @@ module wukong_top #(
        // sun2_fpga, and both again here -- and each read back as a healthy
        // machine because an undriven wire is all zeros.
        .dvma_probe     (dvma_probe),
-       .wb_n_load      (wb_n_load),
-       .wb_n_adrbad    (wb_n_adrbad),
-       .wb_n_outpat    (wb_n_outpat),
-       .wb_n_outbad    (wb_n_outbad),
-       .wb_n_blk       (wb_n_blk),
-       .wb_n_blk_bad   (wb_n_blk_bad),
-       .wb_blk_off     (wb_blk_off),
-       .wb_blk_adr     (wb_blk_adr),
        .dv_n_mux       (dv_n_mux),
        .dv_n_mux_bad   (dv_n_mux_bad),
        .dv_n_pat32     (dv_n_pat32),

@@ -46,48 +46,6 @@ module sun2_wishbone_bridge #(
 			     // dbg_load is high.
 			     output 	       dbg_load_half,
 
-			     // Address integrity across a transaction.
-			     //
-			     // Every pattern check in this tree predicts the
-			     // expected word *from the address*, so a response
-			     // matched to the wrong address satisfies all of
-			     // them while handing the master a word that
-			     // belongs somewhere else -- which is exactly what
-			     // tools/patwr decodes a bad word as ("OLD gen,
-			     // sector 0 word 150, -9532 words").  They are
-			     // blind to it by construction.
-			     //
-			     // P_DATA_OUT is latched with the *current*
-			     // P_ADR_IN, not the address the request went out
-			     // with.  These count how often those differ.
-			     output reg [31:0]  dbg_n_load,
-			     output reg [31:0]  dbg_n_adrbad,
-
-			     // The half-select and the latch, the last span
-			     // inside this module.  Not a tautology: the
-			     // expected half is computed independently of the
-			     // mux, and counted only when the 32-bit word
-			     // arriving was known-good for this address, so it
-			     // tests the selection against a clean input.
-			     output reg [31:0]  dbg_n_outpat,
-			     output reg [31:0]  dbg_n_outbad,
-
-			     // Are any of the CPU's writes missing?
-			     //
-			     // Counting cannot answer it: the pattern-write
-			     // counter already exceeds the file it wrote, by
-			     // rewrites and other traffic, so a shortfall of
-			     // six in half a million is invisible.  This tests
-			     // *completeness* instead.  tools/patwr -u makes
-			     // every write self-identifying -- the halfword at
-			     // offset i is 0x8000|i -- so one bit per offset
-			     // records that the word was written, and a block
-			     // that was nearly all written but not quite is a
-			     // missing write, with the offset to prove it.
-			     output reg [31:0]  dbg_n_blk,     // blocks checked
-			     output reg [31:0]  dbg_n_blk_bad, // ... incomplete
-			     output reg [8:0]   dbg_blk_off,   // first missing
-			     output reg [22:0]  dbg_blk_adr,
 
 
 			     // wishbone
@@ -104,7 +62,6 @@ module sun2_wishbone_bridge #(
    /* this creates a wishbone master in CLK domain */
 
    reg 					   wb_ack_i_prev;
-   reg [23:1]                              adr_issued;    // address the request went out with
    reg 					   ENABLE;
    
    
@@ -199,8 +156,6 @@ module sun2_wishbone_bridge #(
 	end else begin
 	   if (wb_cyc_o)          issued <= 1'b1;
 	   if (wb_ack_i & issued) done   <= 1'b1;
-	   // Remember the address this cycle's request was issued with.
-	   if (wb_cyc_o & ~issued) adr_issued <= P_ADR_IN;
 	end
 
 	if (~RESET_n) ENABLE <= 1'b0;
@@ -222,102 +177,6 @@ module sun2_wishbone_bridge #(
 	  //  P_DATA_OUT <= 32'h2BAD0000;
 	  //else P_DATA_OUT[15:0] <= P_DATA_OUT[15:0] + 1;
 	
-     end
-
-   // tools/patwr -u's pattern for this address: halfword index within a
-   // 512-byte sector is P_ADR_IN[8:1], and the 32-bit word holds the pair.
-   wire [15:0] pat_lo  = {8'h80, P_ADR_IN[8:1]};
-   wire [15:0] pat_hi  = {8'h80, P_ADR_IN[8:1] + 8'd1};
-   wire        in_pat  = (wb_dat_i == {pat_hi, pat_lo});
-   wire [15:0] out_exp = P_ADR_IN[1] ? pat_hi : pat_lo;
-`ifdef WB_LITTLE_ENDIAN
-   wire [15:0] out_act = P_ADR_IN[1] ? { wb_dat_i[ 7: 0], wb_dat_i[15: 8] }
-                                     : { wb_dat_i[23:16], wb_dat_i[31:24] };
-`else
-   wire [15:0] out_act = P_ADR_IN[1] ? { wb_dat_i[31:24], wb_dat_i[23:16] }
-                                     : { wb_dat_i[15: 8], wb_dat_i[ 7: 0] };
-`endif
-
-   // ---- write coverage -----------------------------------------------------
-   // A CPU write of pattern data: 16 bits, data equal to what its address
-   // predicts.  wb_we_o is ~P_RW_n, and the bridge issues one Wishbone cycle
-   // per 68010 cycle, so one strobe per halfword.
-   // The instant the write request goes out, which is where adr_issued is
-   // captured too.  MATCH_MEM already carries C_S6; the bridge has no such
-   // input of its own.
-   wire        wr_fire  = wb_cyc_o & ~issued & wb_we_o & MATCH_MEM;
-   wire [15:0] wr_pat   = {8'h80, P_ADR_IN[8:1]};
-   wire        wr_is_pat = (P_DATA_IN == wr_pat);
-   wire [13:0] blk_now  = P_ADR_IN[22:9];      // the 512-byte block
-   reg  [13:0] blk_cur;
-   reg  [255:0] blk_seen;
-   reg          blk_any;
-
-   // Popcount of the bitmap, computed only when a block closes.  256 bits is
-   // a wide sum but it is evaluated once per block, not per clock.
-   integer bi;
-   reg [8:0] blk_cnt;
-   reg [8:0] blk_first;
-   always @* begin
-      blk_cnt   = 9'd0;
-      blk_first = 9'd0;
-      for (bi = 255; bi >= 0; bi = bi - 1)
-	if (blk_seen[bi]) blk_cnt = blk_cnt + 9'd1;
-	else              blk_first = bi[8:0];
-   end
-
-   always @(posedge CLK)
-     if (~RESET_n) begin
-	blk_cur <= 14'h0; blk_seen <= 256'h0; blk_any <= 1'b0;
-	dbg_n_blk <= 32'd0; dbg_n_blk_bad <= 32'd0;
-	dbg_blk_off <= 9'd0; dbg_blk_adr <= 23'd0;
-     end else if (wr_fire) begin
-	if (blk_now != blk_cur) begin
-	   // The block just closed.  A block that was nearly all written but
-	   // not quite is the thing being looked for; the threshold keeps
-	   // ordinary traffic, which sets a handful of bits at most, out.
-	   // Count the *shape* of the miss, not the fact of it.  The first
-	   // board run of this check read 1,191 incomplete blocks of 15,448
-	   // against a corruption rate near 0.5% -- fourteen times too many --
-	   // because the kernel interleaves metadata and writeback with the
-	   // copy, so a block is departed and returned to and every departure
-	   // closes it early.  A *lost write* leaves a block missing exactly
-	   // one halfword; an interleaved one misses many.  255 of 256
-	   // separates them, and blk_first then names the offset to match
-	   // against what the disk shows corrupted.
-	   if (blk_any && (blk_cnt == 9'd256)) begin
-	      dbg_n_blk <= dbg_n_blk + 32'd1;          // complete, the control
-	   end else if (blk_any && (blk_cnt == 9'd255)) begin
-	      dbg_n_blk     <= dbg_n_blk + 32'd1;
-	      dbg_n_blk_bad <= dbg_n_blk_bad + 32'd1;  // exactly one missing
-	      dbg_blk_off   <= blk_first;
-	      dbg_blk_adr   <= {blk_cur, 9'h0};
-	   end
-	   blk_cur  <= blk_now;
-	   blk_seen <= 256'h0;
-	   blk_any  <= 1'b0;
-	end
-	if (wr_is_pat) begin
-	   blk_seen[P_ADR_IN[8:1]] <= 1'b1;
-	   blk_any <= 1'b1;
-	end
-     end
-
-   // Counted here rather than derived outside, because the address the request
-   // went out with exists only inside this module.
-   always @(posedge CLK)
-     if (~RESET_n) begin
-	dbg_n_load   <= 32'd0;
-	dbg_n_adrbad <= 32'd0;
-	dbg_n_outpat <= 32'd0;
-	dbg_n_outbad <= 32'd0;
-     end else if (ENABLE & wb_ack_i & issued & ~wb_we_o) begin
-	dbg_n_load <= dbg_n_load + 32'd1;
-	if (P_ADR_IN != adr_issued) dbg_n_adrbad <= dbg_n_adrbad + 32'd1;
-	if (in_pat) begin
-	   dbg_n_outpat <= dbg_n_outpat + 32'd1;
-	   if (out_act != out_exp) dbg_n_outbad <= dbg_n_outbad + 32'd1;
-	end
      end
 
    assign dbg_load = ENABLE & wb_ack_i & issued & ~wb_we_o;
