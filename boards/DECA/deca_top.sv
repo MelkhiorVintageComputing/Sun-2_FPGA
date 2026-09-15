@@ -279,11 +279,6 @@ module deca_top #(
 `endif
 
 
-   // The DDR3 adapter's read accounting.
-   wire [15:0]  ddr3_rd_issued, ddr3_rd_ready, ddr3_rd_unexpected, ddr3_lane_bad;
-   wire [15:0]  ddr3_reread_bad, ddr3_wv_bad;
-   wire [29:0]  ddr3_rr_adr;
-   wire [31:0]  ddr3_rr_v1, ddr3_rr_v2;
 
    top machine (
        .cpu_clk        (cpu_clk),
@@ -400,12 +395,7 @@ module deca_top #(
    assign cmd_wdata_a[0]     = w_cmd_wdata;
    assign cmd_wmask_a[0]     = w_cmd_wmask;
 
-   localparam bit DDR3_DOUBLE_READ  = 1'b0;
-   localparam bit DDR3_WRITE_VERIFY = 1'b0;
-
-   deca_wb_to_ddr3 #(.DOUBLE_READ(DDR3_DOUBLE_READ),
-                     .WRITE_VERIFY(DDR3_WRITE_VERIFY),
-                     .PORT_ADDR_SIZE(PORT_ADDR_SIZE),
+   deca_wb_to_ddr3 #(.PORT_ADDR_SIZE(PORT_ADDR_SIZE),
                      .PORT_CACHE_BITS(PORT_CACHE_BITS)) memif (
        .clk_wb   (cpu_clk),
        .rst_wb   (sys_reset),
@@ -428,15 +418,6 @@ module deca_top #(
        .CMD_wdata      (w_cmd_wdata),
        .CMD_wmask      (w_cmd_wmask),
        .CMD_read_ready (cmd_rready_a[0]),
-       .dbg_rd_issued     (ddr3_rd_issued),
-       .dbg_rd_ready      (ddr3_rd_ready),
-       .dbg_rd_unexpected (ddr3_rd_unexpected),
-       .dbg_lane_bad      (ddr3_lane_bad),
-       .dbg_reread_bad    (ddr3_reread_bad),
-       .dbg_wv_bad        (ddr3_wv_bad),
-       .dbg_rr_adr        (ddr3_rr_adr),
-       .dbg_rr_v1         (ddr3_rr_v1),
-       .dbg_rr_v2         (ddr3_rr_v2),
        .CMD_read_data  (cmd_rdata_a[0])
    );
 

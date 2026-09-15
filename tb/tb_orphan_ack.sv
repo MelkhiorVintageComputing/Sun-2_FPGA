@@ -105,10 +105,7 @@ module tb_orphan_ack;
        .wb_dat_o (wb_dat_s2m), .wb_ack_o (wb_ack),
        .ui_clk (ui_clk), .ui_rst (sys_reset),
        .c_addr (c0_addr), .c_we (c0_we), .c_wdata (c0_wdata), .c_wmask (c0_wmask),
-       .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata),
-       .xchk_bad (), .xchk_got (), .xchk_exp (),
-       .xchk_n_read (), .xchk_n_pat (), .xchk_n_bad (), .xchk_n_wpat (), .xchk_n_wbad (),
-       .dbg_rr (), .dbg_rr_bad (), .dbg_rr_v1 (), .dbg_rr_v2 ()
+       .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata)
    );
 
    mig_arb arbiter (

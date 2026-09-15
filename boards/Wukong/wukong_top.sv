@@ -336,15 +336,6 @@ module wukong_top #(
    wire [117:0] dbg_bus;
 `endif
 
-   // The adapter's clock-crossing check.  Declared here, above the ILA, because
-   // the adapter is instantiated further down and xvlog rejects a wire used
-   // before it is declared -- the same rule that has caught a dead term in this
-   // file before.
-   wire        xchk_bad;
-   wire [31:0] xchk_got, xchk_exp;
-   wire [31:0] xchk_n_read, xchk_n_pat, xchk_n_bad;
-   wire [31:0] xchk_n_wpat, xchk_n_wbad;
-   wire [31:0] rr_n, rr_bad, rr_v1, rr_v2;
 `ifdef SUN2_ILA
    // Named wires rather than slices straight into the core, because the
    // Hardware Manager names a probe after the net it is driven from -- and
@@ -377,13 +368,13 @@ module wukong_top #(
    // attempt made.
    sun2_vio u_vio (
        .clk        (cpu_clk),
-       .probe_in0  (xchk_n_read),
-       .probe_in1  (xchk_n_pat),
-       .probe_in2  (xchk_n_bad),
-       .probe_in3  (xchk_got),
-       .probe_in4  (xchk_exp),
-       .probe_in5  (xchk_n_wpat),
-       .probe_in6  (xchk_n_wbad),
+       .probe_in0  (32'd0),
+       .probe_in1  (32'd0),
+       .probe_in2  (32'd0),
+       .probe_in3  (32'd0),
+       .probe_in4  (32'd0),
+       .probe_in5  (32'd0),
+       .probe_in6  (32'd0),
        .probe_in7  (32'd0),
        .probe_in8  (32'd0),
        .probe_in9  (32'd0),
@@ -403,8 +394,8 @@ module wukong_top #(
        .probe_in23 (32'd0),
        .probe_in24 (32'd0),
        .probe_in25 (32'd0),
-       .probe_in26 (rr_n),
-       .probe_in27 (rr_bad),
+       .probe_in26 (32'd0),
+       .probe_in27 (32'd0),
        .probe_in28 (32'd0),
        .probe_in29 (32'd0),
        .probe_in30 (32'd0),
@@ -429,9 +420,9 @@ module wukong_top #(
        .probe10(dbg_cx),
        .probe11(dbg_dvma),
        .probe12(dbg_irq),
-       .probe13(xchk_bad),
-       .probe14(xchk_got),
-       .probe15(xchk_exp),
+       .probe13(1'b0),
+       .probe14(32'd0),
+       .probe15(32'd0),
        .probe16(1'b0)
    );
 
@@ -685,13 +676,7 @@ module wukong_top #(
    wire [127:0] c0_wdata, c0_rdata, c1_rdata;
    wire [15:0]  c0_wmask;
 
-   wb_to_mig_ui #(
-`ifdef SUN2_ILA
-       .DOUBLE_READ (1'b1)   // debug builds only: it doubles every read
-`else
-       .DOUBLE_READ (1'b0)
-`endif
-   ) adapter (
+   wb_to_mig_ui adapter (
        .clk_wb  (cpu_clk),
        .rst_wb  (sys_reset),
 
@@ -702,19 +687,7 @@ module wukong_top #(
        .ui_clk (ui_clk), .ui_rst (ui_clk_sync_rst),
 
        .c_addr (c0_addr), .c_we (c0_we), .c_wdata (c0_wdata), .c_wmask (c0_wmask),
-       .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata),
-       .xchk_bad (xchk_bad),
-       .xchk_n_read (xchk_n_read),
-       .xchk_n_pat (xchk_n_pat),
-       .xchk_n_bad (xchk_n_bad),
-       .xchk_n_wpat (xchk_n_wpat),
-       .xchk_n_wbad (xchk_n_wbad),
-       .dbg_rr (rr_n),
-       .dbg_rr_bad (rr_bad),
-       .dbg_rr_v1 (rr_v1),
-       .dbg_rr_v2 (rr_v2),
-       .xchk_got (xchk_got),
-       .xchk_exp (xchk_exp)
+       .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata)
    );
 
    mig_arb arbiter (

@@ -239,22 +239,8 @@ decaddr3)
 		"$top/boards/DECA/deca_wb_to_ddr3.sv" \
 		"$top/tb/tb_deca_wb_ddr3.sv" \
 		-i "$top/rtl/sun2-common"
-	# Both arms.  DOUBLE_READ issues every read twice and compares the two
-	# answers, and the Wishbone side must behave identically -- the machine
-	# is handed the first answer either way -- so every check below has to
-	# pass unchanged with it on.  A debug mode that quietly alters what the
-	# CPU sees would be worse than no debug mode.
 	step xelab -debug off --timescale 1ns/1ps work.tb_deca_wb_ddr3 -s decaddr3_sim
-	echo "--- DOUBLE_READ=0 ---"
 	xsim decaddr3_sim -R | grep -E '===|PASS|FAIL|ok:'
-	step xelab -debug off --timescale 1ns/1ps -generic_top "DOUBLE_READ=1" \
-		work.tb_deca_wb_ddr3 -s decaddr3_2r_sim
-	echo "--- DOUBLE_READ=1 ---"
-	xsim decaddr3_2r_sim -R | grep -E '===|PASS|FAIL|ok:'
-	step xelab -debug off --timescale 1ns/1ps -generic_top "WRITE_VERIFY=1" \
-		work.tb_deca_wb_ddr3 -s decaddr3_wv_sim
-	echo "--- WRITE_VERIFY=1 ---"
-	xsim decaddr3_wv_sim -R | grep -E '===|PASS|FAIL|ok:'
 	;;
 
 decaconsole)

@@ -54,49 +54,6 @@
 // domain before its toggle flips.  Only the two toggle bits actually cross.
 //
 module deca_wb_to_ddr3 #(
-    // Issue every read twice and compare the two answers.
-    //
-    // Every accounting check in this path reads zero -- one response per
-    // request, none unbidden, the right 32-bit lane, the right 16-bit half, one
-    // capture per cycle -- and a word still arrives wrong, carrying content
-    // from elsewhere on the medium (tools/patwr).  What none of those checks
-    // is that the data a response *carries* belongs to the address requested:
-    // a controller answering with some other transaction's contents leaves
-    // every counter above at zero, which is exactly what is observed.
-    //
-    // Reading the same address twice back to back and comparing needs no
-    // knowledge of the controller's internals and is decisive either way.  A
-    // mismatch is proof the fault is below this module.  Zero mismatches *with
-    // the corruption still present* means the read data is self-consistent and
-    // the search has been looking in the wrong place.
-    //
-    // Read it with that caveat in mind: issuing reads twice changes timing, so
-    // if the corruption also disappears the result says nothing.  Check that a
-    // run with this on still corrupts before believing a zero.
-    parameter bit DOUBLE_READ = 1'b0,
-
-    // Read every write straight back and compare it against what was written.
-    //
-    // This is the write-side mirror of DOUBLE_READ and it tests the property
-    // that one cannot: **visibility**.  DOUBLE_READ reads one address twice and
-    // asks whether the controller is self-consistent; if a write has not landed
-    // both reads return the same stale value and agree, so its zero excluded
-    // nothing.  This asks whether a write is *there* afterwards.
-    //
-    // It is the mechanism that fits both directions of the corruption with one
-    // fault.  A disk write is CPU-writes-buffer then DVMA-reads-buffer, so a
-    // write not yet visible sends the previous contents to the card while a
-    // later CPU read sees the landed write (measured: /za correct in memory,
-    // wrong on the card).  A disk read is the mirror (measured: /usr/bin/adb
-    // 50905 on the card, 55306 in memory).
-    //
-    // **PORT_CACHE_SMART must be 0 for this to mean anything.**  With it set, a
-    // read whose address matches the pending write is answered out of the write
-    // cache -- so the check would compare the write against itself and pass
-    // however badly DRAM lagged.  deca_top holds DDR3_SMART low in this build
-    // for that reason, which is also the setting the corruption was originally
-    // measured under.
-    parameter bit WRITE_VERIFY = 1'b0,
     parameter int PORT_ADDR_SIZE  = 29,
     parameter int PORT_CACHE_BITS = 128
 ) (
@@ -125,36 +82,6 @@ module deca_wb_to_ddr3 #(
     output wire [PORT_CACHE_BITS-1:0]  CMD_wdata,
     output wire [PORT_CACHE_BITS/8-1:0] CMD_wmask,
     input  wire                        CMD_read_ready,
-
-    // ---- instrumentation, for tools/deca_dvmaprobe.tcl --------------------
-    // The adapter is single-transaction-in-flight and D_READ consumes whatever
-    // CMD_read_ready presents.  So a response arriving outside that window, or
-    // a second one for the same request, is data from another transaction
-    // sitting where the next read can take it -- which is the shape of the
-    // corruption being chased.  There is no ground truth for the *value* here,
-    // but the request/response accounting can be checked without one.
-    output reg  [15:0]                 dbg_rd_issued,     // reads accepted
-    output reg  [15:0]                 dbg_rd_ready,      // responses seen
-    output reg  [15:0]                 dbg_rd_unexpected, // ... outside D_READ
-    // Reads whose 32-bit lane changed between issue and response.  BrianHG
-    // returns a 128-bit line and this adapter takes one quarter of it by
-    // req_adr[1:0]; req_adr is latched in the wb domain and the response is
-    // consumed in the cmd_clk one, so if a new request overwrote it while a
-    // read was in flight the wrong quarter is taken.  That is 32 bits wrong,
-    // which reaches the machine as *sixteen* -- a DVMA longword is two bridge
-    // transactions contributing half each -- and it is the one value selection
-    // in this path that the request/response accounting above cannot see.
-    output reg  [15:0]                 dbg_lane_bad,
-    // DOUBLE_READ: reads whose two answers disagreed, and the first such.
-    output reg  [15:0]                 dbg_reread_bad,
-    // WRITE_VERIFY: writes whose read-back did not match, and the first such.
-    // The detail registers are shared with DOUBLE_READ -- whichever check fires
-    // first keeps them -- because only one of the two is enabled at a time and
-    // a probe word that grows without bound is its own hazard.
-    output reg  [15:0]                 dbg_wv_bad,
-    output reg  [29:0]                 dbg_rr_adr,
-    output reg  [31:0]                 dbg_rr_v1,   // expected / first read
-    output reg  [31:0]                 dbg_rr_v2,   // got / second read
     input  wire [PORT_CACHE_BITS-1:0]  CMD_read_data
 );
 
@@ -169,21 +96,12 @@ module deca_wb_to_ddr3 #(
    reg [3:0]  req_sel;
    reg        req_we;
    reg [31:0] rd_lane;
-   reg [1:0]  lane_at_issue;
 
    reg        req_tgl;      // toggles to launch a transaction   (clk_wb)
    reg        ack_tgl;      // toggles when one completes        (cmd_clk)
    reg        busy;
 
    wire [1:0] lane = req_adr[1:0];
-
-   // Did the read-back differ in any byte this write enabled?
-   wire [31:0] wv_got = CMD_read_data[lane*32 +: 32];
-   wire        wv_mismatch =
-        (req_sel[0] && wv_got[ 7: 0] !== req_dat[ 7: 0]) ||
-        (req_sel[1] && wv_got[15: 8] !== req_dat[15: 8]) ||
-        (req_sel[2] && wv_got[23:16] !== req_dat[23:16]) ||
-        (req_sel[3] && wv_got[31:24] !== req_dat[31:24]);
 
    // Active HIGH = write this byte.  See the note above; this is the opposite
    // of the Wukong's.
@@ -259,10 +177,8 @@ module deca_wb_to_ddr3 #(
       end
    end
 
-   localparam [2:0] D_IDLE   = 3'd0, D_SEND  = 3'd1, D_READ  = 3'd2,
-                    D_SEND2  = 3'd3, D_READ2 = 3'd4,  // the re-read
-                    D_WVSEND = 3'd5, D_WVREAD = 3'd6; // the write read-back
-   reg [2:0] dstate;
+   localparam [1:0] D_IDLE = 2'd0, D_SEND = 2'd1, D_READ = 2'd2;
+   reg [1:0] dstate;
 
    // The request fields are combinational rather than registered, which looks
    // careless and is not: they are written in the Wishbone domain *before*
@@ -288,38 +204,17 @@ module deca_wb_to_ddr3 #(
    assign CMD_wdata     = {LANES{req_dat}};   // same word in every lane; the
                                               // mask picks which copy lands
    assign CMD_wmask     = mask_for(req_adr[1:0], req_sel);
-   assign CMD_write_ena = req_we && (dstate != D_SEND2)
-                                 && (dstate != D_WVSEND);
+   assign CMD_write_ena = req_we;
    // A single-clock strobe, and only while the controller can take it.  Held
    // off until ddr3_ready so nothing is issued during calibration.
-   assign CMD_ena       = ((dstate == D_SEND) || (dstate == D_SEND2)
-                           || (dstate == D_WVSEND))
-                          && !CMD_busy && ddr3_ready;
+   assign CMD_ena       = (dstate == D_SEND) && !CMD_busy && ddr3_ready;
 
    always @(posedge cmd_clk) begin
       if (cmd_rst) begin
          dstate  <= D_IDLE;
          ack_tgl <= 1'b0;
          rd_lane <= 32'h0;
-         dbg_rd_issued     <= 16'd0;
-         dbg_rd_ready      <= 16'd0;
-         dbg_rd_unexpected <= 16'd0;
-         dbg_lane_bad      <= 16'd0;
-         dbg_reread_bad    <= 16'd0;
-         dbg_wv_bad        <= 16'd0;
-         lane_at_issue     <= 2'd0;
       end else begin
-         // Counted outside the case so nothing about the state machine's own
-         // branching can hide them.
-         if (CMD_ena && !req_we)                 dbg_rd_issued <= dbg_rd_issued + 16'd1;
-         if (CMD_read_ready)                     dbg_rd_ready  <= dbg_rd_ready  + 16'd1;
-         if (CMD_read_ready && dstate != D_READ && dstate != D_READ2
-                                && dstate != D_WVREAD)
-                                                 dbg_rd_unexpected <= dbg_rd_unexpected + 16'd1;
-         if (CMD_ena && !req_we)                 lane_at_issue <= lane;
-         if (CMD_read_ready && dstate == D_READ && lane != lane_at_issue)
-                                                 dbg_lane_bad <= dbg_lane_bad + 16'd1;
-
          case (dstate)
            D_IDLE:
              if (req_pulse) dstate <= D_SEND;
@@ -329,12 +224,8 @@ module deca_wb_to_ddr3 #(
                 // A write is finished the moment it is accepted -- there is no
                 // write acknowledgement.  A read has to wait for its data.
                 if (req_we) begin
-                   if (WRITE_VERIFY) begin
-                      dstate <= D_WVSEND;   // read it straight back
-                   end else begin
-                      ack_tgl <= ~ack_tgl;
-                      dstate  <= D_IDLE;
-                   end
+                   ack_tgl <= ~ack_tgl;
+                   dstate  <= D_IDLE;
                 end else
                   dstate <= D_READ;
              end
@@ -342,54 +233,6 @@ module deca_wb_to_ddr3 #(
            D_READ:
              if (CMD_read_ready) begin
                 rd_lane <= CMD_read_data[lane*32 +: 32];
-                if (DOUBLE_READ) begin
-                   dstate  <= D_SEND2;      // ask again, same address
-                end else begin
-                   ack_tgl <= ~ack_tgl;
-                   dstate  <= D_IDLE;
-                end
-             end
-
-           D_SEND2:
-             if (CMD_ena) dstate <= D_READ2;
-
-           // The same address, read a second time.  rd_lane still holds the
-           // first answer; the Wishbone side is handed the *first* one either
-           // way, so a mismatch is recorded without changing what the machine
-           // sees -- the point is to catch the controller disagreeing with
-           // itself, not to paper over it.
-           D_READ2:
-             if (CMD_read_ready) begin
-                if (CMD_read_data[lane*32 +: 32] != rd_lane) begin
-                   dbg_reread_bad <= dbg_reread_bad + 16'd1;
-                   if (dbg_reread_bad == 16'd0) begin
-                      dbg_rr_adr <= req_adr;
-                      dbg_rr_v1  <= rd_lane;
-                      dbg_rr_v2  <= CMD_read_data[lane*32 +: 32];
-                   end
-                end
-                ack_tgl <= ~ack_tgl;
-                dstate  <= D_IDLE;
-             end
-
-           D_WVSEND:
-             if (CMD_ena) dstate <= D_WVREAD;
-
-           // Compare only the bytes the write actually enabled: the rest of the
-           // 32-bit lane belongs to whatever was there before and is not this
-           // write's business.  A byte-granular check is also what catches a
-           // write mask applied wrongly, which is a separate defect this
-           // project has already had to reason about once.
-           D_WVREAD:
-             if (CMD_read_ready) begin
-                if (wv_mismatch) begin
-                   dbg_wv_bad <= dbg_wv_bad + 16'd1;
-                   if (dbg_wv_bad == 16'd0) begin
-                      dbg_rr_adr <= req_adr;
-                      dbg_rr_v1  <= req_dat;
-                      dbg_rr_v2  <= CMD_read_data[lane*32 +: 32];
-                   end
-                end
                 ack_tgl <= ~ack_tgl;
                 dstate  <= D_IDLE;
              end
