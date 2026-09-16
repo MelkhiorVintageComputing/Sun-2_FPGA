@@ -27,7 +27,7 @@
 # clears /tmp -- more writes, on the filesystem being measured.
 #
 # The two phases are separate commands because a reboot sits between them and
-# the monitor needs a carriage return, not a line feed: see deca_netconfig.sh
+# the monitor needs a carriage return, not a line feed: see sun2_netconfig.sh
 # for the rest of the console traps (csh, the 20-character threshold).
 #
 set -e -o pipefail

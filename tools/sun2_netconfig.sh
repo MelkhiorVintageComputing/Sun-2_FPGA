@@ -1,9 +1,19 @@
 #!/bin/bash
 #
-# Give a disk-booted Sun-2 its network identity, over the JTAG console.
+# Give a disk-booted Sun-2 its network identity, over whichever console the
+# board has.
 #
-#     tools/deca_netconfig.sh                    # the defaults below
-#     tools/deca_netconfig.sh 192.168.0.31 192.168.0.123 sun2_f_m
+#     tools/sun2_netconfig.sh                    # the defaults below
+#     tools/sun2_netconfig.sh 192.168.0.31 192.168.0.123 sun2_f_m
+#     CONSOLE=/dev/ttyUSB1 tools/sun2_netconfig.sh
+#
+# **Only the console differs between the boards**, which is why one script
+# serves both: the DECA has no hardware UART and its console is a pty over the
+# JTAG UART (`tools/deca_console_pty.sh', /tmp/deca-console), while the Wukong
+# has the real SCC on a USB serial adapter (/dev/ttyUSB0, 9600 8N1).  Both are
+# the *same* console from the machine's point of view -- the boot PROM's UART A
+# -- so everything typed below is identical.  With no CONSOLE given, a DECA pty
+# is used if one is there and the serial port otherwise.
 #
 # The machine has no other way in.  A disk image comes up as whatever the
 # image's /etc/rc.boot says -- `sun2', with an empty /etc/hosts -- so it cannot
@@ -60,9 +70,24 @@ SERVER_IP=${1:-192.168.0.31}
 SERVER=${SERVER_NAME:-x11spl}
 MY_IP=${2:-192.168.0.123}
 MY_NAME=${3:-sun2_f_m}
-CONSOLE=${CONSOLE:-/tmp/deca-console}
+DECA_PTY=/tmp/deca-console
+SERIAL=${SERIAL:-/dev/ttyUSB0}
+CONSOLE=${CONSOLE:-$([ -w $DECA_PTY ] && echo $DECA_PTY || echo $SERIAL)}
 
-test -w "$CONSOLE" || { echo "no console at $CONSOLE -- is deca_console_pty.sh running?" >&2; exit 1; }
+test -w "$CONSOLE" || {
+    echo "no console at $CONSOLE" >&2
+    echo "  DECA:   tools/deca_console_pty.sh $DECA_PTY   (then CONSOLE=$DECA_PTY)" >&2
+    echo "  Wukong: the SCC on $SERIAL -- check the cable and permissions" >&2
+    exit 1
+}
+
+# A real serial port needs its line settings; a pty does not have them to set.
+# 9600 8N1 is what the Sun-2's SCC comes up at, and raw matters because the
+# terminal driver would otherwise map and echo what is typed at the machine.
+case "$CONSOLE" in
+    /dev/ttyUSB*|/dev/ttyS*|/dev/ttyACM*)
+        stty -F "$CONSOLE" "${BAUD:-9600}" cs8 -cstopb -parenb raw -echo ;;
+esac
 
 # One line, then enough newlines to cross the 20-character soft-interrupt
 # threshold.  Padding with spaces instead would make them part of the argument,
