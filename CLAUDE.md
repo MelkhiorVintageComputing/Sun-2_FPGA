@@ -245,7 +245,8 @@ other, because the first one hung the machine before the second could show.
 first time anything the machine's *userspace* wrote has reached the outside
 world, and the first time a keystroke has reached a process.
 
-What stood in the way was `patches/z8530_scc/0001` -- see the trap below. Two
+What stood in the way was the WR9 defect below, fixed upstream as
+`z8530_scc` `00955fd`. Two
 things about the measurement are worth keeping:
 
 * **Userspace output ends its lines with a single `\r`, kernel output with
@@ -1589,19 +1590,19 @@ new knob changes the *reported* configuration before trusting the artefact.
 NetBSD 2.0 reaches userland on the MultiBus machine and its first printed line
 came out as `Wed Aug215: C26' -- a date with characters missing -- while the
 kernel's own messages were perfect.  Same discriminator as the WR9 bug in
-`patches/z8530_scc/0001': kernel output is polled, tty output is
+`00955fd': kernel output is polled, tty output is
 interrupt-driven, so a clean kernel console and a lossy tty means the interrupt
 path.
 
-`patches/z8530_scc/0002` gates the IP bits by their enables.  `Z85C30.pdf`
+`8d4892d` gates the IP bits by their enables.  `Z85C30.pdf`
 states the rule outright -- "if the IE bit is not set by enabling interrupts,
 then the IP for that source is never set" -- where the model latched all six
 regardless and said so in its own comments.  It is a real defect.  **It is not
-what garbled the console**, and the patch says so: it was diagnosed
+what garbled the console**, and its commit message says so: it was diagnosed
 confidently, it passed a testbench and a mutation, and on the board it changed
 the output *not at all* -- byte for byte the same loss.
 
-`patches/z8530_scc/0003` is the fix: **a transmit data write clears the
+`8a80f07` is the fix: **a transmit data write clears the
 transmit IP.**  The model cleared it only on WR0 command 101.  The IP means
 "the transmit buffer is empty", so refilling the buffer retires it; the command
 exists for a driver with nothing more to send, which cannot clear it by
@@ -1615,9 +1616,19 @@ another byte on top of the one still going out.
 **The clue that mattered was that the loss was byte-identical between runs.**
 That rules out a race and means a fixed loop, and it is what sent the search
 from the dispatch side to the clearing side after the first fix did nothing.
-With 0003 the same boot prints `Wed Aug 26 15:54:27 UTC 2026'.
+With `8a80f07` the same boot prints `Wed Aug 26 15:54:27 UTC 2026'.
 
-Note what each patch can cite.  0002 quotes the datasheet.  0003 cannot: the
+**All three are upstream now, and `patches/z8530_scc/` is gone.**  They were
+carried here as patches against `Inputs/z8530_scc` and were merged into it
+(`b9bcd67`, model rev 1.2, which also adds tests 23-24 for them), so the
+submodule moved forward and the patch directory was dropped -- which is what
+`tools/patch_inputs.sh` says a patch is for.  Measured after dropping them, with
+nothing patched into `build/inputs/z8530_scc` at all: `make -C sim scc` 28
+checks 0 failures, and all four reference boots byte-identical (MultiBus 22/274,
+VME 10/312, both cores).
+
+Note what each fix can cite.  `8d4892d` quotes the datasheet.  `8a80f07`
+cannot: the
 product specification carries only the WR0 register diagrams, and the prose on
 what resets a Tx IP is in the SCC User's Manual, which is not in the tree.  Its
 evidence is behavioural instead, and sound -- NetBSD/sun2 shipped and ran on
@@ -1627,13 +1638,13 @@ IP never clears cannot send a second character.
 **Verified with everything in this file: VME is 10/312 and MultiBus 22/274,
 both byte-identical.**
 
-**Verified: VME with 0002+0003 is 10/312**, byte-identical to the Suska VME
+**Verified: VME with both is 10/312**, byte-identical to the Suska VME
 console, with `Ethernet initialised, transmitted, and found no server` passing
 -- which matters twice over, because that check drives the 82586 through DVMA.
-MultiBus is 22/274 on both cores with both patches.
+MultiBus is 22/274 on both cores with both.
 
-`make -C sim scc` is 28 checks now, and each patch's removal fails only its own
-two.  Both were driven over the Sun-2's bus protocol, and the RR3 checks exist
+`make -C sim scc` is 28 checks now, and when these were patches, removing each
+failed only its own two.  Both were driven over the Sun-2's bus protocol, and the RR3 checks exist
 because RR3 is a path SunOS never takes: `zslevel6` dispatches on the
 status-modified vector in RR2, `zsc_intr_hard` reads RR3's IP bits directly.
 A register the reference boot never reads is a register with no coverage.
@@ -1947,7 +1958,7 @@ told apart from `lpd` in the first place.
   interrupt at any point in the life of the machine. SunOS writes it through
   channel B: `zsattach` (`sundev/zs_common.c:196-216`) walks the two ports and
   leaves its pointer on port B before `ZWRITE(9, ZSWR9_MASTER_IE + ...)`.
-  `patches/z8530_scc/0001` restores the two lines.
+  `00955fd` restores the two lines.
 
   **Nothing here could have caught it, and three things separately hid it.**
   The PROM polls and never touches WR9. Kernel `printf` goes out through the
