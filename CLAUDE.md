@@ -24,6 +24,7 @@ make -C syn ip [BOARD=v3]                 # generate the MIG DDR3 controller (on
 make -C syn bitstream [MACHINE=vme] [CPU_HZ=40000000] [BOARD=v3] [XY450=1] [CPU=rd68011]
 make -C syn bitstream FB=1 HDMI_MODE=1280x1024      # the display mode this board can drive
 make -C syn program [same knobs]          # JTAG, through a local hw_server
+make -C syn bitstream WB_FIFO=1           # the FIFO bridge to memory (quartus too)
 tools/mkxydisk -o build/disk/xy0.img       # a labelled, bootable disk image
 tools/ufsread IMG cat /vmunix -o OUT      # pull a file out of a 4.2BSD image
 tools/pcsym OUT 63c8e 40b6                # 68010 PCs -> kernel symbols
@@ -50,6 +51,7 @@ Simulation knobs that matter, all on `make -C sim xsim`:
 | `XSIMARGS="-testplusarg trace_abort=1"` | ring the SCC accesses and dump them when the monitor aborts; `=2` prints them live |
 | `XSIMARGS="-testplusarg cycle_from=5600 -testplusarg cycle_to=6900"` | every clock edge between two times — **both** edges, since the 68000 bus uses both and sampling only posedges hides the half-cycle where DTACK is taken |
 | `EXTRA_DEFINES=SUSKA_PEEK` | adds Suska's own `DTACK_In`, `WAITSTATES`, `SLICE_CNT_P` and `RESET_OUT_I` to that trace (`CPU=suska` only) |
+| `WB_FIFO=1` | the FIFO bridge between the bus and memory, with the memory model on an 83 MHz clock of its own -- see below |
 | `MAPS_ZERO=1` | power the segment and page maps up as zeros, the way a block RAM does, instead of X — the difference between simulation and a board at time zero |
 
 Unit tests (seconds to minutes, unlike a boot):
@@ -1154,6 +1156,39 @@ here and the read path has no tag. A client's request is still asserted during
 the cycle its `done` comes back — mask it, or the arbiter runs the transaction
 twice and you lose a CPU clock with nothing to show for it.
 
+**Two bridges to memory, and the FIFO one is faster.** `sun2_wishbone_bridge`
+is synchronous: a memory cycle raises `wb_cyc` and DTACK waits for the
+acknowledgement, which comes back through the board adapter's own toggle
+crossing (`wb_to_mig_ui`, `deca_wb_to_ddr3`) -- for writes as long as for reads.
+`WB_FIFO=1` (define `SUN2_WB_FIFO`, every flow) swaps in `sun2_fifo_bridge`:
+two `sun2_async_fifo`s, requests out and read answers back, with the Wishbone
+side on the memory controller's own clock and a stateless synchronous adapter
+beyond it (`wb_mig_sync`, `deca_wb_ddr3_sync`). A write is acknowledged the
+clock after it is queued; a read waits for the answer carrying its own tag and
+drops any other, so an orphaned request's answer can no longer be taken by the
+next cycle. Order holds because both masters share the one request queue and the
+far side runs one transaction at a time. The machine-visible timing is the old
+bridge's -- data valid the clock after DTACK -- and both treat a data phase, not a
+bus cycle, as the unit, which is what a read-modify-write needs (see the trap).
+
+Measured through the real MIG and DDR3 model (`make -C sim migddr3` against
+`migddr3fifo`, cpu_clk at 12.5 MHz): a write waits 2 clocks instead of 4, a read
+7.0 instead of 7.3. On the boards, same bitstream settings and filesystem, only
+the knob changed, every `patwr` 0 wrong of 8,388,608:
+
+| | dhrystone `user` | memory loop `user` | 16 MiB `dd`+`sync` | 16 MiB `patwr` |
+|---|---|---|---|---|
+| Wukong V3 MB+MBether+XY450, 19.6 MHz | 69.8 -> 63.3 s | 86.4 -> 78.7 s | 188.1 -> 167.6 s | 1716.0 -> 1559.1 s |
+| DECA VME+SCSI, 16.667 MHz | 65.2 -> 58.7 s | 83.5 -> 75.7 s | 164.3 -> 149.3 s | 1664.6 -> 1492.1 s |
+| DECA MB+XY450, 16.667 MHz | 64.7 -> 58.7 s | 83.4 -> 75.8 s | 156.0 -> 141.4 s | 1636.3 -> 1480.0 s |
+
+Nine to eleven percent everywhere, for about 500 LE on the DECA and Fmax that
+went up (17.71 -> 18.34 MHz VME+SCSI, 17.75 -> 18.18 MB+XY450). The synchronous
+bridge is still the default; each FIFO cell has one `patwr` pass behind it.
+Simulation is the other way round -- the FIFO path reaches the prompt 1-3% later
+-- because `tb_sun2`'s one-clock memory makes the crossings pure cost; that says
+nothing about a board.
+
 **One frame buffer, two places.** Both machines have the same 1152x900 screen
 and both PROMs reach it at the same *virtual* addresses; only the page-map
 entry differs. The 2/50 decodes it in TYPE 1 (pages 0..63, register at 0x40);
@@ -2089,6 +2124,15 @@ told apart from `lpd` in the first place.
   without either half of the fix. No boot moves (both machines, both cores,
   byte-identical with identical memory-check figures), which is also why it
   went unseen.
+* **A crossing's `set_max_delay` is silently void under `set_clock_groups`.**
+  `syn/wukong_common.xdc` puts cpu_clk and MIG's clocks in asynchronous groups,
+  and set_clock_groups outranks set_max_delay: `report_exceptions -ignored`
+  (every Vivado build now writes `exceptions_ignored.rpt`) lists
+  `wb_to_mig_ui`'s four bounds, and the FIFO bridge's pointer bounds in
+  `wukong_wbfifo.xdc`, as "Totally overridden path by CG". They have never
+  constrained anything; nothing fails because the routes happen to be short.
+  Bounding a crossing for real means taking those paths out of the clock
+  groups, which has not been done.
 * **`P_DATA_OUT` lags by one transaction, and so does anything watching it.**
   It is a register the bridge loads on acknowledgement, so
   during a bus cycle the wire carries the *previous* memory transaction's data
