@@ -445,7 +445,36 @@ migddr3)
 	xelab -debug off -L unisims_ver -L unisim -L secureip \
 		work.tb_mig_ddr3 work.glbl -s migddr3_sim >/dev/null
 	xsim migddr3_sim -R ${XSIMARGS:-} | grep -vE 'ddr3\.(cmd_task|data_task|reset|dqs_)' \
-		| grep -E '===|calibration|written and read|MISMATCH|PASS|FAIL|latency|^MIG read|^Wishbone read|^=>|scan-out'
+		| grep -E '===|calibration|written and read|MISMATCH|PASS|FAIL|latency|^MIG read|^Wishbone|^=>|scan-out'
+	;;
+migddr3fifo)
+	# The same, through sun2_fifo_bridge and wb_mig_sync: what the machine waits.
+	# The adapter against the real controller and Micron's model.  This is the
+	# join the other two tests do not cover: tb_wb_to_mig_ui uses a model of
+	# MIG's interface, and tb_wukong's ddr3 mode only gets as far as showing
+	# MIG calibrate -- the boot PROM does not touch main memory until L_M_MAP,
+	# far beyond what is simulable with a full DDR3 model.
+	mig="$top/build/ip/$BOARD/sun2_mig/sun2_mig/user_design/rtl"
+	ex="$top/build/ip/$BOARD/sun2_mig/sun2_mig/example_design/sim"
+	if [ ! -d "$mig" ]; then
+		echo "MIG has not been generated; run: make -C syn ip" >&2
+		exit 1
+	fi
+	mapfile -t mig_src < <(find "$mig" -name '*.v' -o -name '*.sv' \
+	                       | grep -v '/sun2_mig_mig\.v$' | sort)
+	step xvlog -i "$top/rtl/sun2-common" "$top/rtl/sun2-common/sun2_async_fifo.v" "$top/rtl/sun2-common/sun2_fifo_bridge.v"
+	step xvlog --sv -d SUN2_WB_FIFO -i "$ex" -i "$mig" \
+		"$top/boards/Wukong/wukong_clkgen.sv" \
+		"$top/boards/Wukong/wb_mig_sync.sv" \
+		"$top/boards/Wukong/mig_arb.sv" \
+		"${mig_src[@]}" \
+		"$ex/ddr3_model.sv" \
+		"$top/tb/tb_mig_ddr3.sv"
+	step xvlog "$XILINX_VIVADO/data/verilog/src/glbl.v"
+	step xelab -debug off -L unisims_ver -L unisim -L secureip \
+		work.tb_mig_ddr3 work.glbl -s migddr3fifo_sim
+	xsim migddr3fifo_sim -R ${XSIMARGS:-} | grep -vE 'ddr3\.(cmd_task|data_task|reset|dqs_)' \
+		| grep -E '===|calibration|written and read|MISMATCH|PASS|FAIL|latency|^MIG read|^FIFO bridge|^=>|scan-out'
 	;;
 *)
 	echo "usage: $0 {clkgen|adapter|migddr3}" >&2

@@ -36,6 +36,7 @@ set allowpw  0
 set eth5     224
 set cpu_div  0
 set mb_3c400 0
+set wb_fifo 0
 if {[llength $argv] > 0} { set cpu_hz   [lindex $argv 0] }
 if {[llength $argv] > 1} { set machine  [lindex $argv 1] }
 if {[llength $argv] > 2} { set mb_ether [lindex $argv 2] }
@@ -51,6 +52,7 @@ if {[llength $argv] > 11} { set mb_3c400 [lindex $argv 11] }
 if {[llength $argv] > 12} { set vme_scsi [lindex $argv 12] }
 if {[llength $argv] > 13} { set mb_scsi  [lindex $argv 13] }
 if {[llength $argv] > 14} { set disk_off_mib [lindex $argv 14] }
+if {[llength $argv] > 15} { set wb_fifo [lindex $argv 15] }
 
 # CPU_DIV names the MMCM divider directly and wins over CPU_HZ in
 # wukong_clkgen.sv:63, so from here on cpu_hz has to mean the clock that will
@@ -214,6 +216,12 @@ if {$vme_scsi == 1} {
 }
 
 # ...and the MultiBus packaging of the same interface.
+# The FIFO bridge between the bus and memory (sun2_fifo_bridge), with its
+# Wishbone side on MIG's ui_clk and wb_mig_sync in place of wb_to_mig_ui.
+if {$wb_fifo == 1} {
+    lappend defines SUN2_WB_FIFO
+}
+
 if {$mb_scsi == 1} {
     if {$machine ne "multibus"} {
         puts "ERROR: MB_SCSI is MultiBus only: a 2/50 takes the VME SCSI/RTC board"
@@ -246,7 +254,7 @@ set ipdir   $top/build/ip/$board
 # not exist, and `make program' failed with "no such bitstream".  The failure is
 # loud only because the two names differ; had make looked where Vivado wrote,
 # the wrong machine would have been programmed silently.
-set outdir  $top/build/syn/vivado/$board-$machine[expr {$vme_scsi == 1 ? "-vmescsi" : ""}][expr {$mb_scsi == 1 ? "-mbscsi" : ""}][expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$mb_3c400 == 1 ? "-3c400" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}]-cpu$cputag[expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}][expr {$disk_off_mib != 0 ? "-off${disk_off_mib}m" : ""}]
+set outdir  $top/build/syn/vivado/$board-$machine[expr {$vme_scsi == 1 ? "-vmescsi" : ""}][expr {$mb_scsi == 1 ? "-mbscsi" : ""}][expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$mb_3c400 == 1 ? "-3c400" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}][expr {$wb_fifo == 1 ? "-wbfifo" : ""}]-cpu$cputag[expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}][expr {$disk_off_mib != 0 ? "-off${disk_off_mib}m" : ""}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir
@@ -378,6 +386,7 @@ read_verilog -sv [list \
     $top/boards/Wukong/hdmi_clkgen.sv \
     $top/rtl/sun2-common/reset_sync.sv \
     $top/boards/Wukong/wb_to_mig_ui.sv \
+    $top/boards/Wukong/wb_mig_sync.sv \
     $top/boards/Wukong/mig_arb.sv \
     $top/rtl/sun2-common/fb_scanout.sv \
     $top/build/inputs/hdmi/src/tmds_channel.sv \
@@ -408,6 +417,13 @@ synth_ip [get_ips sun2_mig]
 # returns nothing and drops the group silently.
 read_xdc $here/wukong_$board.xdc
 read_xdc $here/wukong_common.xdc
+if {$wb_fifo == 1} {
+    read_xdc $here/wukong_wbfifo.xdc
+    puts "== read wukong_wbfifo.xdc =="
+} else {
+    read_xdc $here/wukong_wbcdc.xdc
+    puts "== read wukong_wbcdc.xdc =="
+}
 
 # Only when there is a frame buffer: the clocks it names exist only then.
 if {$fb == 1} {
@@ -455,6 +471,22 @@ synth_design -top wukong_top -part $part \
 
 write_checkpoint -force $outdir/post_synth.dcp
 report_utilization -file $outdir/post_synth_utilization.rpt
+
+# wukong_wbfifo.xdc bounds the FIFO bridge's crossings by pattern, and a
+# pattern that matches nothing turns its set_max_delay into a warning and no
+# constraint.  Refuse to go on if any of them is empty.
+if {$wb_fifo == 1} {
+    foreach f {req_fifo rsp_fifo} {
+        foreach c {wgray_reg[*] wgray_r1_reg[*] rgray_reg[*] rgray_w1_reg[*] mem_reg*} {
+            set n [llength [get_cells -hier -filter "NAME =~ *wbridge/$f/$c"]]
+            if {$n == 0} {
+                puts "ERROR: wukong_wbfifo.xdc: *wbridge/$f/$c matches no cells -- its constraint is not applied"
+                exit 1
+            }
+            puts "== wbfifo xdc: $f/$c matches $n cells =="
+        }
+    }
+}
 report_clocks      -file $outdir/clocks.rpt
 
 # ... and check the headline feature is actually in the netlist, because the
@@ -477,6 +509,9 @@ route_design -directive Explore
 write_checkpoint -force $outdir/post_route.dcp
 report_utilization       -file $outdir/utilization.rpt
 report_timing_summary    -file $outdir/timing.rpt
+# Which timing exceptions were overridden by another (set_clock_groups outranks
+# set_max_delay) -- worth reading whenever a crossing's bound matters.
+report_exceptions -ignored -file $outdir/exceptions_ignored.rpt
 report_drc               -file $outdir/drc.rpt
 
 # ---------------------------------------------------------------------------

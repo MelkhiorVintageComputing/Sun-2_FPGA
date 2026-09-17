@@ -13,6 +13,12 @@
 // So drive the Wishbone side directly: wait for calibration, then write and
 // read back through the whole path.  A few hundred microseconds is enough.
 //
+// Under SUN2_WB_FIFO (make -C sim migddr3fifo) the stimulus drives the Sun-2
+// side of sun2_fifo_bridge instead, one 68010 word cycle per half of each
+// longword, and the bridge's Wishbone side runs on ui_clk into wb_mig_sync --
+// so the latency reported is what the machine waits, phase to DTACK, for reads
+// and for writes, and can be set beside the synchronous path's STB-to-ACK.
+//
 
 module tb_mig_ddr3;
 
@@ -61,6 +67,38 @@ module tb_mig_ddr3;
    wire [15:0]  c0_wmask;
    reg          c1_req = 1'b0;
 
+`ifdef SUN2_WB_FIFO
+   // The Sun-2 side of the FIFO bridge, driven by the stimulus below.
+   reg         set_enable = 1'b0;
+   reg  [23:1] p_adr = '0;
+   reg  [15:0] p_din = '0;
+   wire [15:0] p_dout;
+   reg         p_rw_n = 1'b1, p_uds = 1'b0, p_lds = 1'b0, p_match = 1'b0;
+   wire        w_ack;
+   wire        f_cyc, f_stb, f_we, f_ack;
+   wire [29:0] f_adr;
+   wire [31:0] f_dat_w, f_dat_r;
+   wire [3:0]  f_sel;
+
+   sun2_fifo_bridge bridge (
+       .SET_ENABLE (set_enable), .RESET_n (~rst_wb), .CLK (cpu_clk),
+       .P_ADR_IN (p_adr), .P_DATA_IN (p_din), .P_DATA_OUT (p_dout),
+       .P_RW_n (p_rw_n), .EN_LBYTE (p_lds), .EN_UBYTE (p_uds), .FB_PAGE (6'h0),
+       .MATCH_MEM (p_match), .MATCH_FB (1'b0), .W_ACK (w_ack),
+       .WB_CLK (ui_clk), .WB_RESET (ui_clk_sync_rst),
+       .wb_cyc_o (f_cyc), .wb_stb_o (f_stb), .wb_adr_o (f_adr), .wb_dat_o (f_dat_w),
+       .wb_sel_o (f_sel), .wb_we_o (f_we), .wb_dat_i (f_dat_r), .wb_ack_i (f_ack));
+
+   wb_mig_sync adapter_sync (
+       .wb_cyc_i (f_cyc), .wb_stb_i (f_stb), .wb_adr_i (f_adr),
+       .wb_dat_i (f_dat_w), .wb_sel_i (f_sel), .wb_we_i (f_we),
+       .wb_dat_o (f_dat_r), .wb_ack_o (f_ack),
+       .c_addr (c0_addr), .c_we (c0_we), .c_wdata (c0_wdata), .c_wmask (c0_wmask),
+       .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata)
+   );
+   assign wb_dat_r = 32'h0;
+   assign wb_ack   = 1'b0;
+`else
    wb_to_mig_ui adapter (
        .clk_wb (cpu_clk), .rst_wb (rst_wb),
        .wb_cyc_i (wb_cyc), .wb_stb_i (wb_stb), .wb_adr_i (wb_adr),
@@ -70,6 +108,7 @@ module tb_mig_ddr3;
        .c_addr (c0_addr), .c_we (c0_we), .c_wdata (c0_wdata), .c_wmask (c0_wmask),
        .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata)
    );
+`endif
 
    mig_arb arbiter (
        .ui_clk (ui_clk), .ui_rst (ui_clk_sync_rst),
@@ -208,21 +247,43 @@ module tb_mig_ddr3;
       end
    end
 
+   // Writes as well as reads: acknowledging writes early is the whole point
+   // of the FIFO bridge, so both paths report both.
+   int  ww_lat_min = 1000, ww_lat_max = 0, ww_lat_sum = 0, ww_lat_n = 0;
    int  wb_cnt = 0;
-   bit  wb_busy = 1'b0;
+   bit  wb_busy = 1'b0, wb_busy_we = 1'b0;
+`ifdef SUN2_WB_FIFO
+   // A data phase starts when the stimulus raises MATCH with a strobe, and is
+   // answered by W_ACK -- DTACK, on the machine.
+   wire meas_start = p_match & (p_uds | p_lds);
+   wire meas_we    = ~p_rw_n;
+   wire meas_ack   = w_ack;
+`else
+   wire meas_start = wb_cyc & wb_stb;
+   wire meas_we    = wb_we;
+   wire meas_ack   = wb_ack;
+`endif
    always @(posedge cpu_clk) begin
       if (wb_busy) begin
          wb_cnt <= wb_cnt + 1;
-         if (wb_ack) begin
-            wb_busy    <= 1'b0;
-            wb_lat_n   <= wb_lat_n + 1;
-            wb_lat_sum <= wb_lat_sum + wb_cnt;
-            if (wb_cnt < wb_lat_min) wb_lat_min <= wb_cnt;
-            if (wb_cnt > wb_lat_max) wb_lat_max <= wb_cnt;
+         if (meas_ack) begin
+            wb_busy <= 1'b0;
+            if (wb_busy_we) begin
+               ww_lat_n   <= ww_lat_n + 1;
+               ww_lat_sum <= ww_lat_sum + wb_cnt;
+               if (wb_cnt < ww_lat_min) ww_lat_min <= wb_cnt;
+               if (wb_cnt > ww_lat_max) ww_lat_max <= wb_cnt;
+            end else begin
+               wb_lat_n   <= wb_lat_n + 1;
+               wb_lat_sum <= wb_lat_sum + wb_cnt;
+               if (wb_cnt < wb_lat_min) wb_lat_min <= wb_cnt;
+               if (wb_cnt > wb_lat_max) wb_lat_max <= wb_cnt;
+            end
          end
-      end else if (wb_cyc && wb_stb && !wb_we) begin
-         wb_busy <= 1'b1;
-         wb_cnt  <= 1;
+      end else if (meas_start && !meas_ack) begin
+         wb_busy    <= 1'b1;
+         wb_busy_we <= meas_we;
+         wb_cnt     <= 1;
       end
    end
 
@@ -236,8 +297,19 @@ module tb_mig_ddr3;
            $display("MIG read, command accepted to data valid: min %0d, max %0d, mean %0.1f ui_clk (%0.1f ns at 83.33 MHz)",
                     mig_lat_min, mig_lat_max, real'(mig_lat_sum)/mig_lat_n,
                     (real'(mig_lat_sum)/mig_lat_n) * 12.0);
+         if (ww_lat_n > 0)
+`ifdef SUN2_WB_FIFO
+           $display("FIFO bridge write, phase to DTACK:        min %0d, max %0d, mean %0.1f cpu_clk",
+`else
+           $display("Wishbone write, STB to ACK:               min %0d, max %0d, mean %0.1f cpu_clk",
+`endif
+                    ww_lat_min, ww_lat_max, real'(ww_lat_sum)/ww_lat_n);
          if (wb_lat_n > 0) begin
+`ifdef SUN2_WB_FIFO
+            $display("FIFO bridge read, phase to DTACK:         min %0d, max %0d, mean %0.1f cpu_clk (%0.1f ns at 12.5 MHz)",
+`else
             $display("Wishbone read, STB to ACK:                min %0d, max %0d, mean %0.1f cpu_clk (%0.1f ns at 12.5 MHz)",
+`endif
                      wb_lat_min, wb_lat_max, real'(wb_lat_sum)/wb_lat_n,
                      (real'(wb_lat_sum)/wb_lat_n) * cpu_ns);
             $display("");
@@ -258,6 +330,43 @@ module tb_mig_ddr3;
    int errors = 0;
    logic [31:0] expect_mem [int];
 
+`ifdef SUN2_WB_FIFO
+   // One 68010 word cycle on the bridge's Sun-2 side.  A1=0 is the low half of
+   // the 32-bit word, A1=1 the high half, as sun2_wishbone_bridge pairs them.
+   task automatic phase(input logic [29:0] a, input bit a1, input bit rw_n,
+                        input logic [15:0] d, input bit uds, input bit lds,
+                        output logic [15:0] q);
+      begin
+         @(posedge cpu_clk);
+         p_adr <= {a[21:0], a1}; p_rw_n <= rw_n; p_din <= d;
+         p_uds <= uds; p_lds <= lds; p_match <= 1'b1;
+         @(posedge cpu_clk);
+         while (!w_ack) @(posedge cpu_clk);
+         @(posedge cpu_clk);
+         q = p_dout;                          // the clock after DTACK
+         p_match <= 1'b0; p_uds <= 1'b0; p_lds <= 1'b0; p_rw_n <= 1'b1;
+         @(posedge cpu_clk);
+      end
+   endtask
+
+   task automatic wb_write(input logic [29:0] a, input logic [31:0] d,
+                           input logic [3:0] s);
+      logic [15:0] q;
+      begin
+         if (s[1:0] != 2'b00) phase(a, 1'b0, 1'b0, d[15:0],  s[1], s[0], q);
+         if (s[3:2] != 2'b00) phase(a, 1'b1, 1'b0, d[31:16], s[3], s[2], q);
+      end
+   endtask
+
+   task automatic wb_read(input logic [29:0] a, output logic [31:0] d);
+      logic [15:0] lo, hi;
+      begin
+         phase(a, 1'b0, 1'b1, 16'h0, 1'b1, 1'b1, lo);
+         phase(a, 1'b1, 1'b1, 16'h0, 1'b1, 1'b1, hi);
+         d = {hi, lo};
+      end
+   endtask
+`else
    task automatic wb_write(input logic [29:0] a, input logic [31:0] d,
                            input logic [3:0] s);
       begin
@@ -281,6 +390,7 @@ module tb_mig_ddr3;
          wb_cyc <= 1'b0; wb_stb <= 1'b0;
       end
    endtask
+`endif
 
    initial begin
       logic [31:0] got, want;
@@ -298,6 +408,11 @@ module tb_mig_ddr3;
       wait (init_calib_complete === 1'b1);
       $display("[%t] MIG calibration complete", $realtime);
       repeat (20) @(posedge cpu_clk);
+`ifdef SUN2_WB_FIFO
+      @(posedge cpu_clk) set_enable <= 1'b1;
+      @(posedge cpu_clk) set_enable <= 1'b0;
+      $display("=== ... through sun2_fifo_bridge and wb_mig_sync ===");
+`endif
 
       // Writes spread across two 128-bit beats and both halves of each, so
       // lane selection and the byte mask are all exercised against the real

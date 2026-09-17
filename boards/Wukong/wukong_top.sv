@@ -430,6 +430,24 @@ module wukong_top #(
    assign blk_rsp = '0;
 `endif
 
+   // The Wishbone port's clock.  The synchronous bridge runs it on cpu_clk and
+   // wb_to_mig_ui crosses to MIG; the FIFO bridge (SUN2_WB_FIFO) crosses inside
+   // itself and runs it on MIG's ui_clk, so wb_mig_sync needs no crossing.
+   // ui_clk is declared here, ahead of its first use, for xvlog's sake.
+`ifdef BOARD_MEM_FAST
+   wire wb_side_clk = cpu_clk;
+   wire wb_side_rst = sys_reset;
+`else
+   wire ui_clk, ui_clk_sync_rst;
+ `ifdef SUN2_WB_FIFO
+   wire wb_side_clk = ui_clk;
+   wire wb_side_rst = ui_clk_sync_rst;
+ `else
+   wire wb_side_clk = cpu_clk;
+   wire wb_side_rst = sys_reset;
+ `endif
+`endif
+
    top machine (
        .cpu_clk    (cpu_clk),
        // clk40 is unused inside sun2_fpga -- the only thing that ever read it
@@ -491,8 +509,8 @@ module wukong_top #(
        .wb_we_o    (wb_we),
        .wb_dat_i   (wb_dat_s2m),
        .wb_ack_i   (wb_ack),
-       .wb_clk_i   (cpu_clk),
-       .wb_rst_i   (sys_reset)
+       .wb_clk_i   (wb_side_clk),
+       .wb_rst_i   (wb_side_rst)
    );
 
    // ------------------------------------------------------------------
@@ -514,7 +532,6 @@ module wukong_top #(
 
 `else
 
-   wire         ui_clk, ui_clk_sync_rst;
    wire [27:0]  app_addr;
    wire [2:0]   app_cmd;
    wire         app_en, app_rdy;
@@ -533,6 +550,16 @@ module wukong_top #(
    wire [127:0] c0_wdata, c0_rdata, c1_rdata;
    wire [15:0]  c0_wmask;
 
+`ifdef SUN2_WB_FIFO
+   wb_mig_sync adapter_sync (
+       .wb_cyc_i (wb_cyc), .wb_stb_i (wb_stb), .wb_adr_i (wb_adr),
+       .wb_dat_i (wb_dat_m2s), .wb_sel_i (wb_sel), .wb_we_i (wb_we),
+       .wb_dat_o (wb_dat_s2m), .wb_ack_o (wb_ack),
+
+       .c_addr (c0_addr), .c_we (c0_we), .c_wdata (c0_wdata), .c_wmask (c0_wmask),
+       .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata)
+   );
+`else
    wb_to_mig_ui adapter (
        .clk_wb  (cpu_clk),
        .rst_wb  (sys_reset),
@@ -546,6 +573,7 @@ module wukong_top #(
        .c_addr (c0_addr), .c_we (c0_we), .c_wdata (c0_wdata), .c_wmask (c0_wmask),
        .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata)
    );
+`endif
 
    mig_arb arbiter (
        .ui_clk (ui_clk), .ui_rst (ui_clk_sync_rst),
