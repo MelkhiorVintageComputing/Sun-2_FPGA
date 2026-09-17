@@ -435,6 +435,8 @@ set v2001 [list \
     $top/rtl/sun2-common/ttl_74F151.v \
     $top/rtl/sun2-common/ttl_74LS148.v \
     $top/rtl/sun2-common/sun2_wishbone_bridge.v \
+    $top/rtl/sun2-common/sun2_async_fifo.v \
+    $top/rtl/sun2-common/sun2_fifo_bridge.v \
 ]
 
 set sv [list \

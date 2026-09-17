@@ -86,7 +86,8 @@ module tb_orphan_ack;
        .diag_leds (), .en_boot (), .todebug (),
        .wb_cyc_o (wb_cyc), .wb_stb_o (wb_stb), .wb_adr_o (wb_adr),
        .wb_dat_o (wb_dat_m2s), .wb_sel_o (wb_sel), .wb_we_o (wb_we),
-       .wb_dat_i (wb_dat_s2m), .wb_ack_i (wb_ack)
+       .wb_dat_i (wb_dat_s2m), .wb_ack_i (wb_ack),
+       .wb_clk_i (cpu_clk), .wb_rst_i (sys_reset)
    );
 
    // ---- the real memory path, as on the Wukong ----------------------------

@@ -133,7 +133,12 @@ module sun2_fpga(input         cpu_clk,
 		 output [3:0]  wb_sel_o,
 		 output        wb_we_o,
 		 input [31:0]  wb_dat_i,
-		 input 	       wb_ack_i
+		 input 	       wb_ack_i,
+		 // The Wishbone side's own clock and reset.  Only the FIFO bridge
+		 // (SUN2_WB_FIFO) uses them; the synchronous bridge runs the
+		 // Wishbone port on C100 and ignores both.
+		 input 	       wb_clk_i,
+		 input 	       wb_rst_i
 		   );
    // 180° clock
    wire 	       C100_n;
@@ -1178,7 +1183,15 @@ module sun2_fpga(input         cpu_clk,
    wire 				 L_M_MAP_SEEN;
    assign L_M_MAP_SEEN = (leds == 8'h8F); 
    
+`ifdef SUN2_WB_FIFO
+   // Requests and read answers cross to the memory controller's clock through
+   // two FIFOs, and writes are acknowledged once queued: sun2_fifo_bridge.v.
+   sun2_fifo_bridge #(.FB_WB_BASE(`FB_WB_BASE)) wbridge(.CLK(C100),
+				.WB_CLK(wb_clk_i),
+				.WB_RESET(wb_rst_i),
+`else
    sun2_wishbone_bridge #(.FB_WB_BASE(`FB_WB_BASE)) wbridge(.CLK(C100),
+`endif
 				// Power-up state, not reset state.  ENABLE is armed
 				// when the monitor writes LED code 0x8F and gates
 				// wb_cyc/wb_stb, so while it is clear main memory

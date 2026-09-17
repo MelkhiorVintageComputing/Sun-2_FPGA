@@ -255,6 +255,14 @@ module tb_sun2 #(
                  .mii_rx_dv(mii_rx_dv), .mii_rx_er(mii_rx_er),
                  .mii_crs(mii_crs), .mii_col(mii_col));
 
+   // The Wishbone side's clock, declared before its first use (xvlog insists).
+`ifdef SUN2_WB_FIFO
+   reg wb_clk = 1'b0;
+   always #6 wb_clk = ~wb_clk;          // 83.3 MHz
+`else
+   wire wb_clk = cpu_clk;
+`endif
+
    top dut(	   .cpu_clk(cpu_clk),
            .clk40(clk40),
            .clk4m9152(clk4m9152),
@@ -310,12 +318,16 @@ module tb_sun2 #(
            .wb_sel_o(wb_sel),
            .wb_we_o(wb_we),
            .wb_dat_i(wb_dat_s2m),
-           .wb_ack_i(wb_ack)
+           .wb_ack_i(wb_ack),
+           .wb_clk_i(wb_clk),
+           .wb_rst_i(sys_reset)
            );
 
-   // Main memory. In the FPGA build this is LiteDRAM behind a clock-domain
-   // crossing; here a plain one-cycle-ack model in the CPU clock domain.
-   wb_ram_model #(.ACK_LATENCY(MEM_LATENCY)) ram(.clk(cpu_clk),
+   // Main memory: a plain registered-ack model.  With the synchronous bridge
+   // it runs on the CPU clock, as that bridge's Wishbone port does; with the
+   // FIFO bridge it runs on a clock of its own at MIG's ui_clk rate, so every
+   // boot crosses real, unrelated clock domains both ways.
+   wb_ram_model #(.ACK_LATENCY(MEM_LATENCY)) ram(.clk(wb_clk),
                                        .reset(sys_reset),
                                        .wb_cyc_i(wb_cyc),
                                        .wb_stb_i(wb_stb),

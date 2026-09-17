@@ -73,7 +73,11 @@ module top(input         cpu_clk,
 	   output [3:0]  wb_sel_o,
 	   output 	 wb_we_o,
 	   input [31:0]  wb_dat_i,
-	   input 	 wb_ack_i
+	   input 	 wb_ack_i,
+	   // The Wishbone port's clock and reset: the memory controller's under
+	   // SUN2_WB_FIFO, and unused (tie them to cpu_clk) otherwise.
+	   input 	 wb_clk_i,
+	   input 	 wb_rst_i
 	   );
    wire C100;
    wire P_VPA_n;
@@ -314,7 +318,9 @@ module top(input         cpu_clk,
 		  .wb_sel_o(wb_sel_o),
 		  .wb_we_o(wb_we_o),
 		  .wb_dat_i(wb_dat_i),
-		  .wb_ack_i(wb_ack_i)
+		  .wb_ack_i(wb_ack_i),
+		  .wb_clk_i(wb_clk_i),
+		  .wb_rst_i(wb_rst_i)
 		  );
    
 

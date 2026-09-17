@@ -490,7 +490,9 @@ module wukong_top #(
        .wb_sel_o   (wb_sel),
        .wb_we_o    (wb_we),
        .wb_dat_i   (wb_dat_s2m),
-       .wb_ack_i   (wb_ack)
+       .wb_ack_i   (wb_ack),
+       .wb_clk_i   (cpu_clk),
+       .wb_rst_i   (sys_reset)
    );
 
    // ------------------------------------------------------------------

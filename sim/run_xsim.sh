@@ -55,6 +55,7 @@ case " $SUN2_DEFINES " in *" SUN2_FB "*)       rundir_tag="$rundir_tag-fb" ;; es
 case " $SUN2_DEFINES " in *" SUN2_XY450 "*)    rundir_tag="$rundir_tag-xy450" ;; esac
 case " $SUN2_DEFINES " in *" SUN2_VME_SCSI "*) rundir_tag="$rundir_tag-vmescsi" ;; esac
 case " $SUN2_DEFINES " in *" SUN2_MB_SCSI "*) rundir_tag="$rundir_tag-mbscsi" ;; esac
+case " $SUN2_DEFINES " in *" SUN2_WB_FIFO "*) rundir_tag="$rundir_tag-wbfifo" ;; esac
 # ... and the experiment that powers the maps up as zeros rather than X, which
 # is a different machine at time zero and must not write over a reference run.
 case " $SUN2_DEFINES " in *" SRAM_POWERUP_ZERO "*) rundir_tag="$rundir_tag-mapszero" ;; esac
@@ -147,6 +148,8 @@ xvlog --work sun2 \
 	"$top/rtl/sun2-common/ttl_74F151.v" \
 	"$top/rtl/sun2-common/ttl_74LS148.v" \
 	"$top/rtl/sun2-common/sun2_wishbone_bridge.v" \
+	"$top/rtl/sun2-common/sun2_async_fifo.v" \
+	"$top/rtl/sun2-common/sun2_fifo_bridge.v" \
 	"$top/rtl/sun2-common/tolog.v"
 
 echo "== compiling the SCC and testbench (SystemVerilog) =="

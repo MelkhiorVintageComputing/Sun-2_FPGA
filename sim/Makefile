@@ -10,6 +10,7 @@
 #   make xsim MB_3C400=1   fit a 3Com 3C400 instead (MultiBus only, exclusive)
 #   make xsim FB=1         fit the frame buffer (either machine)
 #   make xsim XY450=1      fit the Xylogics 450 disk controller (MultiBus only)
+#   make xsim WB_FIFO=1    the FIFO bridge to memory, memory on its own clock
 #   make xsim VME_SCSI=1   fit the Sun VME SCSI/RTC board (VME only)
 #   make xsim MB_SCSI=1    fit the MultiBus SCSI adapter (MultiBus only)
 #   make xsim CPU=rd68011  build with the RD68011 core instead of Suska
@@ -104,6 +105,11 @@ endif
 # VME bus, which is a different card in a different space.
 ifeq ($(XY450),1)
 DEFINES += SUN2_XY450
+endif
+# The FIFO bridge between the bus and memory (sun2_fifo_bridge.v), with the
+# memory model on a clock of its own rather than cpu_clk.  Either machine.
+ifeq ($(WB_FIFO),1)
+DEFINES += SUN2_WB_FIFO
 endif
 
 # The Sun VME SCSI/RTC board, which is how a 2/50 gets a local disk.  VME only,
@@ -320,7 +326,7 @@ iverilog: rom
 # CPU=rd68011' reads the Suska run's log and passes on it.  Note this still
 # does not carry CPU_HZ or BAUD, which also tag a run directory -- pass
 # FBIMAGE= or the log path by hand for those.
-RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)$(if $(filter 1,$(VME_SCSI)),-vmescsi,)$(if $(filter 1,$(MB_SCSI)),-mbscsi,)$(if $(filter 0,$(LOOPBUF)),,-lb$(LOOPBUF))$(if $(filter 0,$(RTE_LOOP)),,-rtelp)$(if $(filter 1,$(RTE_BUF)),,-nortebuf)$(CPUTAG)
+RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)$(if $(filter 1,$(VME_SCSI)),-vmescsi,)$(if $(filter 1,$(MB_SCSI)),-mbscsi,)$(if $(filter 1,$(WB_FIFO)),-wbfifo,)$(if $(filter 0,$(LOOPBUF)),,-lb$(LOOPBUF))$(if $(filter 0,$(RTE_LOOP)),,-rtelp)$(if $(filter 1,$(RTE_BUF)),,-nortebuf)$(CPUTAG)
 # What check_console.sh should expect, in order of what wins.  A display wins
 # outright: with one fitted the console moves to the screen and there is no
 # serial output left to check, whatever else is in the cage.  A disk beats an

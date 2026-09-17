@@ -76,6 +76,8 @@ iverilog -g2012 -o sun2_sim \
 	"$top/rtl/sun2-common/ttl_74F151.v" \
 	"$top/rtl/sun2-common/ttl_74LS148.v" \
 	"$top/rtl/sun2-common/sun2_wishbone_bridge.v" \
+	"$top/rtl/sun2-common/sun2_async_fifo.v" \
+	"$top/rtl/sun2-common/sun2_fifo_bridge.v" \
 	"$top/rtl/sun2-common/tolog.v" \
 	"$top/build/inputs/z8530_scc/z8530_scc.sv" \
 	"$top/tb/wb_ram_model.sv" \
