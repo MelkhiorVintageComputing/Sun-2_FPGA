@@ -56,7 +56,7 @@ array set opt {
     -mb_ether  0
     -mb_3c400  0
     -fb        0
-    -wb_fifo   0
+    -wb_fifo   1
     -eth5      224
     -eram      1
     -jobs      8

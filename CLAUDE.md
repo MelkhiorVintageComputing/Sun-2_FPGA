@@ -24,7 +24,7 @@ make -C syn ip [BOARD=v3]                 # generate the MIG DDR3 controller (on
 make -C syn bitstream [MACHINE=vme] [CPU_HZ=40000000] [BOARD=v3] [XY450=1] [CPU=rd68011]
 make -C syn bitstream FB=1 HDMI_MODE=1280x1024      # the display mode this board can drive
 make -C syn program [same knobs]          # JTAG, through a local hw_server
-make -C syn bitstream WB_FIFO=1           # the FIFO bridge to memory (quartus too)
+make -C syn bitstream WB_FIFO=0           # the old synchronous bridge to memory (quartus too)
 tools/mkxydisk -o build/disk/xy0.img       # a labelled, bootable disk image
 tools/ufsread IMG cat /vmunix -o OUT      # pull a file out of a 4.2BSD image
 tools/pcsym OUT 63c8e 40b6                # 68010 PCs -> kernel symbols
@@ -51,7 +51,7 @@ Simulation knobs that matter, all on `make -C sim xsim`:
 | `XSIMARGS="-testplusarg trace_abort=1"` | ring the SCC accesses and dump them when the monitor aborts; `=2` prints them live |
 | `XSIMARGS="-testplusarg cycle_from=5600 -testplusarg cycle_to=6900"` | every clock edge between two times — **both** edges, since the 68000 bus uses both and sampling only posedges hides the half-cycle where DTACK is taken |
 | `EXTRA_DEFINES=SUSKA_PEEK` | adds Suska's own `DTACK_In`, `WAITSTATES`, `SLICE_CNT_P` and `RESET_OUT_I` to that trace (`CPU=suska` only) |
-| `WB_FIFO=1` | the FIFO bridge between the bus and memory, with the memory model on an 83 MHz clock of its own -- see below |
+| `WB_FIFO=0` | the synchronous bridge to memory instead of the default FIFO bridge, with the memory model back on cpu_clk -- see below |
 | `MAPS_ZERO=1` | power the segment and page maps up as zeros, the way a block RAM does, instead of X — the difference between simulation and a board at time zero |
 
 Unit tests (seconds to minutes, unlike a boot):
@@ -1160,7 +1160,7 @@ twice and you lose a CPU clock with nothing to show for it.
 is synchronous: a memory cycle raises `wb_cyc` and DTACK waits for the
 acknowledgement, which comes back through the board adapter's own toggle
 crossing (`wb_to_mig_ui`, `deca_wb_to_ddr3`) -- for writes as long as for reads.
-`WB_FIFO=1` (define `SUN2_WB_FIFO`, every flow) swaps in `sun2_fifo_bridge`:
+`WB_FIFO=1` (define `SUN2_WB_FIFO`, every flow, **the default**) swaps in `sun2_fifo_bridge`:
 two `sun2_async_fifo`s, requests out and read answers back, with the Wishbone
 side on the memory controller's own clock and a stateless synchronous adapter
 beyond it (`wb_mig_sync`, `deca_wb_ddr3_sync`). A write is acknowledged the
@@ -1183,8 +1183,18 @@ the knob changed, every `patwr` 0 wrong of 8,388,608:
 | DECA MB+XY450, 16.667 MHz | 64.7 -> 58.7 s | 83.4 -> 75.8 s | 156.0 -> 141.4 s | 1636.3 -> 1480.0 s |
 
 Nine to eleven percent everywhere, for about 500 LE on the DECA and Fmax that
-went up (17.71 -> 18.34 MHz VME+SCSI, 17.75 -> 18.18 MB+XY450). The synchronous
-bridge is still the default; each FIFO cell has one `patwr` pass behind it.
+went up (17.71 -> 18.34 MHz VME+SCSI, 17.75 -> 18.18 MB+XY450). So it is the
+default; `WB_FIFO=0` builds the synchronous bridge, and its output directories
+and simulation run directories carry `-wbsync`.
+
+**What that does to the regression fingerprint.** Consoles and bus-error counts
+are the same on both bridges -- MultiBus 22/274, VME 10/312, both cores,
+byte-identical -- but `tb_sun2`'s memory-checker counts (longword reads, CPU and
+DVMA reads checked) move, because the machine's timing moved. Figures recorded
+before the switch were taken with the synchronous bridge; compare old numbers
+with `WB_FIFO=0`. `MEM_LATENCY` counts wait states on the memory model's clock,
+which with the FIFO bridge is an 83 MHz clock of its own, not cpu_clk.
+
 Simulation is the other way round -- the FIFO path reaches the prompt 1-3% later
 -- because `tb_sun2`'s one-clock memory makes the crossings pure cost; that says
 nothing about a board.
