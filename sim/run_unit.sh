@@ -110,6 +110,14 @@ adv7513)
 	xsim adv7513_sim -R | grep -E '===|PASS|FAIL|first mismatch|never written'
 	;;
 
+fifobridge)
+	# The FIFO bridge against a registered slave on a clock of its own.
+	step xvlog -i "$top/rtl/sun2-common" -d SUN2_SIM "$top/rtl/sun2-common/sun2_async_fifo.v" \
+		"$top/rtl/sun2-common/sun2_fifo_bridge.v"
+	step xvlog --sv "$top/tb/tb_fifo_bridge.sv"
+	step xelab -debug off --timescale 1ns/1ps work.tb_fifo_bridge -s fifobridge_sim
+	xsim fifobridge_sim -R | grep -E '===|PASS|FAIL|sampled edge|stale answers|returned'
+	;;
 asyncfifo)
 	# The dual-clock FIFO under sun2_fifo_bridge: order, full, empty and fall
 	# through, across two unrelated clocks each way round.
