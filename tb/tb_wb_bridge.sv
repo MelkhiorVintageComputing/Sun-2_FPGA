@@ -66,8 +66,10 @@
 // held across both halves, the data strobes negated between them and R/W
 // turning from read to write while MATCH_MEM never drops (it is qualified by
 // C_S6, which the whole of an RMW cycle keeps).  The per-cycle `issued/done'
-// state above is only cleared by MATCH_ANY falling, so the question it asks is
-// whether the write half ever reaches memory.
+// state used to be cleared only by MATCH_ANY falling, so the write half was
+// acknowledged on its first clock and never issued -- 16 of 16 lost before
+// the bridge was made to own a transaction per data phase.  It must now issue
+// exactly one read and one write, and the write must land.
 //
 
 module tb_wb_bridge;
@@ -213,12 +215,19 @@ module tb_wb_bridge;
          @(posedge CLK);
          rdata = P_DATA_OUT;
 
-         // Between the halves: strobes off, R/W to write, new data driven.
+         // Between the halves, in RD68011's order (UM 5.1.3): the strobes
+         // release first with R/W still high, R/W turns to write and data is
+         // driven, and only a clock later do the strobes reassert.  The window
+         // with the strobes off and R/W still reading is the one a request
+         // must not go out in -- a bridge that only clears its state per data
+         // phase, without also gating the request on a strobe, issues a
+         // spurious read there.
          EN_UBYTE  <= 1'b0;
          EN_LBYTE  <= 1'b0;
+         for (guard = 0; guard < ds_gap; guard = guard + 1) @(posedge CLK);
          P_RW_n    <= 1'b0;
          P_DATA_IN <= rdata | set_bits;
-         for (guard = 0; guard < ds_gap; guard = guard + 1) @(posedge CLK);
+         @(posedge CLK);
          EN_UBYTE  <= 1'b1;
          EN_LBYTE  <= 1'b1;
          @(posedge CLK);
@@ -238,7 +247,7 @@ module tb_wb_bridge;
    // The runs
    // ----------------------------------------------------------------------
    integer i, gap, lat, bad_w, bad_r, total_fail;
-   integer imm, n_rmw_lost, n_rmw_ok, wr_before;
+   integer imm, n_rmw_lost, n_rmw_ok, wr_before, rd_before;
    reg [15:0] rd;
    reg [15:0] expect_w;
 
@@ -332,23 +341,26 @@ module tb_wb_bridge;
          for (gap = 1; gap <= 2; gap = gap + 1) begin
             LATENCY = lat;
             mem[23'h000200 >> 1] = 32'h11112222;
-            wr_before = n_wr;
+            wr_before = n_wr; rd_before = n_rd;
             rmw_cycle(23'h000200, 16'h0080, gap, rd, imm);
             // A1=0: the low half of the longword, per the pairing above.
-            if (n_wr == wr_before + 1 && mem[23'h000200 >> 1][15:0] === (rd | 16'h0080)) begin
+            if (n_wr == wr_before + 1 && n_rd == rd_before + 1 &&
+                mem[23'h000200 >> 1][15:0] === (rd | 16'h0080)) begin
                n_rmw_ok = n_rmw_ok + 1;
                $display("  lat=%0d ds_gap=%0d  RMW ok: read %04x, wrote %04x",
                         lat, gap, rd, mem[23'h000200 >> 1][15:0]);
             end else begin
                n_rmw_lost = n_rmw_lost + 1;
-               $display("  lat=%0d ds_gap=%0d  RMW WRITE LOST: read %04x, memory %04x, writes issued %0d, DTACK on first clock of write half: %0d",
-                        lat, gap, rd, mem[23'h000200 >> 1][15:0], n_wr - wr_before, imm);
+               $display("  lat=%0d ds_gap=%0d  RMW FAIL: read %04x, memory %04x, reads issued %0d, writes issued %0d, DTACK on first clock of write half: %0d",
+                        lat, gap, rd, mem[23'h000200 >> 1][15:0], n_rd - rd_before, n_wr - wr_before, imm);
             end
          end
       end
       $display("=== RMW: %0d of 16 wrote, %0d lost the write half ===", n_rmw_ok, n_rmw_lost);
 
-      $display("=== checks: %0d combinations, %0d failing, %0d timeouts ===",
+      if (n_rmw_lost != 0) total_fail = total_fail + 1;
+
+      $display("=== checks: %0d combinations + RMW, %0d failing, %0d timeouts ===",
                8*4, total_fail, n_timeout);
       $display("=== gap=0 (unreachable on the machine): %0d showed the carry-over, %0d did not ===",
                n_invariant, n_gap0_ok);

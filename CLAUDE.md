@@ -2074,6 +2074,21 @@ told apart from `lpd` in the first place.
   that same boot. Pass/fail on a boot is a coarse instrument for corruption
   that is usually survivable — which is why this was found on the board first,
   and why the check exists now.
+* **A read-modify-write keeps AS, so a per-cycle transaction loses its write
+  half.** TAS runs as one indivisible cycle -- RD68011 holds AS from the read
+  half straight through the write half (`Inputs/RD68011/doc/bus-timing-compliance.md`,
+  UM 5.1.3), releasing only the data strobes and turning R/W in between. The
+  bridge's `issued`/`done` cleared only when `MATCH_ANY` fell, and `MATCH_MEM`
+  is qualified by `C_S6`, which AS keeps: so `done` from the read half held
+  DTACK through the write half and suppressed its request, and every TAS on
+  memory was a silent no-op -- 8 of 8 lost through the real `sun2_fpga` and
+  `wb_to_mig_ui`. A transaction now belongs to a *data phase*: the state clears
+  when the strobes release, and a request needs a strobe, so nothing goes out
+  in the gap between the halves with R/W not yet turned. `make -C sim bridge`
+  and `make -C sim orphan` drive the cycle in RD68011's order; each fails
+  without either half of the fix. No boot moves (both machines, both cores,
+  byte-identical with identical memory-check figures), which is also why it
+  went unseen.
 * **`P_DATA_OUT` lags by one transaction, and so does anything watching it.**
   It is a register the bridge loads on acknowledgement, so
   during a bus cycle the wire carries the *previous* memory transaction's data

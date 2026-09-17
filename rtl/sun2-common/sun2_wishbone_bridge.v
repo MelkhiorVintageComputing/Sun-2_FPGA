@@ -58,6 +58,10 @@ module sun2_wishbone_bridge #(
    
    wire 				   MATCH_ANY = MATCH_MEM | MATCH_FB;
 
+   // A data phase: a matched cycle with at least one data strobe asserted.
+   // This, not MATCH_ANY alone, is what owns a transaction -- see below.
+   wire 				   PHASE = MATCH_ANY & (EN_LBYTE | EN_UBYTE);
+
    // The frame buffer's word address within its 128 KiB aperture: the physical
    // page picks the 2 KiB, P_ADR_IN the word inside it.  FB_WB_BASE is 128 KiB
    // aligned, so this is an OR rather than an add.
@@ -99,8 +103,26 @@ module sun2_wishbone_bridge #(
    // in the same clock the request goes out -- so this costs nothing and
    // rejects a pulse left over from the cycle before.  `done' holds DTACK for
    // the rest of the cycle once that ack has arrived, so the request drops
-   // instead of repeating.  Both clear when MATCH_ANY does, which is the end
-   // of the bus cycle.
+   // instead of repeating.
+   //
+   // Both clear at the end of a *data phase*, not of the bus cycle, and the
+   // request needs a strobe.  The two are the same thing except in one cycle,
+   // and that cycle is why.  A read-modify-write -- what TAS issues, and what
+   // RD68011 implements as one indivisible cycle -- holds AS from the read
+   // half straight through the write half, releasing only the data strobes in
+   // between and turning R/W to write.  MATCH_MEM is qualified by C_S6, which
+   // AS keeps, so it never drops: when this cleared on ~MATCH_ANY, `done' from
+   // the read half survived into the write half, held W_ACK up and wb_cyc
+   // down, and the write half was acknowledged on its first clock with no
+   // write ever issued.  RD68011 accepts a DTACK held across the whole cycle
+   // (its doc/bus-timing-compliance.md, UM 5.1.3), so every TAS on memory was
+   // a silent no-op.  `make -C sim bridge' and `make -C sim orphan' drive
+   // that cycle; both lost every write half before this.
+   //
+   // Gating the request on a strobe costs a normal cycle nothing: a read
+   // asserts its strobes with AS and a write one clock later, both before
+   // C_S6 qualifies the match.  What it prevents is a request going out in
+   // the gap between RMW halves, with the strobes off and R/W not yet turned.
    //
    reg 					   issued, done;
 
@@ -108,7 +130,7 @@ module sun2_wishbone_bridge #(
    // slave counts its wait states only while CYC and STB are up, so a request
    // dropped after one clock never completes at all.  `done' is what stops it
    // repeating, where ~wb_ack_i_prev used to stop it for exactly one clock.
-   assign wb_cyc_o = ~ENABLE ? 1'b0 : MATCH_ANY & ~done;
+   assign wb_cyc_o = ~ENABLE ? 1'b0 : PHASE & ~done;
    assign wb_stb_o = wb_cyc_o;
    assign wb_adr_o = ~ENABLE ? 30'h00000000 :
 		     MATCH_FB  ? fb_adr :
@@ -138,10 +160,10 @@ module sun2_wishbone_bridge #(
      begin
 	wb_ack_i_prev <= ~ENABLE ? 1'b0 : wb_ack_i;
 
-	// The cycle owns its transaction: armed when the request goes out,
-	// finished when that request is acknowledged, both cleared when the
-	// cycle ends.
-	if (~ENABLE | ~MATCH_ANY) begin
+	// The data phase owns its transaction: armed when the request goes
+	// out, finished when that request is acknowledged, both cleared when
+	// the phase ends.
+	if (~ENABLE | ~PHASE) begin
 	   issued <= 1'b0;
 	   done   <= 1'b0;
 	end else begin

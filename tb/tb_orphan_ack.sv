@@ -316,12 +316,12 @@ module tb_orphan_ack;
 
       // A read-modify-write cycle through the real sun2_fpga: AS held across
       // both halves, the strobes released between them, R/W turned to write.
-      // This is what TAS issues.  Informational here -- it does not change the
-      // verdict -- because it asks whether the machine has the gap at all.
+      // This is what TAS issues, and every write half used to be lost: the
+      // bridge acknowledged it with the read half's `done' and never issued it.
       $display("=== 4. read-modify-write (TAS) on memory ===");
       begin
-         int n0, lost;
-         lost = 0;
+         int n0, lost, nw0;
+         lost = 0; nw0 = n_req_wr;
          for (int i = 60; i < 68; i++) begin
             logic [15:0] r1, back; bit b2;
             int n;
@@ -353,7 +353,8 @@ module tb_orphan_ack;
               $display("  word %0d: read half %04x, wrote %04x, reads back %04x, write requests %0d",
                        i, r1, r1 | 16'h0080, back, n_req_wr - n0);
          end
-         $display("  RMW writes lost: %0d / 8", lost);
+         $display("  RMW writes lost: %0d / 8, write requests issued: %0d", lost, n_req_wr - nw0 - 0);
+         check("a read-modify-write's write half reaches memory (8 of 8)", lost == 0);
       end
 
       $display("=== checks: %0d, failing: %0d ===", checks, fails);
