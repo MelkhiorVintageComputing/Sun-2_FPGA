@@ -277,6 +277,21 @@ module deca_top #(
 
 
 
+   // The DDR3 controller's command clock and reset, declared ahead of their
+   // first use.  The synchronous bridge runs the Wishbone port on cpu_clk and
+   // deca_wb_to_ddr3 crosses to CMD_CLK; the FIFO bridge (SUN2_WB_FIFO) crosses
+   // inside itself and runs the port on CMD_CLK, so deca_wb_ddr3_sync needs no
+   // crossing.
+   wire                         cmd_clk, ddr3_ready, ddr3_cal_pass, ddr3_rst_out;
+   wire [7:0]                   ddr3_rdcal;
+`ifdef SUN2_WB_FIFO
+   wire wb_side_clk = cmd_clk;
+   wire wb_side_rst = ddr3_rst_out;
+`else
+   wire wb_side_clk = cpu_clk;
+   wire wb_side_rst = sys_reset;
+`endif
+
    top machine (
        .cpu_clk        (cpu_clk),
        .clk40          (1'b0),          // dead on both boards: its only reader
@@ -333,8 +348,8 @@ module deca_top #(
        .wb_we_o        (wb_we),
        .wb_dat_i       (wb_dat_r),
        .wb_ack_i       (wb_ack),
-       .wb_clk_i       (cpu_clk),
-       .wb_rst_i       (sys_reset)
+       .wb_clk_i       (wb_side_clk),
+       .wb_rst_i       (wb_side_rst)
    );
 
    // ------------------------------------------------------------------
@@ -367,8 +382,6 @@ module deca_top #(
    localparam int N_DDR3 = 1;
 `endif
 
-   wire                         cmd_clk, ddr3_ready, ddr3_cal_pass, ddr3_rst_out;
-   wire [7:0]                   ddr3_rdcal;
 
    wire                         cmd_busy_a       [0:N_DDR3-1];
    wire                         cmd_ena_a        [0:N_DDR3-1];
@@ -391,6 +404,25 @@ module deca_top #(
    assign cmd_wdata_a[0]     = w_cmd_wdata;
    assign cmd_wmask_a[0]     = w_cmd_wmask;
 
+`ifdef SUN2_WB_FIFO
+   deca_wb_ddr3_sync #(.PORT_ADDR_SIZE(PORT_ADDR_SIZE),
+                       .PORT_CACHE_BITS(PORT_CACHE_BITS)) memif_sync (
+       .cmd_clk        (cmd_clk),
+       .cmd_rst        (ddr3_rst_out),
+       .ddr3_ready     (ddr3_ready),
+       .wb_cyc_i (wb_cyc), .wb_stb_i (wb_stb), .wb_adr_i (wb_adr),
+       .wb_dat_i (wb_dat_w), .wb_sel_i (wb_sel), .wb_we_i (wb_we),
+       .wb_dat_o (wb_dat_r), .wb_ack_o (wb_ack),
+       .CMD_busy       (cmd_busy_a[0]),
+       .CMD_ena        (w_cmd_ena),
+       .CMD_write_ena  (w_cmd_we),
+       .CMD_addr       (w_cmd_addr),
+       .CMD_wdata      (w_cmd_wdata),
+       .CMD_wmask      (w_cmd_wmask),
+       .CMD_read_ready (cmd_rready_a[0]),
+       .CMD_read_data  (cmd_rdata_a[0])
+   );
+`else
    deca_wb_to_ddr3 #(.PORT_ADDR_SIZE(PORT_ADDR_SIZE),
                      .PORT_CACHE_BITS(PORT_CACHE_BITS)) memif (
        .clk_wb   (cpu_clk),
@@ -416,6 +448,7 @@ module deca_top #(
        .CMD_read_ready (cmd_rready_a[0]),
        .CMD_read_data  (cmd_rdata_a[0])
    );
+`endif
 
    BrianHG_DDR3_CONTROLLER_v16_top #(
        .FPGA_VENDOR     ("Altera"),

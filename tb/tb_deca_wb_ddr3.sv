@@ -15,14 +15,24 @@
 // The two clocks are deliberately unrelated and far apart -- 12.5 MHz against
 // 125 MHz -- since the crossing is the other half of what is under test.
 //
+// Under DECA_SYNC (make -C sim decaddr3sync) the same checks run against
+// deca_wb_ddr3_sync, the FIFO bridge's adapter, with the Wishbone master on
+// CMD_CLK itself and no crossing.  Both variants also count commands against
+// Wishbone transactions: an adapter that issued one twice would pass every
+// read-back and still double every write.
+//
 `timescale 1ns / 1ps
 
 module tb_deca_wb_ddr3;
 
    localparam int AW = 29, CB = 128;
 
-   reg clk_wb  = 1'b0;   always #40.000 clk_wb  = ~clk_wb;   // 12.5 MHz
    reg cmd_clk = 1'b0;   always #4.000  cmd_clk = ~cmd_clk;  // 125 MHz
+`ifdef DECA_SYNC
+   wire clk_wb = cmd_clk;                                     // no crossing
+`else
+   reg clk_wb  = 1'b0;   always #40.000 clk_wb  = ~clk_wb;   // 12.5 MHz
+`endif
 
    reg rst = 1'b1;
 
@@ -45,12 +55,20 @@ module tb_deca_wb_ddr3;
    wire [CB-1:0]       CMD_wdata, CMD_read_data;
    wire [CB/8-1:0]     CMD_wmask;
 
+`ifdef DECA_SYNC
+   deca_wb_ddr3_sync #(.PORT_ADDR_SIZE(AW), .PORT_CACHE_BITS(CB)) dut (
+       .cmd_clk (cmd_clk), .cmd_rst (rst), .ddr3_ready (1'b1),
+       .wb_cyc_i (wb_cyc), .wb_stb_i (wb_stb), .wb_adr_i (wb_adr),
+       .wb_dat_i (wb_dat), .wb_sel_i (wb_sel), .wb_we_i (wb_we),
+       .wb_dat_o (wb_dat_o), .wb_ack_o (wb_ack),
+`else
    deca_wb_to_ddr3 #(.PORT_ADDR_SIZE(AW), .PORT_CACHE_BITS(CB)) dut (
        .clk_wb (clk_wb), .rst_wb (rst),
        .wb_cyc_i (wb_cyc), .wb_stb_i (wb_stb), .wb_adr_i (wb_adr),
        .wb_dat_i (wb_dat), .wb_sel_i (wb_sel), .wb_we_i (wb_we),
        .wb_dat_o (wb_dat_o), .wb_ack_o (wb_ack),
        .cmd_clk (cmd_clk), .cmd_rst (rst), .ddr3_ready (1'b1),
+`endif
        .CMD_busy (CMD_busy), .CMD_ena (CMD_ena),
        .CMD_write_ena (CMD_write_ena), .CMD_addr (CMD_addr),
        .CMD_wdata (CMD_wdata), .CMD_wmask (CMD_wmask),
@@ -82,6 +100,9 @@ module tb_deca_wb_ddr3;
    // pinned CMD_busy high and deadlocked the first version of this file into a
    // timeout that looked exactly like a broken adapter.
    reg [5:0] jitter = 6'd0;
+
+   int n_cmd = 0, n_wb = 0;
+   always @(posedge cmd_clk) if (CMD_ena) n_cmd++;
 
    always @(posedge cmd_clk) begin
       rr     <= 1'b0;
@@ -120,6 +141,7 @@ module tb_deca_wb_ddr3;
          wb_cyc <= 1'b1; wb_stb <= 1'b1;
          @(posedge clk_wb);
          while (!wb_ack) @(posedge clk_wb);
+         n_wb++;
          wb_cyc <= 1'b0; wb_stb <= 1'b0; wb_we <= 1'b0;
          @(posedge clk_wb);
       end
@@ -132,6 +154,7 @@ module tb_deca_wb_ddr3;
          wb_cyc <= 1'b1; wb_stb <= 1'b1;
          @(posedge clk_wb);
          while (!wb_ack) @(posedge clk_wb);
+         n_wb++;
          d = wb_dat_o;
          wb_cyc <= 1'b0; wb_stb <= 1'b0;
          @(posedge clk_wb);
@@ -221,6 +244,9 @@ module tb_deca_wb_ddr3;
       end
       check("64 interleaved write/read pairs", errs == 0);
 
+      repeat (20) @(posedge cmd_clk);
+      check($sformatf("one command per Wishbone transaction (%0d commands, %0d transactions)",
+                      n_cmd, n_wb), n_cmd == n_wb);
       $display("=== deca_wb_ddr3: %0d checks, %0d passed, %0d failed ===",
                pass + fail, pass, fail);
       if (fail == 0) $display("PASS"); else $display("FAIL");

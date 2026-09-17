@@ -56,6 +56,7 @@ array set opt {
     -mb_ether  0
     -mb_3c400  0
     -fb        0
+    -wb_fifo   0
     -eth5      224
     -eram      1
     -jobs      8
@@ -215,6 +216,13 @@ if {$opt(-mb_scsi) != 0} {
     }
     lappend defines SUN2_MB_SCSI
     puts "== MultiBus SCSI adapter fitted, media on the micro-SD slot =="
+}
+# The FIFO bridge between the bus and memory: sun2_fifo_bridge with its
+# Wishbone side on the DDR3 controller's CMD_CLK, and deca_wb_ddr3_sync in
+# place of deca_wb_to_ddr3.
+if {$opt(-wb_fifo) != 0} {
+    lappend defines SUN2_WB_FIFO
+    puts "== FIFO bridge to memory, Wishbone on the DDR3 command clock =="
 }
 # Only when given.  Empty means "let sun2_config.vh choose", which it does per
 # machine, and both of its answers are inside this range by construction.
