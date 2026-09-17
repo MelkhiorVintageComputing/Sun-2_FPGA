@@ -62,6 +62,13 @@
 // neighbour's value (a cycle answered by the wrong transaction) is told apart
 // from a word that was never written at all (a dropped request).
 //
+// A second part drives a **read-modify-write** cycle, the one TAS issues: AS
+// held across both halves, the data strobes negated between them and R/W
+// turning from read to write while MATCH_MEM never drops (it is qualified by
+// C_S6, which the whole of an RMW cycle keeps).  The per-cycle `issued/done'
+// state above is only cleared by MATCH_ANY falling, so the question it asks is
+// whether the write half ever reaches memory.
+//
 
 module tb_wb_bridge;
 
@@ -185,9 +192,53 @@ module tb_wb_bridge;
    endtask
 
    // ----------------------------------------------------------------------
+   // A read-modify-write cycle, as TAS runs it: read half, data strobes
+   // negated for `ds_gap' clocks with AS (so MATCH_MEM) still up, R/W to
+   // write, write half.  The write is `rdata | set_bits'.
+   // ----------------------------------------------------------------------
+   task automatic rmw_cycle (input [23:1] adr, input [15:0] set_bits,
+                             input integer ds_gap, output [15:0] rdata,
+                             output integer imm_ack);
+      integer guard;
+      begin
+         @(posedge CLK);
+         P_ADR_IN  <= adr;
+         P_RW_n    <= 1'b1;
+         EN_UBYTE  <= 1'b1;
+         EN_LBYTE  <= 1'b1;
+         MATCH_MEM <= 1'b1;
+         guard = 0;
+         while (W_ACK !== 1'b1 && guard < 200) begin @(posedge CLK); guard = guard + 1; end
+         if (guard >= 200) n_timeout = n_timeout + 1;
+         @(posedge CLK);
+         rdata = P_DATA_OUT;
+
+         // Between the halves: strobes off, R/W to write, new data driven.
+         EN_UBYTE  <= 1'b0;
+         EN_LBYTE  <= 1'b0;
+         P_RW_n    <= 1'b0;
+         P_DATA_IN <= rdata | set_bits;
+         for (guard = 0; guard < ds_gap; guard = guard + 1) @(posedge CLK);
+         EN_UBYTE  <= 1'b1;
+         EN_LBYTE  <= 1'b1;
+         @(posedge CLK);
+         // Was DTACK already there on the first clock of the write half?
+         imm_ack = (W_ACK === 1'b1);
+         guard = 0;
+         while (W_ACK !== 1'b1 && guard < 200) begin @(posedge CLK); guard = guard + 1; end
+         if (guard >= 200) n_timeout = n_timeout + 1;
+         @(posedge CLK);
+         MATCH_MEM <= 1'b0;
+         P_RW_n    <= 1'b1;
+         repeat (3) @(posedge CLK);
+      end
+   endtask
+
+   // ----------------------------------------------------------------------
    // The runs
    // ----------------------------------------------------------------------
    integer i, gap, lat, bad_w, bad_r, total_fail;
+   integer imm, n_rmw_lost, n_rmw_ok, wr_before;
    reg [15:0] rd;
    reg [15:0] expect_w;
 
@@ -273,6 +324,29 @@ module tb_wb_bridge;
             end
          end
       end
+
+      // Read-modify-write: does the write half reach memory?
+      $display("=== read-modify-write (TAS) ===");
+      n_rmw_lost = 0; n_rmw_ok = 0;
+      for (lat = 1; lat <= 8; lat = lat + 1) begin
+         for (gap = 1; gap <= 2; gap = gap + 1) begin
+            LATENCY = lat;
+            mem[23'h000200 >> 1] = 32'h11112222;
+            wr_before = n_wr;
+            rmw_cycle(23'h000200, 16'h0080, gap, rd, imm);
+            // A1=0: the low half of the longword, per the pairing above.
+            if (n_wr == wr_before + 1 && mem[23'h000200 >> 1][15:0] === (rd | 16'h0080)) begin
+               n_rmw_ok = n_rmw_ok + 1;
+               $display("  lat=%0d ds_gap=%0d  RMW ok: read %04x, wrote %04x",
+                        lat, gap, rd, mem[23'h000200 >> 1][15:0]);
+            end else begin
+               n_rmw_lost = n_rmw_lost + 1;
+               $display("  lat=%0d ds_gap=%0d  RMW WRITE LOST: read %04x, memory %04x, writes issued %0d, DTACK on first clock of write half: %0d",
+                        lat, gap, rd, mem[23'h000200 >> 1][15:0], n_wr - wr_before, imm);
+            end
+         end
+      end
+      $display("=== RMW: %0d of 16 wrote, %0d lost the write half ===", n_rmw_ok, n_rmw_lost);
 
       $display("=== checks: %0d combinations, %0d failing, %0d timeouts ===",
                8*4, total_fail, n_timeout);

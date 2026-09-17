@@ -314,6 +314,48 @@ module tb_orphan_ack;
          check("a refused write leaves the denied page unchanged", bad == 0);
       end
 
+      // A read-modify-write cycle through the real sun2_fpga: AS held across
+      // both halves, the strobes released between them, R/W turned to write.
+      // This is what TAS issues.  Informational here -- it does not change the
+      // verdict -- because it asks whether the machine has the gap at all.
+      $display("=== 4. read-modify-write (TAS) on memory ===");
+      begin
+         int n0, lost;
+         lost = 0;
+         for (int i = 60; i < 68; i++) begin
+            logic [15:0] r1, back; bit b2;
+            int n;
+            n0 = n_req_wr;
+            @(posedge cpu_clk);
+            P_A <= (V_GOOD + 24'h100 + 2*i) >> 1; P_FC <= 3'd5; P_RW_n <= 1'b1;
+            @(negedge cpu_clk);
+            P_AS_n <= 1'b0; P_UDS_n <= 1'b0; P_LDS_n <= 1'b0;
+            n = 0;
+            do begin @(posedge cpu_clk); n++; end while (P_DTACK_n && n < 400);
+            @(negedge cpu_clk);
+            r1 = P_DOUT;
+            P_UDS_n <= 1'b1; P_LDS_n <= 1'b1;          // AS stays asserted
+            @(posedge cpu_clk);
+            P_RW_n <= 1'b0; P_DIN <= r1 | 16'h0080;
+            @(negedge cpu_clk);
+            @(negedge cpu_clk);
+            P_UDS_n <= 1'b0; P_LDS_n <= 1'b0;
+            n = 0;
+            do begin @(posedge cpu_clk); n++; end while (P_DTACK_n && n < 400);
+            @(negedge cpu_clk);
+            P_AS_n <= 1'b1; P_UDS_n <= 1'b1; P_LDS_n <= 1'b1;
+            @(posedge cpu_clk);
+            P_RW_n <= 1'b1;
+            repeat (20) @(posedge cpu_clk);
+            rd_(3'd5, V_GOOD + 24'h100 + 2*i, back, b2);
+            if (back !== (r1 | 16'h0080)) lost++;
+            if (i == 60)
+              $display("  word %0d: read half %04x, wrote %04x, reads back %04x, write requests %0d",
+                       i, r1, r1 | 16'h0080, back, n_req_wr - n0);
+         end
+         $display("  RMW writes lost: %0d / 8", lost);
+      end
+
       $display("=== checks: %0d, failing: %0d ===", checks, fails);
       if (fails == 0) $display("PASS");
       else            $display("FAIL");
