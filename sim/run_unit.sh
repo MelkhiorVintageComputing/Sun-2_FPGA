@@ -110,6 +110,14 @@ adv7513)
 	xsim adv7513_sim -R | grep -E '===|PASS|FAIL|first mismatch|never written'
 	;;
 
+asyncfifo)
+	# The dual-clock FIFO under sun2_fifo_bridge: order, full, empty and fall
+	# through, across two unrelated clocks each way round.
+	step xvlog -i "$top/rtl/sun2-common" -d SUN2_SIM "$top/rtl/sun2-common/sun2_async_fifo.v"
+	step xvlog --sv "$top/tb/tb_async_fifo.sv"
+	step xelab -debug off --timescale 1ns/1ps work.tb_async_fifo -s asyncfifo_sim
+	xsim asyncfifo_sim -R | grep -E '===|PASS|FAIL|control|pop .* returned'
+	;;
 busarb)
 	# The BR/BG arbiter that lets the 82586 and the SCSI card share one bus.
 	step xvlog "$top/rtl/sun2-vme/sun2_bus_arb.v"
