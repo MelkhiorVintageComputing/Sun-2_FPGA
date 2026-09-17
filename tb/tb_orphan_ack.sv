@@ -87,7 +87,11 @@ module tb_orphan_ack;
        .wb_cyc_o (wb_cyc), .wb_stb_o (wb_stb), .wb_adr_o (wb_adr),
        .wb_dat_o (wb_dat_m2s), .wb_sel_o (wb_sel), .wb_we_o (wb_we),
        .wb_dat_i (wb_dat_s2m), .wb_ack_i (wb_ack),
+`ifdef SUN2_WB_FIFO
+       .wb_clk_i (ui_clk), .wb_rst_i (sys_reset)
+`else
        .wb_clk_i (cpu_clk), .wb_rst_i (sys_reset)
+`endif
    );
 
    // ---- the real memory path, as on the Wukong ----------------------------
@@ -98,6 +102,16 @@ module tb_orphan_ack;
    wire [15:0]  app_wdf_mask, c0_wmask;
    wire         c0_we, c0_req, c0_done;
 
+`ifdef SUN2_WB_FIFO
+   // The FIFO bridge's Wishbone side is already on ui_clk: no crossing here.
+   wb_mig_sync ad (
+       .wb_cyc_i (wb_cyc), .wb_stb_i (wb_stb), .wb_adr_i (wb_adr),
+       .wb_dat_i (wb_dat_m2s), .wb_sel_i (wb_sel), .wb_we_i (wb_we),
+       .wb_dat_o (wb_dat_s2m), .wb_ack_o (wb_ack),
+       .c_addr (c0_addr), .c_we (c0_we), .c_wdata (c0_wdata), .c_wmask (c0_wmask),
+       .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata)
+   );
+`else
    wb_to_mig_ui ad (
        .clk_wb (cpu_clk), .rst_wb (sys_reset),
        .wb_cyc_i (wb_cyc), .wb_stb_i (wb_stb), .wb_adr_i (wb_adr),
@@ -107,6 +121,7 @@ module tb_orphan_ack;
        .c_addr (c0_addr), .c_we (c0_we), .c_wdata (c0_wdata), .c_wmask (c0_wmask),
        .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata)
    );
+`endif
 
    mig_arb arbiter (
        .ui_clk (ui_clk), .ui_rst (sys_reset), .init_calib_complete (1'b1),
@@ -119,7 +134,13 @@ module tb_orphan_ack;
        .app_rd_data (app_rd_data), .app_rd_data_valid (app_rd_data_valid)
    );
 
+   // With the FIFO bridge the MIG model also stalls app_rdy/app_wdf_rdy at
+   // random, so the far side of the queue is not always ready.
+`ifdef SUN2_WB_FIFO
+   mig_ui_model #(.READ_LATENCY (7), .STALL_PERCENT (30)) mig (
+`else
    mig_ui_model #(.READ_LATENCY (7), .STALL_PERCENT (0)) mig (
+`endif
        .ui_clk (ui_clk), .ui_rst (sys_reset),
        .app_addr (app_addr), .app_cmd (app_cmd), .app_en (app_en), .app_rdy (app_rdy),
        .app_wdf_data (app_wdf_data), .app_wdf_mask (app_wdf_mask),
@@ -131,6 +152,18 @@ module tb_orphan_ack;
    // req_tgl flips once per request the adapter latches; wb_we at that moment
    // says whether it was a write.
    int n_req = 0, n_req_wr = 0;
+`ifdef SUN2_WB_FIFO
+   // The FIFO bridge raises wb_cyc once per transaction, on ui_clk, with at
+   // least one idle clock between transactions: count its rising edges.
+   reg cyc_q = 1'b0;
+   always @(posedge ui_clk) begin
+      cyc_q <= wb_cyc;
+      if (wb_cyc && !cyc_q && !sys_reset) begin
+         n_req++;
+         if (wb_we) n_req_wr++;
+      end
+   end
+`else
    reg req_tgl_q = 1'b0;
    always @(posedge cpu_clk) begin
       req_tgl_q <= ad.req_tgl;
@@ -139,6 +172,7 @@ module tb_orphan_ack;
          if (ad.req_we) n_req_wr++;
       end
    end
+`endif
 
    // ---- a 68010 bus cycle ----------------------------------------------------
    // S0/S1: address, FC and R/W on a rising edge.  S2: AS and the strobes on the

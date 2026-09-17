@@ -373,6 +373,32 @@ orphan)
 	xsim orphan_sim -R | grep -E '===|PASS|FAIL|gap|  [ 0-9]+ |adapter|words of|setup|no response|FATAL|Error'
 	;;
 
+orphanfifo)
+	# The same scenario through the FIFO bridge: its Wishbone side on ui_clk,
+	# wb_mig_sync with no crossing, and a MIG model that stalls at random.
+	[ -f "$top/build/inputs/z8530_scc/z8530_scc.sv" ] || "$top/tools/patch_inputs.sh" z8530_scc
+	make -s -C "$top/tools"
+	odefs=(-d SUN2_SIM -d SUN2_MULTIBUS -d MEM_PAGES=512 -d SRAM_POWERUP_ZERO -d SUN2_WB_FIFO)
+	step xvlog "${odefs[@]}" -i "$top/rtl/sun2-common" -i "$top/build/rom" \
+		"$top/rtl/sun2-common/sun2_fpga.v" "$top/rtl/sun2-common/sun2_mmu.v" \
+		"$top/rtl/sun2-common/ctx_reg.v" "$top/rtl/sun2-common/pmap.v" \
+		"$top/rtl/sun2-common/smap.v" "$top/rtl/sun2-common/sram_sync.v" \
+		"$top/rtl/sun2-common/sram_sync_16bits_bytewritable.v" \
+		"$top/rtl/sun2-common/bootrom.v" "$top/rtl/sun2-common/idprom.v" \
+		"$top/rtl/sun2-common/gen8bit_reg.v" "$top/rtl/sun2-vme/sun2_ether_ctl.v" \
+		"$top/rtl/sun2-vme/sun2_phy_status.v" "$top/rtl/sun2-common/sun2_fb_ctl.v" \
+		"$top/rtl/sun2-common/ttl_am9513.v" "$top/rtl/sun2-common/mm58167.v" \
+		"$top/rtl/sun2-common/ttl_74F151.v" "$top/rtl/sun2-common/ttl_74LS148.v" \
+		"$top/rtl/sun2-common/sun2_async_fifo.v" "$top/rtl/sun2-common/sun2_fifo_bridge.v" \
+		"$top/rtl/sun2-common/tolog.v"
+	step xvlog --sv "${odefs[@]}" -i "$top/rtl/sun2-common" -i "$top/build/rom" \
+		"$top/build/inputs/z8530_scc/z8530_scc.sv" \
+		"$top/boards/Wukong/wb_mig_sync.sv" "$top/boards/Wukong/mig_arb.sv" \
+		"$top/tb/mig_ui_model.sv" "$top/tb/tb_orphan_ack.sv"
+	step xelab -debug off --timescale 1ns/1ps work.tb_orphan_ack -s orphanfifo_sim
+	xsim orphanfifo_sim -R | grep -E '===|PASS|FAIL|gap|  [ 0-9]+ |adapter|words of|setup|no response|FATAL|Error'
+	;;
+
 dvma)
 	# Compiler output is filtered, not discarded: a syntax error here used to
 	# make the whole target exit silently with nothing to show for it.
