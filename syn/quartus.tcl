@@ -57,7 +57,7 @@ array set opt {
     -mb_3c400  0
     -fb        0
     -wb_fifo   1
-    -wb_req_addr 2
+    -wb_req_addr 4
     -eth5      224
     -eram      1
     -jobs      8
@@ -224,7 +224,7 @@ if {$opt(-mb_scsi) != 0} {
 if {$opt(-wb_fifo) != 0} {
     lappend defines SUN2_WB_FIFO
     puts "== FIFO bridge to memory, Wishbone on the DDR3 command clock =="
-    if {$opt(-wb_req_addr) != 2} {
+    if {$opt(-wb_req_addr) != 4} {
         lappend defines SUN2_WB_REQ_ADDR=$opt(-wb_req_addr)
         puts "== FIFO bridge request queue depth [expr {1 << $opt(-wb_req_addr)}] =="
     }

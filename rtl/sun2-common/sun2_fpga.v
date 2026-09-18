@@ -1187,10 +1187,14 @@ module sun2_fpga(input         cpu_clk,
    // Requests and read answers cross to the memory controller's clock through
    // two FIFOs, and writes are acknowledged once queued: sun2_fifo_bridge.v.
 `ifndef SUN2_WB_REQ_ADDR
- `define SUN2_WB_REQ_ADDR 2
+ `define SUN2_WB_REQ_ADDR 4
 `endif
-   // The request queue's depth is 2**SUN2_WB_REQ_ADDR (4 by default); the
-   // answer queue stays at 4, since only one read is ever in flight.
+   // The request queue's depth is 2**SUN2_WB_REQ_ADDR, 16 by default; the
+   // answer queue stays at 4, since only one read is ever in flight.  16 is
+   // no faster than 4 on any workload measured -- the queue drains faster
+   // than one master fills it -- but on a MAX 10 it is what lets Quartus put
+   // the queue in an M9K rather than registers, 336 LE smaller, and it is the
+   // same everywhere for homogeneity.
    sun2_fifo_bridge #(.FB_WB_BASE(`FB_WB_BASE), .REQ_ADDR(`SUN2_WB_REQ_ADDR)) wbridge(.CLK(C100),
 				.WB_CLK(wb_clk_i),
 				.WB_RESET(wb_rst_i),

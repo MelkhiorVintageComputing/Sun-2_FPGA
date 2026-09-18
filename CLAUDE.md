@@ -1182,6 +1182,12 @@ the knob changed, every `patwr` 0 wrong of 8,388,608:
 | DECA VME+SCSI, 16.667 MHz | 65.2 -> 58.7 s | 83.5 -> 75.7 s | 164.3 -> 149.3 s | 1664.6 -> 1492.1 s |
 | DECA MB+XY450, 16.667 MHz | 64.7 -> 58.7 s | 83.4 -> 75.8 s | 156.0 -> 141.4 s | 1636.3 -> 1480.0 s |
 
+The request queue is 16 deep by default (`WB_REQ_ADDR=4`, log2, every flow). It
+was measured against 4 on the DECA MultiBus+XY450 and makes no difference to any
+of the four numbers -- the queue drains faster than one master fills it, so four
+entries already cover the latency -- but at 16 Quartus puts it in an M9K rather
+than registers, 336 LE smaller, and one depth everywhere is simpler.
+
 Nine to eleven percent everywhere, for about 500 LE on the DECA and Fmax that
 went up (17.71 -> 18.34 MHz VME+SCSI, 17.75 -> 18.18 MB+XY450). So it is the
 default; `WB_FIFO=0` builds the synchronous bridge, and its output directories

@@ -55,7 +55,7 @@
 module sun2_fifo_bridge #(
    parameter [29:0] FB_WB_BASE = 30'h03E00000,
    parameter        TAG_BITS   = 4,
-   parameter        REQ_ADDR   = 2,           // request FIFO depth 2**REQ_ADDR
+   parameter        REQ_ADDR   = 4,           // request FIFO depth 2**REQ_ADDR
    parameter        RSP_ADDR   = 2
 ) (
    input             SET_ENABLE,
