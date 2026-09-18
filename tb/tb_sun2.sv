@@ -255,6 +255,7 @@ module tb_sun2 #(
                  .mii_rx_dv(mii_rx_dv), .mii_rx_er(mii_rx_er),
                  .mii_crs(mii_crs), .mii_col(mii_col));
 
+   wire [127:0] wb_line;          // the read's whole line, for the cached bridge
    // The Wishbone side's clock, declared before its first use (xvlog insists).
 `ifdef SUN2_WB_FIFO
    reg wb_clk = 1'b0;
@@ -320,7 +321,8 @@ module tb_sun2 #(
            .wb_dat_i(wb_dat_s2m),
            .wb_ack_i(wb_ack),
            .wb_clk_i(wb_clk),
-           .wb_rst_i(sys_reset)
+           .wb_rst_i(sys_reset),
+           .wb_line_i(wb_line)
            );
 
    // Main memory: a plain registered-ack model.  With the synchronous bridge
@@ -336,7 +338,8 @@ module tb_sun2 #(
                                        .wb_sel_i(wb_sel),
                                        .wb_we_i(wb_we),
                                        .wb_dat_o(wb_dat_s2m),
-                                       .wb_ack_o(wb_ack)
+                                       .wb_ack_o(wb_ack),
+                                       .wb_line_o(wb_line)
                                        );
 
 `ifdef SUN2_FB
@@ -1215,7 +1218,42 @@ module tb_sun2 #(
       end
    end
 
+   // ----------------------------------------------------------------------
+   // Is the physical address already settled the clock before a data phase?
+   // ----------------------------------------------------------------------
+   // A cache in front of the bridge can only answer a hit in the phase's
+   // first clock if it looked the line up one edge earlier, i.e. if the
+   // physical address {page, offset} it will be asked for was already on the
+   // bus in the clock *before* the phase began.  Measured here rather than
+   // assumed: every memory or frame-buffer data phase, CPU and DVMA alike,
+   // compares the address it runs with against the address one clock before
+   // its first clock.
+   wire        sa_phase = (dut.sun2.MATCH_MEM | dut.sun2.MATCH_FB) &
+                          (~dut.sun2.P_UDS_n | ~dut.sun2.P_LDS_n);
+   wire [21:0] sa_addr  = {dut.sun2.ma_pmap2devices[11:0], dut.sun2.P_A[10:1]};
+   reg         sa_phase_q = 1'b0;
+   reg  [21:0] sa_addr_q  = 22'h0;
+   int         sa_phases = 0, sa_moved = 0, sa_moved_dvma = 0;
+   always @(posedge dut.C100) begin
+      // Sampled on the edge that ends the phase's first clock: sa_addr is the
+      // address during that clock, sa_addr_q the one during the clock before.
+      if (sa_phase && !sa_phase_q) begin
+         sa_phases++;
+         if (sa_addr !== sa_addr_q) begin
+            sa_moved++;
+            if (dut.dvma_active) sa_moved_dvma++;
+            if (sa_moved <= 5)
+              $display("addr-stability: phase at %t starts on %06x, the clock before had %06x (%s)",
+                       $realtime, {sa_addr, 1'b0}, {sa_addr_q, 1'b0}, dut.dvma_active ? "DVMA" : "CPU");
+         end
+      end
+      sa_phase_q <= sa_phase;
+      sa_addr_q  <= sa_addr;
+   end
+
    task automatic lw_report();
+      $display("address stability: %0d data phases, %0d with the address still moving the clock before (%0d DVMA)",
+               sa_phases, sa_moved, sa_moved_dvma);
       $display("longword reads: %0d, of which %0d split by DVMA (%0d master cycles seen)",
                lw_total, lw_split, dvma_cycles);
       $display("CPU memory reads checked: %0d, wrong: %0d", mem_rd, mem_rd - match_a);
