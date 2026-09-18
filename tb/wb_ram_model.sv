@@ -29,7 +29,10 @@ module wb_ram_model #(
     input  wire [3:0]  wb_sel_i,
     input  wire        wb_we_i,
     output reg  [31:0] wb_dat_o,
-    output reg         wb_ack_o
+    output reg         wb_ack_o,
+    // The aligned 128-bit line around a read, lane l = word adr[1:0]==l, as
+    // MIG and BrianHG's controller return it: what a cache line fill needs.
+    output reg  [127:0] wb_line_o
 );
 
    logic [31:0] mem [int unsigned];
@@ -47,6 +50,7 @@ module wb_ram_model #(
       if (reset) begin
          wb_ack_o <= 1'b0;
          wb_dat_o <= 32'h0;
+         wb_line_o <= 128'h0;
          waits    <= 0;
       end else if (wb_cyc_i && wb_stb_i && !wb_ack_o) begin
          if (waits < ACK_LATENCY) begin
@@ -65,6 +69,7 @@ module wb_ram_model #(
                n_writes = n_writes + 1;
             end else begin
                n_reads = n_reads + 1;
+               wb_line_o <= {fetch(a | 3), fetch((a & ~3) | 2), fetch((a & ~3) | 1), fetch(a & ~3)};
             end
             wb_dat_o <= cur;
             wb_ack_o <= 1'b1;

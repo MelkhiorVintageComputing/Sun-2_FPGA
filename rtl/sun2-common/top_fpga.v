@@ -77,7 +77,10 @@ module top(input         cpu_clk,
 	   // The Wishbone port's clock and reset: the memory controller's under
 	   // SUN2_WB_FIFO, and unused (tie them to cpu_clk) otherwise.
 	   input 	 wb_clk_i,
-	   input 	 wb_rst_i
+	   input 	 wb_rst_i,
+	   // The 128-bit line a read brought back, for the cached bridge; tie to
+	   // zero where nothing provides it.
+	   input [127:0] wb_line_i
 	   );
    wire C100;
    wire P_VPA_n;
@@ -320,7 +323,8 @@ module top(input         cpu_clk,
 		  .wb_dat_i(wb_dat_i),
 		  .wb_ack_i(wb_ack_i),
 		  .wb_clk_i(wb_clk_i),
-		  .wb_rst_i(wb_rst_i)
+		  .wb_rst_i(wb_rst_i),
+		  .wb_line_i(wb_line_i)
 		  );
    
 

@@ -138,7 +138,10 @@ module sun2_fpga(input         cpu_clk,
 		 // (SUN2_WB_FIFO) uses them; the synchronous bridge runs the
 		 // Wishbone port on C100 and ignores both.
 		 input 	       wb_clk_i,
-		 input 	       wb_rst_i
+		 input 	       wb_rst_i,
+		 // The whole 128-bit line a read brought back, valid with wb_ack_i.
+		 // Only the cached bridge (SUN2_WB_CACHE) reads it.
+		 input [127:0] wb_line_i
 		   );
    // 180° clock
    wire 	       C100_n;

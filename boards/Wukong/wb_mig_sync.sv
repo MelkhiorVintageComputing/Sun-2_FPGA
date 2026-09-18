@@ -39,6 +39,9 @@ module wb_mig_sync #(
     input  wire                      wb_we_i,
     output wire [31:0]               wb_dat_o,
     output wire                      wb_ack_o,
+    // The whole 128-bit line a read brought back, valid with wb_ack_o: what
+    // a cache line fill needs.  The 32-bit wb_dat_o is its addressed lane.
+    output wire [APP_DATA_WIDTH-1:0] wb_line_o,
 
     // ---- client port on mig_arb, same domain -------------------------------
     output wire [APP_ADDR_WIDTH-1:0] c_addr,
@@ -69,5 +72,6 @@ module wb_mig_sync #(
 
    assign wb_ack_o = c_done;
    assign wb_dat_o = c_rdata[wb_adr_i[1:0]*32 +: 32];
+   assign wb_line_o = c_rdata;
 
 endmodule

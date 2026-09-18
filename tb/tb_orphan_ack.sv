@@ -61,6 +61,7 @@ module tb_orphan_ack;
    wire [29:0] wb_adr;
    wire [31:0] wb_dat_m2s, wb_dat_s2m;
    wire [3:0]  wb_sel;
+   wire [127:0] wb_line;
 
    sun2_fpga dut (
        .cpu_clk (cpu_clk), .clk40 (clk40), .clk4m9152 (clk4m9152), .C100 (),
@@ -88,10 +89,11 @@ module tb_orphan_ack;
        .wb_dat_o (wb_dat_m2s), .wb_sel_o (wb_sel), .wb_we_o (wb_we),
        .wb_dat_i (wb_dat_s2m), .wb_ack_i (wb_ack),
 `ifdef SUN2_WB_FIFO
-       .wb_clk_i (ui_clk), .wb_rst_i (sys_reset)
+       .wb_clk_i (ui_clk), .wb_rst_i (sys_reset),
 `else
-       .wb_clk_i (cpu_clk), .wb_rst_i (sys_reset)
+       .wb_clk_i (cpu_clk), .wb_rst_i (sys_reset),
 `endif
+       .wb_line_i (wb_line)
    );
 
    // ---- the real memory path, as on the Wukong ----------------------------
@@ -107,11 +109,12 @@ module tb_orphan_ack;
    wb_mig_sync ad (
        .wb_cyc_i (wb_cyc), .wb_stb_i (wb_stb), .wb_adr_i (wb_adr),
        .wb_dat_i (wb_dat_m2s), .wb_sel_i (wb_sel), .wb_we_i (wb_we),
-       .wb_dat_o (wb_dat_s2m), .wb_ack_o (wb_ack),
+       .wb_dat_o (wb_dat_s2m), .wb_ack_o (wb_ack), .wb_line_o (wb_line),
        .c_addr (c0_addr), .c_we (c0_we), .c_wdata (c0_wdata), .c_wmask (c0_wmask),
        .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata)
    );
 `else
+   assign wb_line = 128'h0;
    wb_to_mig_ui ad (
        .clk_wb (cpu_clk), .rst_wb (sys_reset),
        .wb_cyc_i (wb_cyc), .wb_stb_i (wb_stb), .wb_adr_i (wb_adr),

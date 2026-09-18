@@ -285,6 +285,7 @@ module wukong_top #(
    wire        wb_cyc, wb_stb, wb_we, wb_ack;
    wire [29:0] wb_adr;
    wire [31:0] wb_dat_m2s, wb_dat_s2m;
+   wire [127:0] wb_line_s2m;     // the read's whole line, for the cached bridge
    wire [3:0]  wb_sel;
    wire [7:0]  todebug;
 
@@ -510,7 +511,8 @@ module wukong_top #(
        .wb_dat_i   (wb_dat_s2m),
        .wb_ack_i   (wb_ack),
        .wb_clk_i   (wb_side_clk),
-       .wb_rst_i   (wb_side_rst)
+       .wb_rst_i   (wb_side_rst),
+       .wb_line_i  (wb_line_s2m)
    );
 
    // ------------------------------------------------------------------
@@ -525,6 +527,7 @@ module wukong_top #(
    assign wb_sel_o    = wb_sel;
    assign wb_we_o     = wb_we;
    assign wb_dat_s2m  = wb_dat_i;
+   assign wb_line_s2m = 128'h0;
    assign wb_ack      = wb_ack_i;
    assign cpu_clk_o   = cpu_clk;
    assign sys_reset_o = sys_reset;
@@ -554,12 +557,13 @@ module wukong_top #(
    wb_mig_sync adapter_sync (
        .wb_cyc_i (wb_cyc), .wb_stb_i (wb_stb), .wb_adr_i (wb_adr),
        .wb_dat_i (wb_dat_m2s), .wb_sel_i (wb_sel), .wb_we_i (wb_we),
-       .wb_dat_o (wb_dat_s2m), .wb_ack_o (wb_ack),
+       .wb_dat_o (wb_dat_s2m), .wb_ack_o (wb_ack), .wb_line_o (wb_line_s2m),
 
        .c_addr (c0_addr), .c_we (c0_we), .c_wdata (c0_wdata), .c_wmask (c0_wmask),
        .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata)
    );
 `else
+   assign wb_line_s2m = 128'h0;
    wb_to_mig_ui adapter (
        .clk_wb  (cpu_clk),
        .rst_wb  (sys_reset),

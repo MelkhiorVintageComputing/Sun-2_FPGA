@@ -40,6 +40,9 @@ module deca_wb_ddr3_sync #(
     input  wire                         wb_we_i,
     output reg  [31:0]                  wb_dat_o,
     output reg                          wb_ack_o,
+    // The whole 128-bit line a read brought back, valid with wb_ack_o: what
+    // a cache line fill needs.  The 32-bit wb_dat_o is its addressed lane.
+    output reg  [PORT_CACHE_BITS-1:0]   wb_line_o,
 
     // ---- BrianHG command port ----------------------------------------------
     input  wire                         CMD_busy,
@@ -82,6 +85,7 @@ module deca_wb_ddr3_sync #(
          dstate   <= D_IDLE;
          wb_ack_o <= 1'b0;
          wb_dat_o <= 32'h0;
+         wb_line_o <= {PORT_CACHE_BITS{1'b0}};
       end else begin
          wb_ack_o <= 1'b0;
          case (dstate)
@@ -93,6 +97,7 @@ module deca_wb_ddr3_sync #(
            D_READ:
              if (CMD_read_ready) begin
                 wb_dat_o <= CMD_read_data[wb_adr_i[1:0]*32 +: 32];
+                wb_line_o <= CMD_read_data;
                 wb_ack_o <= 1'b1;
                 dstate   <= D_IDLE;
              end

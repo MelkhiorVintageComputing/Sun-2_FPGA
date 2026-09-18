@@ -248,6 +248,7 @@ module deca_top #(
    wire        wb_cyc, wb_stb, wb_we, wb_ack;
    wire [29:0] wb_adr;
    wire [31:0] wb_dat_w, wb_dat_r;
+   wire [127:0] wb_line_r;       // the read's whole line, for the cached bridge
    wire [3:0]  wb_sel;
 
    // Block back end.  Under SUN2_HAS_DISK this is a real SD card; otherwise the
@@ -349,7 +350,8 @@ module deca_top #(
        .wb_dat_i       (wb_dat_r),
        .wb_ack_i       (wb_ack),
        .wb_clk_i       (wb_side_clk),
-       .wb_rst_i       (wb_side_rst)
+       .wb_rst_i       (wb_side_rst),
+       .wb_line_i      (wb_line_r)
    );
 
    // ------------------------------------------------------------------
@@ -412,7 +414,7 @@ module deca_top #(
        .ddr3_ready     (ddr3_ready),
        .wb_cyc_i (wb_cyc), .wb_stb_i (wb_stb), .wb_adr_i (wb_adr),
        .wb_dat_i (wb_dat_w), .wb_sel_i (wb_sel), .wb_we_i (wb_we),
-       .wb_dat_o (wb_dat_r), .wb_ack_o (wb_ack),
+       .wb_dat_o (wb_dat_r), .wb_ack_o (wb_ack), .wb_line_o (wb_line_r),
        .CMD_busy       (cmd_busy_a[0]),
        .CMD_ena        (w_cmd_ena),
        .CMD_write_ena  (w_cmd_we),
@@ -423,6 +425,7 @@ module deca_top #(
        .CMD_read_data  (cmd_rdata_a[0])
    );
 `else
+   assign wb_line_r = 128'h0;
    deca_wb_to_ddr3 #(.PORT_ADDR_SIZE(PORT_ADDR_SIZE),
                      .PORT_CACHE_BITS(PORT_CACHE_BITS)) memif (
        .clk_wb   (cpu_clk),
