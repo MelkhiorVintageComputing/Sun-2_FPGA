@@ -1186,7 +1186,12 @@ module sun2_fpga(input         cpu_clk,
 `ifdef SUN2_WB_FIFO
    // Requests and read answers cross to the memory controller's clock through
    // two FIFOs, and writes are acknowledged once queued: sun2_fifo_bridge.v.
-   sun2_fifo_bridge #(.FB_WB_BASE(`FB_WB_BASE)) wbridge(.CLK(C100),
+`ifndef SUN2_WB_REQ_ADDR
+ `define SUN2_WB_REQ_ADDR 2
+`endif
+   // The request queue's depth is 2**SUN2_WB_REQ_ADDR (4 by default); the
+   // answer queue stays at 4, since only one read is ever in flight.
+   sun2_fifo_bridge #(.FB_WB_BASE(`FB_WB_BASE), .REQ_ADDR(`SUN2_WB_REQ_ADDR)) wbridge(.CLK(C100),
 				.WB_CLK(wb_clk_i),
 				.WB_RESET(wb_rst_i),
 `else

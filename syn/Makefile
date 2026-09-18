@@ -52,6 +52,8 @@ XY450 ?= 0
 # adapter), the default.  WB_FIFO=0 builds the synchronous sun2_wishbone_bridge
 # with the board's clock-crossing adapter instead.
 WB_FIFO ?= 1
+# log2 of the FIFO bridge's request-queue depth (2 = 4 entries).
+WB_REQ_ADDR ?= 2
 VME_SCSI ?= 0
 # The MultiBus packaging of the same SCSI interface.  Mutually exclusive with
 # XY450: one micro-SD slot.
@@ -227,7 +229,7 @@ CPU_DUTY ?= 50
 # should have been: two builds that differ only in a knob absent from the name
 # share a directory and clobber each other, which is exactly the comparison the
 # knob was added to make.
-QDIR = $(abspath $(SYNDIR))/quartus/$(BOARD)-$(MACHINE)-$(CPU)$(if $(MEM_PAGES),-p$(MEM_PAGES),)-cpu$(CPU_MHZ_TAG)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)$(if $(filter 0,$(QSEED)),,-seed$(QSEED))$(if $(filter 50,$(CPU_DUTY)),,-duty$(CPU_DUTY))$(if $(filter 0,$(XY450)),,-xy450)$(if $(filter 0,$(VME_SCSI)),,-vmescsi)$(if $(filter 0,$(MB_SCSI)),,-mbscsi)$(if $(filter 0,$(DISK_OFF_MIB)),,-off$(DISK_OFF_MIB)m)$(if $(filter 0,$(LOOPBUF)),,-lb$(LOOPBUF))$(if $(filter 0,$(RTE_LOOP)),,-rtelp)$(if $(filter 1,$(RTE_BUF)),,-nortebuf)$(if $(filter 0,$(MB_ETHER)),,-mbether)$(if $(filter 0,$(MB_3C400)),,-3c400)$(if $(filter 0,$(FB)),,-fb)$(if $(filter 1,$(WB_FIFO)),,-wbsync)
+QDIR = $(abspath $(SYNDIR))/quartus/$(BOARD)-$(MACHINE)-$(CPU)$(if $(MEM_PAGES),-p$(MEM_PAGES),)-cpu$(CPU_MHZ_TAG)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)$(if $(filter 0,$(QSEED)),,-seed$(QSEED))$(if $(filter 50,$(CPU_DUTY)),,-duty$(CPU_DUTY))$(if $(filter 0,$(XY450)),,-xy450)$(if $(filter 0,$(VME_SCSI)),,-vmescsi)$(if $(filter 0,$(MB_SCSI)),,-mbscsi)$(if $(filter 0,$(DISK_OFF_MIB)),,-off$(DISK_OFF_MIB)m)$(if $(filter 0,$(LOOPBUF)),,-lb$(LOOPBUF))$(if $(filter 0,$(RTE_LOOP)),,-rtelp)$(if $(filter 1,$(RTE_BUF)),,-nortebuf)$(if $(filter 0,$(MB_ETHER)),,-mbether)$(if $(filter 0,$(MB_3C400)),,-3c400)$(if $(filter 0,$(FB)),,-fb)$(if $(filter 1,$(WB_FIFO)),,-wbsync)$(if $(filter 2,$(WB_REQ_ADDR)),,-rq$(WB_REQ_ADDR))
 
 quartus-run: rom inputs
 	@# A port left off an instantiation is an undriven wire, not an error --
@@ -252,7 +254,7 @@ quartus-run: rom inputs
 		$(if $(MEM_PAGES),-mem_pages $(MEM_PAGES),) -cpu_hz $(CPU_HZ) \
 		-cpu_div $(if $(CPU_DIV),$(CPU_DIV),0) -eth5 $(ETH5_D) \
 		-eram $(ERAM) -jobs $(AJOBS) -seed $(QSEED) -cpu_duty $(CPU_DUTY) \
-		-xy450 $(XY450) -vme_scsi $(VME_SCSI) -mb_scsi $(MB_SCSI) -disk_off_mib $(DISK_OFF_MIB) -loopbuf $(LOOPBUF) -rte_loop $(RTE_LOOP) -rte_buf $(RTE_BUF) -mb_ether $(MB_ETHER) -mb_3c400 $(MB_3C400) -fb $(FB) -wb_fifo $(WB_FIFO) > $(QDIR)/quartus.log 2>&1 || \
+		-xy450 $(XY450) -vme_scsi $(VME_SCSI) -mb_scsi $(MB_SCSI) -disk_off_mib $(DISK_OFF_MIB) -loopbuf $(LOOPBUF) -rte_loop $(RTE_LOOP) -rte_buf $(RTE_BUF) -mb_ether $(MB_ETHER) -mb_3c400 $(MB_3C400) -fb $(FB) -wb_fifo $(WB_FIFO) -wb_req_addr $(WB_REQ_ADDR) > $(QDIR)/quartus.log 2>&1 || \
 		{ echo "== FAILED, tail of $(QDIR)/quartus.log =="; tail -40 $(QDIR)/quartus.log; exit 1; }
 	@grep -E '^== ' $(QDIR)/quartus.log
 	@# An implicit net is a mis-parse, not a style point.  Vivado's equivalent
