@@ -269,7 +269,7 @@ board-phy:
 	$(MAKE) board-check MACHINE=vme
 
 # --- unit tests for the board layer ---------------------------------------
-clkgen adapter migddr3 dvma bridge phy mbether mb3c400 xy450 scc mm58167 scanout vtiming adv7513 vmescsi mbscsi blksd decauart decaconsole decaddr3 decaphy busarb orphan asyncfifo fifobridge orphanfifo migddr3fifo decaddr3sync: rom
+clkgen adapter migddr3 dvma bridge phy mbether mb3c400 xy450 scc mm58167 scanout vtiming adv7513 vmescsi mbscsi blksd decauart decaconsole decaddr3 decaphy busarb orphan asyncfifo fifobridge orphanfifo migddr3fifo decaddr3sync cachedbridge: rom
 	BOARD=$(BOARD) XSIMARGS="$(XSIMARGS)" ./run_unit.sh $@
 
 # --- a picture of what the machine drew -----------------------------------
@@ -347,4 +347,4 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: all rom xsim board board-check board-phy iverilog check clean
-.PHONY: clkgen adapter migddr3 dvma bridge phy mbether mb3c400 xy450 scc xychain vtiming adv7513 vmescsi mbscsi blksd mm58167 scanout decauart decaconsole decaddr3 decaphy busarb orphan asyncfifo fifobridge orphanfifo migddr3fifo decaddr3sync screenshot
+.PHONY: clkgen adapter migddr3 dvma bridge phy mbether mb3c400 xy450 scc xychain vtiming adv7513 vmescsi mbscsi blksd mm58167 scanout decauart decaconsole decaddr3 decaphy busarb orphan asyncfifo fifobridge orphanfifo migddr3fifo decaddr3sync cachedbridge screenshot

@@ -110,6 +110,14 @@ adv7513)
 	xsim adv7513_sim -R | grep -E '===|PASS|FAIL|first mismatch|never written'
 	;;
 
+cachedbridge)
+	# The cached FIFO bridge against a bus-level shadow of memory.
+	step xvlog -i "$top/rtl/sun2-common" -d SUN2_SIM "$top/rtl/sun2-common/sun2_async_fifo.v" \
+		"$top/rtl/sun2-common/sun2_cached_fifo_bridge.v"
+	step xvlog --sv "$top/tb/tb_cached_bridge.sv"
+	step xelab -debug off --timescale 1ns/1ps work.tb_cached_bridge -s cachedbridge_sim
+	xsim cachedbridge_sim -R | grep -E '===|PASS|FAIL|reads checked|returned'
+	;;
 fifobridge)
 	# The FIFO bridge against a registered slave on a clock of its own.
 	step xvlog -i "$top/rtl/sun2-common" -d SUN2_SIM "$top/rtl/sun2-common/sun2_async_fifo.v" \
