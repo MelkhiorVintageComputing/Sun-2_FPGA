@@ -6,22 +6,67 @@ real boot PROMs. Both machine types are supported — the MultiBus Sun 2/120
 (Rev R PROM) and the VME Sun 2/50 (Rev Q) — selected by one define; see
 [Which machine](#which-machine).
 
-In simulation both pass the PROM's self test and reach the monitor prompt.
-It also builds into a timing-clean bitstream for a QMTech Wukong V1
-(XC7A100T-2FGG676) with DDR3 main memory — untested on real hardware so far.
+It runs on two FPGA boards from two vendors — a QMTech Wukong (Xilinx Artix-7,
+built with Vivado) and an Arrow DECA (Intel MAX 10, built with Quartus) — from
+one `rtl/` tree that contains no vendor primitive and no vendor IP. Everything
+board-specific lives in `boards/<name>/` and `syn/`.
+
+## What it does
+
+On real hardware, with the RD68011 core (`CPU=rd68011`):
+
+* **SunOS 4.0.3 boots to a multi-user login prompt**, from a disk or over the
+  network, on both machines and both boards. It runs `/bin/sh`, forks, pipes,
+  compiles C with its own `cc`, and writes files back to disk or NFS.
+* **NetBSD 2.0** reaches userland on the MultiBus machine.
+* **Disks:** a Xylogics 450 (MultiBus) or Sun's own SCSI host adapter (either
+  machine), each with an SD card standing in for the drive.
+* **Network:** the 2/50's on-board Intel 82586, the Sun MultiBus Ethernet card,
+  or a 3Com 3C400, all on a real 10BASE-T link.
+* **A display:** the Sun-2's 1152×900 monochrome frame buffer, on an HDMI
+  monitor at 1280×1024.
+* A time-of-day clock, so SunOS knows what day it is.
+
+About 1870 dhrystones per second on a Wukong at 19.6 MHz, against the roughly
+700 of a real 10 MHz Sun 2/120. A 16 MiB file written to disk and read back
+compares clean, word for word.
+
+In simulation both machines pass the PROM's self test and reach the monitor
+prompt on both CPU cores, and that boot is the regression test for everything
+shared.
+
+What has been run on a board:
+
+| Board | Machine | Storage | Network | Display |
+|---|---|---|---|---|
+| Wukong V1 | 2/120 | — | Sun MultiBus Ethernet: NFS root, login | 1280×1024 |
+| Wukong V1 | 2/50 | — | on-board 82586: NFS root, login | — |
+| Wukong V3 | 2/120 | Xylogics 450 on micro-SD: boot, `fsck`, login | Sun MultiBus Ethernet | — |
+| Wukong V3 | 2/50 | SCSI on micro-SD: boot, login | on-board 82586 | — |
+| DECA | 2/50 | SCSI on micro-SD: boot, login | on-board 82586: NFS root, login | 1280×1024 |
+| DECA | 2/120 | Xylogics 450 or SCSI on micro-SD: boot, login | 3Com 3C400 (see its section) | 1280×1024 |
+
+`CLAUDE.md` is the project's working notebook: every measurement behind these
+claims, and every trap that cost time on the way. `BRINGUP.md` is the procedure
+for a board — what to check, in what order, and what each silent failure looks
+like.
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `rtl/sun2-common/` | the Sun-2 gateware shared by both machines: bus, MMU, PROM, timer, registers, Wishbone bridge |
-| `rtl/sun2-multibus/` | what only a 2/120 has — the MultiBus Ethernet card and the Xylogics 450 disk controller |
-| `rtl/sun2-vme/` | what only a 2/50 has — on-board Ethernet, its DVMA bridge, the PHY status register, the video control register |
-| `boards/Wukong/` | the board layer, shared by the Wukong V1 and V3: clock generation, reset, Wishbone-to-DDR3, PHY bring-up, the DDR3 arbiter and the frame buffer's scan-out |
+| `rtl/sun2-common/` | the Sun-2 gateware shared by both machines: bus, MMU, PROM, timer, SCCs' wiring, TOD clock, memory bridges, frame buffer scan-out, the SCSI core |
+| `rtl/sun2-multibus/` | what only a 2/120 has — the Sun and 3Com Ethernet cards, the Xylogics 450, the MultiBus SCSI card |
+| `rtl/sun2-vme/` | what only a 2/50 has — on-board Ethernet, the DVMA bridge (which the Xylogics reuses), the PHY status register, the VME SCSI/RTC board |
+| `boards/Wukong/` | the Wukong board layer, V1 and V3: clocks, reset, the DDR3 adapters and arbiter, PHY bring-up, HDMI clocks |
+| `boards/DECA/` | the DECA board layer: clocks, the DDR3 adapters, the JTAG console, PHY bring-up, the ADV7513 HDMI transmitter |
 | `tb/` | testbenches and simulation models |
 | `sim/` | simulation flows |
-| `syn/` | FPGA build: constraints, MIG configuration, Vivado scripts |
-| `tools/` | boot PROM preparation, and `mkxydisk` for disk images |
+| `syn/` | FPGA builds for both vendors: constraints, MIG configuration, Vivado and Quartus scripts |
+| `test/` | small standalone designs that prove one board block at a time — HDMI, the DECA's console, DDR3, SD card |
+| `tools/` | boot PROM preparation, disk images, boot-block probes, board scripts, `ufsread` and `pcsym` |
+| `patches/` | changes to third-party sources, applied to copies under `build/inputs/` |
+| `doc/` | long-form write-ups, such as the disk corruption hunt |
 | `Inputs/` | third-party and reference material — **immutable** |
 | `Old/` | the previous working implementation, kept for reference — not in git, never modified |
 
@@ -32,9 +77,12 @@ git submodule update --init
 ```
 
 Nothing under `Inputs/` is ever edited in place. If a change to that material
-becomes necessary, it lives as a patch in this repository instead — the same
-principle as the boot PROM, which is patched into `build/rom/` rather than
-modified where it sits.
+becomes necessary, it lives as a patch in `patches/<name>/`, which
+`tools/patch_inputs.sh` applies to a copy under `build/inputs/` whenever a
+flow runs — the same principle as the boot PROM, which is patched into
+`build/rom/` rather than modified where it sits. A patch is meant to be
+temporary: once it is accepted upstream, it is dropped and the submodule moves
+forward.
 
 The sources under `Inputs/`:
 
@@ -42,51 +90,67 @@ The sources under `Inputs/`:
   This is the `MelkhiorVintageComputing` fork on branch `sun_emu_support`,
   which already carries the three fixes the Sun-2 needs (exception-handler
   `BUSY_EXH` timing, `MOVES` function-code selection, and FC = supervisor data
-  during the reset vector fetch).
+  during the reset vector fetch); `patches/Suska_Configware/` adds two more.
+  Suska reaches the monitor prompt and is what the simulation fingerprints are
+  measured against, but it cannot run SunOS: the bus error frame it pushes
+  does not describe the faulted cycle, so instruction restart fails.
 * `RD68011` — [MelkhiorVintageComputing/RD68011](https://github.com/MelkhiorVintageComputing/RD68011),
   a SystemVerilog MC68010 written alongside this project and the second core
   the machine can be built with. `top_fpga.v` instantiates it as the
   alternative to Suska under `` `ifdef SUN2_CPU_RD68011 ``, which `CPU=rd68011`
   sets on any of `make -C sim xsim`, `make -C sim board` and
   `make -C syn bitstream`; nothing else about the machine changes, and each
-  core builds into its own directory. Neither core is a reference for the
-  other — Suska gets instruction restart wrong, and RD68011 gets further into
-  SunOS because of it — so short experiments are run with both and both
+  core builds into its own directory. **RD68011 is the core that runs SunOS**,
+  and every hardware result above was taken with it. Neither core is a
+  reference for the other, so short experiments are run with both and both
   results reported.
 * `z8530_scc` — [vz50938/z8530_scc](https://github.com/vz50938/z8530_scc), the
   SCC used for the serial console. Its bus clock and serial clock are separate,
   so the CPU clock is free — the Suska SCC constrains it far too tightly. Feed
   its serial clock 4.9152 MHz and the PROM's own register table gives a correct
-  9600 baud console.
+  9600 baud console. Three interrupt defects found here (WR9 written through
+  channel B, IP bits not gated by their enables, a transmit write not clearing
+  the transmit IP) are fixed upstream.
 * `Wish82586` — the Intel 82586 Ethernet controller, used as the VME machine's
-  on-board Ethernet. Its `src/wb_csr_sun2.sv` is the same control register
+  on-board Ethernet and on the Sun MultiBus Ethernet card; the 3C400 reuses its
+  MII and CRC blocks. Its `src/wb_csr_sun2.sv` is the same control register
   `rtl/sun2-vme/sun2_ether_ctl.v` implements natively; we use ours, because it sits in
   device space with the rest of the decode, and the two should be kept
   reconcilable.
 * `sunos-34-src` — [calmsacibis995/sunos-34-src](https://github.com/calmsacibis995/sunos-34-src).
   Contains `sun/prom_monitor/`, which is **the source of the boot PROMs
-  themselves**: `msun/` builds the MultiBus monitor, `rsun/` the VME one, from
-  the same files behind `#ifdef VME`. It is the single most useful reference
+  themselves**. `msun/` and `rsun/` are Rev Q and Rev R of one tree, not two
+  machines: the machine is chosen by `-DVME` in each build directory's
+  Makefile (`msun/mon/RevQs` is the VME Rev Q monitor, `rsun/mon/RevR2` the
+  MultiBus Rev R one). It is the single most useful reference
   here — `sys/mon/s2map.h` names every I/O page numerically, `mon/kernel/sunmon.c`
   has both machines' page-map setup side by side, and `mon/h/buserr.h` documents
   register semantics no manual spells out. Reach for it before guessing at
   what a PROM is doing.
-* `Wish5380` — an NCR 5380 SCSI controller, which this design does not use.
-  What it is here for is `src/blk_sd.sv` and `src/sd_spi.sv`: a tested SD-card
-  block back end with a documented seam (`doc/block.md`), which the Xylogics
-  450 keeps its sectors on. The SCSI half is not compiled.
+* `Wish5380` — an NCR 5380 SCSI controller. The 5380 itself is not used, since
+  Sun's SCSI boards are not built around one. What this design takes from it is
+  `src/blk_sd.sv` and `src/sd_spi.sv`, a tested SD-card block back end with a
+  documented seam (`doc/block.md`) that every disk here keeps its sectors on,
+  and `scsi_targ`, the SCSI disk on the far side of Sun's host adapter.
+* `BrianHG-DDR3` — Brian Guralnick's soft DDR3 controller, hardware-verified on
+  the DECA, which has no hard memory controller. It carries no formal licence
+  ("Written by Brian Guralnick. For public use."), which is worth knowing
+  before anyone packages this.
 * `hdmi` — [hdl-util/hdmi](https://github.com/hdl-util/hdmi), the HDMI
-  transmitter behind the frame buffer: TMDS encoding, the 10:1 serialisers and
-  CEA-861 video timing, used at VIDEO_ID_CODE 16 (1920×1080p60) with
-  `DVI_OUTPUT` so there is no audio island to feed.
+  transmitter behind the Wukong's frame buffer: TMDS encoding, the 10:1
+  serialisers and the video timing, with `DVI_OUTPUT` so there is no audio
+  island to feed. `patches/hdmi/0001` adds the 1280×1024 mode the full design
+  can actually clock. The DECA has a transmitter chip and does not use it.
 * `sun2-multi-rev-R.bin` — Rev R boot PROM of a MultiBus Sun 2/120.
 * `sun250_prom_combined.bin` — boot PROM of a VME Sun 2/50, used by
   `MACHINE=vme` (see [Which machine](#which-machine)).
 * `doc/` — the Sun-2 Architecture Manual, the Sun 2/50 schematic and
   engineering manual, the 2/120 video board engineering manual, the Xylogics
-  450 user's manual and schematic, the MC68000 user manual, and the QMTech
-  Wukong board documents. The engineering manual is the one with an OCR text layer, and it
-  carries the U214/U215 PAL listings — the DVMA arbiter's actual equations.
+  450 user's manual and schematic, Sun's SCSI boards' theory of operation, the
+  MC68000 user manual, and the QMTech Wukong and Arrow DECA board documents
+  (`QM_XC7A100T_WUKONG_BOARD/` and `DECA_board/` are submodules). The
+  engineering manual is the one with an OCR text layer, and it carries the
+  U214/U215 PAL listings — the DVMA arbiter's actual equations.
 
 ## Running the simulation
 
@@ -96,7 +160,7 @@ make sim          # or: make -C sim xsim
 
 That builds the boot PROM images, compiles the design and runs it, printing the
 front-panel LED codes as the PROM walks its self-test and decoding the serial
-console to `build/sim/xsim/console.log`, which ends up looking like:
+console to `build/sim/xsim-multibus/console.log`, which ends up looking like:
 
 ```
 Self Test completed successfully.
@@ -113,9 +177,17 @@ No default boot devices
 ```
 
 The serial number and Ethernet address come from `rtl/sun2-common/idprom.v`, and the memory
-size is whatever `MEM_MIB` was set to — the PROM finds it by probing. There are
-no boot devices yet, so auto-boot fails and drops to the monitor prompt; the
-run stops there on its own, because `STOP_ON` defaults to `>`.
+size is whatever `MEM_MIB` was set to — the PROM finds it by probing. With no
+cards in the cage there is nothing to boot from, so auto-boot fails and drops
+to the monitor prompt; the run stops there on its own, because `STOP_ON`
+defaults to `>`.
+
+This boot is the regression reference for the whole machine: **22 bus errors
+and a byte-identical 274-character console** on the MultiBus machine at
+`MEM_MIB=1 ROM=fast`, and **10 bus errors and 312 characters** on the VME one
+at `MEM_MIB=1`, on both cores. Every one of those bus errors is a device probe
+timing out, which is how the PROM finds empty slots; fitting a card removes its
+probe. `CLAUDE.md` has the per-card decomposition.
 
 `make -C sim check` turns that into a pass/fail: it asserts the self test
 completed, the machine identified itself, and the prompt appeared.
@@ -129,7 +201,15 @@ make -C sim xsim TIMEOUT_MS=8000        # simulated milliseconds before giving u
 make -C sim xsim MEM=sim_only           # 512 KiB in-core SRAM instead of Wishbone
 make -C sim xsim ROM=pristine           # this machine's unmodified PROM (very slow)
 make -C sim xsim MACHINE=vme            # be a Sun 2/50 (VME) instead of a 2/120
+make -C sim xsim CPU=rd68011            # the other MC68010 core
+make -C sim xsim FB=1                   # fit the frame buffer (either machine)
+make -C sim xsim MB_ETHER=1             # the Sun MultiBus Ethernet card
+make -C sim xsim MB_3C400=1             # ... or the 3Com one instead
 make -C sim xsim XY450=1                # fit the Xylogics 450 disk (MultiBus only)
+make -C sim xsim VME_SCSI=1             # the VME SCSI/RTC board (VME only)
+make -C sim xsim MB_SCSI=1              # the MultiBus SCSI card (MultiBus only)
+make -C sim xsim WB_CACHE=0             # the memory bridge without its read cache
+make -C sim xsim WB_FIFO=0              # ... or the old synchronous bridge
 make -C sim xychain                     # drive chained IOPBs from inside the machine
 make -C sim xsim MEM_LATENCY=7          # memory as slow as the real DDR3 path
 make -C sim xsim XSIMARGS="-testplusarg trace_dvma=16"   # Ethernet bus mastering
@@ -141,22 +221,25 @@ make -C sim check                       # assert the console reached the prompt
 
 `MEM_LATENCY` is worth knowing about. It defaults to 0 — a memory that
 answers the next cycle — which is what every simulation here used until the
-real path was measured. `make -C sim migddr3` reports what it actually costs:
-MIG returns read data 21 `ui_clk` after accepting the command, and a Wishbone
-read is **7 CPU clocks** from STB to ACK. Run with `MEM_LATENCY=7` before
-believing anything about bus bandwidth, particularly now that the Ethernet
-competes for the same bus by DVMA.
+real path was measured. `make -C sim migddr3cached` reports what it actually
+costs through the real MIG and a Micron DDR3 model: MIG returns read data 21
+`ui_clk` after accepting the command, a read that misses the bridge's cache is
+**7 CPU clocks**, and one that hits is 1. With the FIFO bridge `MEM_LATENCY`
+counts wait states of the memory model's own 83 MHz clock, not of cpu_clk.
 
-Each machine gets its own directory under `build/sim/`, so a MultiBus and a VME
-run can proceed at the same time. Two runs of the *same* machine cannot — they
-share a snapshot directory, and the second recompiles it while the first is
-executing.
+Each configuration gets its own directory under `build/sim/`, named after the
+machine, the core and every card fitted (`xsim-multibus-xy450-rd68011`, say),
+so different configurations can run at the same time. Two runs of the *same*
+one cannot — they share a snapshot directory, and the second recompiles it
+while the first is executing. `MEM_LATENCY` is not part of the name.
 
 `MEM_MIB` is the one to reach for first. The PROM writes every installed byte
 during its setup pass, so a 7 MiB machine spends over three simulated seconds
 there while a 1 MiB one spends under half of one. 7 MiB is the architectural
-maximum, most real Sun-2s had 2 or 4, and the PROM copes with as little as
-256 KiB — so unless memory size is what you are testing, use a small machine.
+maximum and most real Sun-2s had 2 or 4. The PROM reaches its prompt in as
+little as 32 KiB, but booting anything needs more: a disk boot needs at least
+1 MiB, because the PROM puts the DVMA window at physical `0xC0000`. Unless
+memory size is what you are testing, use a small machine.
 
 Expect it to take a while — roughly 0.5 s of wall clock per simulated
 millisecond. Where the simulated time goes, on a 1 MiB machine:
@@ -248,7 +331,8 @@ either. One define picks it, and everything machine-dependent follows:
 | `DEV_PAGE_BASE` | 0 (page 0x000) | 4064 (page 0xFE0) |
 | `MEM_SPACE_PAGES` | 3584 (7 MiB) | 4096 (8 MiB) |
 | `IDPROM_MACHINE_TYPE` | 1 | 2 |
-| State | boots to the monitor prompt | boots to the monitor prompt |
+| In simulation | boots to the monitor prompt | boots to the monitor prompt |
+| On a board | SunOS 4.0.3 and NetBSD 2.0 | SunOS 4.0.3 |
 
 `make -C sim xsim MACHINE=vme` is the whole of it. The three parameters are
 individually overridable if an experiment wants a combination that is not
@@ -268,7 +352,7 @@ Probing I/O bus: ie
 Using RS232 A input.
 Auto-boot in progress...
 Boot: ie(0,0,0)vmunix
-ie: cannot initialize
+???nd: no file server, giving up.
 >
 ```
 
@@ -285,7 +369,7 @@ Two device pages differ from MultiBus and are instantiated only for VME
 |---|---|---|
 | 0xFE1 | Intel 82586 Ethernet — control register (`rtl/sun2-vme/sun2_ether_ctl.v`) plus the controller itself (`rtl/sun2-vme/sun2_ethernet.sv`) | 80287 socket, not implemented |
 | 0xFE3 | keyboard/mouse Z8530, a second instance of the serial SCC | parallel port, not implemented — the 2/120's keyboard SCC is on its video board instead, in type 0 space |
-| 0xFE7 | Ethernet PHY status (`rtl/sun2-vme/sun2_phy_status.v`) — not a Sun-2 device at all, see below | National 58167 real-time clock, not implemented |
+| 0xFE7 | Ethernet PHY status (`rtl/sun2-vme/sun2_phy_status.v`) — not a Sun-2 device at all, see below | National MM58167 time-of-day clock (`rtl/sun2-common/mm58167.v`) |
 
 Nothing is attached to the keyboard SCC, so the monitor's keyboard hunt times
 out and the console stays on serial A — which is what we want. The frame
@@ -383,6 +467,10 @@ Advertising 10 rather than *forcing* it is deliberate. A forced link sends no
 advertisement, so the partner parallel-detects and falls back to half duplex,
 giving a duplex mismatch that looks exactly like a MAC bug.
 
+On the DECA the PHY is a TI DP83620, brought up the same way by
+`boards/DECA/phy_dp83620_init.sv`; the values it writes are quoted from
+`Inputs/doc/dp83620.pdf`.
+
 ### Asking the machine what the PHY did
 
 The board cannot be probed interactively, and the three ways this fails
@@ -431,15 +519,24 @@ machine solid with nothing printed.
 ### The frame buffer, and HDMI
 
 Either machine could have a display, and with `SUN2_FB` this one does:
-1152×900 monochrome on an HDMI monitor, letterboxed 1:1 inside 1920×1080. It
-is off by default, because it is not needed to bring a board up and because it
-changes what a working machine looks like.
+1152×900 monochrome on an HDMI monitor, centred 1:1 inside 1280×1024 on both
+boards. It is off by default, because it is not needed to bring a board up and
+because it changes what a working machine looks like. It works on hardware:
+the PROM's banner, the boot loader and a booting SunOS on a real monitor, with
+autoconfig reporting `bwtwo0`.
 
 ```sh
 make -C sim xsim MACHINE=vme FB=1 MEM_MIB=1
 make -C sim xsim MACHINE=multibus FB=1 MEM_MIB=1 ROM=fast
-make -C syn bitstream MACHINE=vme FB=1 BOARD=v3
+make -C syn bitstream MACHINE=multibus FB=1 BOARD=v1s1 CPU=rd68011
+make -C syn quartus MACHINE=vme FB=1 CPU_DIV=60
 ```
+
+**A machine with a display has no serial console.** When `s2fbthere()`
+succeeds the monitor sets `g_outsink = OUTSCREEN` (`sunmon.c:396`) and offers
+no way to ask for both, so the serial port goes silent. On the DECA, whose
+keyboard SCC has nothing connected, that makes an `FB=1` machine one you can
+look at and not talk to.
 
 **It is the same screen on both machines, and largely the same hardware in
 quite different places.** Both boot PROMs reach it at the same *virtual*
@@ -489,12 +586,13 @@ Don't depend on 'em!"*; both of `bwtwoprobe`'s test values have them clear, so
 no software in the tree can tell.
 
 The pixels live in DDR3, in the top 8 MiB, reached the same way the CPU
-reaches memory: `MATCH_FB` is a second aperture on `sun2_wishbone_bridge`,
-remapped to `FB_WB_BASE`. So there is no second path to get wrong — the byte
-lanes, the read-back and the DTACK are the ones that already carry every
-memory cycle. What is new is a second *master*: `boards/Wukong/mig_arb.sv`
-sits in front of MIG with the CPU adapter on one port and
-`boards/Wukong/fb_scanout.sv` on the other.
+reaches memory: `MATCH_FB` is a second aperture on the memory bridge, remapped
+to `FB_WB_BASE`, and never cached. So there is no second path to get wrong —
+the byte lanes, the read-back and the DTACK are the ones that already carry
+every memory cycle. What is new is a second *master*:
+`rtl/sun2-common/fb_scanout.sv`, which on the Wukong shares MIG with the CPU
+through `boards/Wukong/mig_arb.sv` and on the DECA has a port of BrianHG's
+controller to itself.
 
 Scanout reads a line at a time into a ping-pong buffer in `ui_clk` and shifts
 it out in the pixel clock. A line is 9 beats of 16 bytes and an HDMI line is
@@ -504,21 +602,26 @@ to the CPU is small and measured rather than argued — `make -C sim migddr3`
 reports a mean read of 7.0 CPU clocks alone, 7.5 with realistic scanout
 traffic and 9.1 with the scanout saturated deliberately.
 
-`Inputs/hdmi` (hdl-util/hdmi) does the TMDS encoding and serialising, at
-1920×1080p60 with `DVI_OUTPUT` so there is no audio to feed. Its 148.4375 MHz
-pixel clock and the 742.1875 MHz clock the serialisers need come from a third
-MMCM, `boards/Wukong/hdmi_clkgen.sv`, using QMTech's own recipe for this
-board. **The fast clock is on a plain BUFG, which is beyond what an Artix-7 is
-rated for** — that is what QMTech ship working on this hardware, and it is
-flagged in `BRINGUP.md` as the one part of this no simulation can settle.
-Both boards close timing with the frame buffer in, on either machine: the V1
-at 1.281 ns of slack, the V3 at 1.262 as a 2/50 and 0.969 as a 2/120.
+**On the Wukong** the FPGA makes HDMI itself: `Inputs/hdmi` (hdl-util/hdmi)
+does the TMDS encoding and the 10:1 serialising, with `DVI_OUTPUT` so there is
+no audio to feed, from a third MMCM in `boards/Wukong/hdmi_clkgen.sv`.
+`HDMI_MODE` picks the raster, and **1280×1024 is the default because it is the
+mode the full design can clock**: 108.125 MHz pixels and a 540.625 MHz serial
+clock, inside both the BUFG's 628 MHz rating and the OSERDESE2's 680. 1080p60's
+742 MHz breaks both; `test/hdmi`, the same output with nothing else in the die,
+shows 1080p60 fine, and the whole machine does not. `syn/build.tcl` refuses to
+write a bitstream with a pulse-width violation unless `ALLOW_PW=1` — which a V3
+needs even for 1280×1024, because its −1 part's BUFG is rated lower; whether
+the picture is then sound on a V3 has not been measured.
 
-**The catch, and it is a real one:** when `s2fbthere()` succeeds the monitor
-sets `g_outsink = OUTSCREEN` and **the serial port goes silent**. A machine
-with a display is supposed to print on the display. So the end-to-end test
-cannot read a banner off the console; it searches the RAM model for the Sun
-logo instead, a known 128-word bitmap from `mon/dpy/sunlogo.c`, and finds it at
+**On the DECA** an Analog Devices ADV7513 does the HDMI, taking parallel
+24-bit RGB with sync and data enable. `rtl/sun2-common/video_timing.sv` makes
+the raster and `boards/DECA/deca_adv7513_init.sv` configures the chip over I2C;
+`test/deca_hdmi` is the output path with no Sun-2 in it at all.
+
+Because the serial port goes silent with a display fitted, the end-to-end
+simulation test cannot read a banner off the console; it searches the RAM model
+for the Sun logo instead, a known 128-word bitmap from `mon/dpy/sunlogo.c`, and finds it at
 row 128 of the frame buffer. That one assertion covers the aperture decode, the
 address remap, the byte lanes and the PROM's own drawing code.
 
@@ -618,6 +721,25 @@ sequences rather than a paraphrase of them — `ieprobe()`'s three bus cycles,
 `ieinit()`'s page-map programming, and then the chip's SCP handshake, which is
 the only check that pins the byte order down.
 
+### Ethernet — the 3Com 3C400, the other MultiBus card
+
+`MB_3C400=1` fits `rtl/sun2-multibus/sun2_mb_3c400.sv` instead: three 2 KiB
+packet buffers and two registers in an 8 KiB window at `0xE0000`, which is what
+SunOS attaches as `ec0`. It exists because the Sun card's 256 KiB of on-card
+memory is 256 of the MAX 10's 182 block RAMs, so a DECA cannot have that card at
+any clock; this one costs six. One cage, one MII port, so the two cards are
+mutually exclusive and `sun2_fpga` `$fatal`s on the pair.
+
+On a DECA it netboots — RARP, the boot loader over TFTP, an NFS root and a
+604 KB kernel, all through the card — and with a disk fitted SunOS attaches
+`ec0` beside `xy0`. **What stops it short of a network login is IP
+fragmentation**, and it is the card, not the replica: a 4096-byte NFS read reply
+is three Ethernet frames, the card has two receive buffers, and the third frame
+has nowhere to go. Sun documented exactly this in *Installing the SunOS 4.0.3
+Release* — 3Com-equipped Sun-2s "will have trouble booting from fast servers" —
+with the same two remedies found here independently: smaller NFS `rsize` and
+`wsize`, or the Sun card. `make -C sim mb3c400` is its unit test.
+
 ### A disk: the Xylogics 450, on an SD card
 
 `XY450=1` fits a Xylogics 450 SMD disk controller in the MultiBus cage, with a
@@ -697,9 +819,12 @@ stops. That is the whole of what `xyboot()` reads before handing over control,
 so it is enough to prove the path end to end without anyone having to find a
 genuine SunOS image first.
 
-On hardware the media is the V3's micro-SD slot (J9), through `blk_sd` and
-`sd_spi` taken unchanged from `Inputs/Wish5380`. **A Wukong V1 has no card slot
-at all**, so that build puts the four SPI lines on PMOD J11 in the order an
+On hardware the media is the V3's micro-SD slot (J9) or the DECA's, through
+`blk_sd` and `sd_spi` taken unchanged from `Inputs/Wish5380`, and a real SunOS
+4.0.3 disk image boots from it on both boards to a multi-user login, with
+`fsck` reading and writing the card on the way. `DISK_OFF_MIB` says where on
+the card the disk starts, so one card can hold several images. **A Wukong V1
+has no card slot at all**, so that build puts the four SPI lines on PMOD J11 in the order an
 off-the-shelf micro-SD PMOD expects — a convention, not a measurement; see
 `syn/wukong_sd_v1.xdc`. In simulation the same block seam has `tb/blk_file.sv`
 and an ordinary file behind it, which is what makes the whole controller
@@ -739,7 +864,7 @@ and granting it mid-transfer — which is what this did before there was a chain
 to protect — invites a driver that does use it, such as 4.x's, to rewrite a
 link the controller is about to follow.
 
-`make -C sim xy450` is the unit test: 102 checks, all replays of real code —
+`make -C sim xy450` is the unit test: 120 checks, all replays of real code —
 `xyprobe()` from both drivers, the controller reset, a NOP that has to report
 controller type 1, a read of block 0 checked with `chklabel()`'s own checksum,
 Set Drive Size, write-then-read, a two-sector transfer across the head
@@ -763,11 +888,49 @@ has no room for), ECC, overlapped seeking (EEF is accepted and ignored — with
 one drive there is nothing to overlap and completing in chain order is
 explicitly legal), a second controller at `0xEE48`, and 24-bit addressing.
 
+### A disk for either machine: Sun's SCSI host adapter
+
+Sun built one SCSI interface twice — a VME board for a 2/50, with the
+machine's real-time clock on it, and a MultiBus card for a 2/120 — and its own
+theory of operation says the two are the same design. So here they are one
+core, `rtl/sun2-common/sun2_scsi_core.sv`, and two thin cards around it:
+`VME_SCSI=1` (`rtl/sun2-vme/sun2_vme_scsi.sv`) and `MB_SCSI=1`
+(`rtl/sun2-multibus/sun2_mb_scsi.sv`). The target on the far side is
+`Inputs/Wish5380`'s `scsi_targ`, a disk on the same SD-card back end the
+Xylogics uses, and SunOS sees it as `sd0`. Both boot SunOS from the card on hardware. `MB_SCSI`
+and `XY450` are mutually exclusive — there is one card slot — and
+`make -C sim vmescsi` and `make -C sim mbscsi` are the unit tests.
+
+**Which image goes where** matters, because a SunOS root's `fstab` names its
+disk: an image built for `xy0` boots on a SCSI machine and then cannot mount
+its root read-write. The convention on the cards used here is `xy0` images at
+even multiples of 512 MiB and `sd0` images at odd ones, selected with
+`DISK_OFF_MIB`.
+
+**Halt the machine before you reprogram the FPGA.** Programming is a power
+cut: whatever the kernel had buffered is lost, and the damage appears as
+`fsck` failures on the *next* boot. `sync` and `/etc/halt` first, every time.
+`BRINGUP.md` has the repair procedure for when it happens anyway.
+
+### The time of day
+
+`rtl/sun2-common/mm58167.v` is a software-compatible National MM58167, the
+2/120's time-of-day chip at on-board I/O page 7 (a 2/50's is on the SCSI
+board). With it SunOS stops warning `no TOD clock`, `rc` stops dropping to
+single user over a nonsense date, and NetBSD gets past `inittodr`. "Software-
+compatible" was decided by the two drivers, which disagree: NetBSD's
+`mm58167_gettime` waits for the status bit to read *one*, SunOS's `todget`
+retries while it does, and both are satisfied by a bit that sets on each 1 kHz
+tick and clears when read. The chip has no year register, so the date a board
+comes up with is wrong by decades — which can make `cron` spin and eat the
+machine; check `ps -aux` before trusting any timing on a board.
+`make -C sim mm58167` replays both drivers' sequences over the Sun-2's own bus.
+
 ### Everything else
 
 | Define | Effect |
 |---|---|
-| *(default)* | main memory external, behind `sun2_wishbone_bridge` — DTACK from the Wishbone ack. This is what the FPGA build uses, with DDR3 behind it. |
+| *(default)* | main memory external, behind the memory bridge — DTACK from the bridge (see [Memory](#memory)). This is what the FPGA build uses, with DDR3 behind it. |
 | `MEM_SIM_ONLY` | 512 KiB synchronous SRAM inside `sun2_fpga`, DTACK from fixed bus timing. |
 | `MEM_PAGES` | installed memory in 2 KiB pages; default 3584 (7 MiB). Only affects what the PROM finds installed — the bus still answers over the whole of `MEM_SPACE_PAGES` so the PROM's sizing probe works. |
 | `ROM_FASTBOOT` | boot PROM with the RAM initialisation pass shortened 64-fold. MultiBus only. |
@@ -780,75 +943,79 @@ and dominates run time; instantiate the timer as `ttl_am9513 #(.TRACE(1))` in
 
 ## Building for hardware
 
+Two boards, one tree. Both flows are driven from `syn/Makefile`, both land
+under `build/syn/` — `vivado/` for the Wukong, `quartus/` for the DECA — and
+every knob that means the same thing on both boards (`MACHINE`, `CPU`,
+`CPU_HZ`/`CPU_DIV`, the cards) is spelled the same way. Nothing generated is
+committed, and neither build writes a bitstream that fails timing.
+
+**For SunOS, build with `CPU=rd68011`.** The default core is still Suska,
+because that is what the simulation fingerprints are measured against, and
+Suska cannot run SunOS.
+
+### The Wukong
+
 Target: QMTech Wukong, **V1** (XC7A100T-2FGG676) or **V3** (XC7A100T-1FGG676),
 either with one MT41K128M16JT-125 DDR3L and a 50 MHz oscillator. The board
-layer replaces what a LiteX SoC wrapper used to provide — clocks, DDR3
-controller, Wishbone clock crossing, DRAM initialisation, reset sequencing and
-pin constraints — with plain SystemVerilog plus Xilinx's MIG, and no LiteX at
-all.
+layer is plain SystemVerilog plus Xilinx's MIG, and no LiteX at all.
 
 ```sh
-make -C syn ip                      # the MIG DDR3 controller, once per board
-make -C syn bitstream               # 12.5 MHz CPU clock
-make -C syn bitstream CPU_HZ=40000000
-make -C syn bitstream MACHINE=vme   # a 2/50 instead of a 2/120
-make -C syn both
+make -C syn ip BOARD=v3             # the MIG DDR3 controller, once per board
+make -C syn bitstream BOARD=v3 CPU=rd68011 CPU_DIV=51 \
+        MACHINE=multibus MB_ETHER=1 XY450=1          # a 2/120 with network and disk
+make -C syn bitstream BOARD=v3 CPU=rd68011 CPU_DIV=51 \
+        MACHINE=vme VME_SCSI=1                       # a 2/50 with a SCSI disk
+make -C syn program [same knobs]    # JTAG, through a local hw_server
 ```
 
-Four axes, each defaulting to what every verified result was measured with:
-
-| | | |
+| Knob | Values | |
 |---|---|---|
-| `BOARD` | `v1` (default), `v3` | the V1 is discontinued, so the V3 is what a new build will land on; they differ in the speed grade and four pins — the oscillator, the reset button and the two LEDs |
+| `BOARD` | `v1` (default), `v1s1`, `v3` | `v3` is what can still be bought. `v1s1` is a V1 built for the slower −1 speed grade, which is the one to use on a V1: a 2/50 built for −2 met timing and stalled on the bench, and the same RTL built for −1 boots. Timing met on a −1 is met on a −2, never the reverse |
 | `MACHINE` | `multibus` (default), `vme` | which Sun-2 |
-| `MB_ETHER` | `0` (default), `1` | the MultiBus Ethernet card |
-| `FB` | `0` (default), `1` | the frame buffer on HDMI, VME only |
+| `CPU` | `suska` (default), `rd68011` | which MC68010 — see above |
+| `CPU_DIV` / `CPU_HZ` | 12.5 MHz by default | the CPU clock. `CPU_DIV` names the divider of the 1 GHz VCO directly: `CPU_DIV=51` is 19.6 MHz, what RD68011 builds use. `CPU_HZ` must divide the VCO exactly, and `CPU_DIV` wins if both are given |
+| `MB_ETHER`, `MB_3C400` | `0`/`1` | the Sun or 3Com MultiBus Ethernet card |
+| `XY450`, `MB_SCSI`, `VME_SCSI` | `0`/`1` | a disk: the Xylogics 450 or the MultiBus SCSI card (MultiBus), the SCSI/RTC board (VME) |
+| `DISK_OFF_MIB` | `0` | where on the SD card the disk image starts |
+| `FB`, `HDMI_MODE` | `0`, `1280x1024` | the frame buffer, and its video mode |
+| `WB_CACHE`, `WB_FIFO` | `1`, `1` | the memory bridge — see [Memory](#memory) |
+
+Each combination gets its own output directory under `build/syn/vivado/`,
+named from the board, the machine, the cards, the clock and the core — for
+instance `v3-multibus-mbether-xy450-cpu19.6-rd68011-div51-off2048m/`. Knobs at
+their defaults do not appear in the name.
+
+**RD68011 does not clock anywhere near 40 MHz on this part.** Its critical path
+is a half-period one inside the core — rising edge to falling edge — so the
+real requirement is half the period asked for. A full 2/120 meets 20 MHz only
+inside placement noise and 19.6 MHz (`CPU_DIV=51`) with a few hundred
+picoseconds to spare, which is why that is the clock every recent build uses:
+
+| V3, 2/120, Sun Ethernet + Xylogics, RD68011, 19.6 MHz | |
+|---|---|
+| worst setup / hold slack | 0.463 / 0.050 ns (0.094 / 0.051 on a rebuild: placement) |
+| LUTs | 17,237 of 63,400 (27%) |
+| block RAM tiles | 90 of 135 |
+
+Suska clocks at 40 MHz (`CPU_HZ=40000000`) but cannot run SunOS, so that is a
+monitor-prompt machine. `make -C syn both` builds Suska at 12.5 and 40 MHz.
 
 `BOARD` reaches the MIG too: both boards want identical DDR3 and differ only in
 the target part, so `generate_ip.tcl` substitutes it into a per-board copy of
 the one committed `.prj`, and `build/ip/<board>/` keeps them from overwriting
-each other.
+each other. `syn/mig/sun2_mig.prj` is the source of truth for the memory
+controller (see `syn/mig/README.md` for its provenance and the four fields we
+changed).
 
-This runs on a board. A MultiBus build with the RD68011 core and the Ethernet
-card auto-boots on a Wukong V3 and transmits ND protocol packets that are
-visible on the network; nothing serves them yet, so the boot eventually times
-out. A minimalist VME build with the Suska core halts before it writes its
-front panel — the RESET-instruction stall in `patches/Suska_Configware/0001`.
+Two build-time gates exist because each failure they catch once reached a board
+silently: an implicit net (Vivado's warning `Synth 8-6901`, which makes an
+undeclared identifier an undriven wire) is promoted to an error, and a clock
+beyond the rating of the resource carrying it — which `report_timing_summary`
+does not show — fails the build unless `ALLOW_PW=1`.
 
-`BRINGUP.md` is the staged procedure — what to check, in what order, and what
-each failure looks like given that almost all of them are silent at the
-console.
-
-Each combination gets its own output directory,
-`build/syn/vivado/<machine>-cpu<MHz>/`; the DECA's Quartus builds land beside
-it in `build/syn/quartus/`.
-Nothing generated is committed. `syn/mig/sun2_mig.prj` is the source of truth
-for the memory controller (see `syn/mig/README.md` for its provenance and the
-four fields we changed); everything MIG emits lands in `build/ip/`. The build
-refuses to write a bitstream if timing is not met.
-
-Every configuration builds clean on Vivado 2025.2:
-
-| | Worst setup slack | Worst hold slack |
-|---|---|---|
-| V1, 12.5 MHz | +1.281 ns | +0.028 ns |
-| V1, 40 MHz | +0.151 ns | +0.055 ns |
-| V3 (−1), 12.5 MHz | +1.276 ns | +0.008 ns |
-| V1, 12.5 MHz, frame buffer (2/50) | +1.281 ns | +0.049 ns |
-| V3 (−1), 12.5 MHz, frame buffer (2/50) | +1.262 ns | +0.008 ns |
-| V3 (−1), 12.5 MHz, frame buffer (2/120) | +0.969 ns | +0.054 ns |
-
-40 MHz closes, but with little margin — treat it as the fast option, not the
-default. **The hold figures are placement-sensitive and small**, and they move
-by tens of picoseconds between builds of unrelated configurations; what they
-have in common is that the limiting path is never ours — it is inside MIG or
-inside the Suska 68010. The one that *was* ours is fixed: see the `clk50` note
-below. The −1 part barely moves the setup number because the critical path is
-inside MIG, which adapts; its hold figure of 8 ps is MIG's own read-data buffer
-at the fast corner rather than anything of ours — met, but thin enough to write
-down. Utilisation leaves plenty of room: 13878 LUTs (22%), 7137 registers (6%),
-20 block RAMs (15%), 3 of 6 MMCMs (two ours, one MIG's) — and with the frame
-buffer and HDMI, 17115 LUTs (27%), 22.5 block RAMs, 4 MMCMs and 89 I/O.
+The console is the board's serial port, 9600 8N1. The LED ladder driven from
+`sun2_fpga.v` says why a machine stopped when the console cannot; `BRINGUP.md`
+says how to read it.
 
 ### Clocks
 
@@ -860,11 +1027,11 @@ read and simulate like any other source.
 | Clock | Derivation | Result |
 |---|---|---|
 | MIG `sys_clk` 166.667 MHz | MMCM A, VCO 1000 MHz, ÷6 | exact |
-| `cpu_clk` 12.5 or 40 MHz | MMCM A, ÷80 or ÷25 | exact |
+| `cpu_clk` 12.5, 19.6 or 40 MHz | MMCM A, ÷80, ÷51 (`CPU_DIV=51`) or ÷25 | exact |
 | IDELAYCTRL 200 MHz | MMCM A, ÷5 | exact |
 | SCC `serial_clk` 4.9152 MHz | MMCM B, ÷2 ×24.625 ÷125.25 | 4.915170 MHz, +0.0006% |
-| HDMI `clk_pixel` 148.5 MHz | MMCM C, VCO 742.1875 MHz, ÷5 | 148.4375 MHz, −0.042% |
-| HDMI `clk_pixel_x5` | MMCM C, ÷1 | 742.1875 MHz, exactly 5× |
+| HDMI `clk_pixel`, 1280×1024 | MMCM C | 108.125 MHz, VESA's 108 + 0.12% |
+| HDMI `clk_pixel_x5`, 1280×1024 | MMCM C | 540.625 MHz, exactly 5× |
 
 4.9152 MHz is not a rational multiple of 50 MHz with small terms, so it gets an
 MMCM to itself — where the fractional CLKOUT0 divider brings it within
@@ -873,12 +1040,12 @@ because the PROM derives the 9600 baud console straight from this clock. The
 200 MHz output is needed because MIG only allows its "use the system clock"
 IDELAYCTRL option when the input clock *is* 200 MHz.
 
-148.5 MHz cannot be made exactly from 50 MHz through one MMCM at all —
-148.5/50 is 2.97, and the feedback multiplier would have to be 2.97 times an
-integer output divider — and neither existing MMCM can approach it: A's spare
-outputs are integer dividers off a 1 GHz VCO, and B's one fractional output is
-the serial clock, which must not be perturbed. So the third MMCM uses QMTech's
-own recipe for this board, 0.042% low and well inside what CEA-861 allows.
+The pixel clock gets a third MMCM because neither of the others can make it:
+A's spare outputs are integer dividers off a 1 GHz VCO, and B's one fractional
+output is the serial clock, which must not be perturbed. 1080p60's
+148.4375 MHz (QMTech's own recipe for this board) is still there for
+`HDMI_MODE=1080p60`, and its 742 MHz serial clock is the one this design cannot
+carry — see [the frame buffer](#the-frame-buffer-and-hdmi).
 
 `tb_clkgen` measures all six in simulation rather than trusting the
 arithmetic — which is how the step-1 baud rate bug would have been caught. It
@@ -889,19 +1056,42 @@ independently is not five to one no matter how close each is on its own.
 
 ### Memory
 
-`boards/Wukong/wb_to_mig_ui.sv` adapts the Sun-2's Wishbone master to MIG's native
-user interface: 32-bit words in the CPU clock domain to 128-bit beats in MIG's
-83.33 MHz `ui_clk`, with a two-phase handshake across the domains and one
-transaction in flight. `app_wdf_mask` masks per byte, so sub-word writes need
-no read-modify-write.
+Main memory is the board's DDR3, and between the Sun-2's bus and it sits a
+**memory bridge** in `rtl/sun2-common/` — shared by both boards — with a
+synchronous adapter per board beyond it. There are three bridges, selected by
+two knobs that mean the same thing in every flow:
 
-It does not touch MIG directly, though: `boards/Wukong/mig_arb.sv` owns the
-`app_*` port and round-robins between the adapter and the frame buffer's
-scan-out. One transaction in flight on the whole interface, because what MIG's
-`ORDERING = "NORM"` guarantees about read-data return order is not established
-here and the read path carries no tag. With no frame buffer the second client
-is tied off and never asks. `tb_wb_to_mig_ui` checks it against `wb_ram_model` over
-randomised traffic with randomised stalls on both of MIG's ready signals.
+| | Bridge | What it does |
+|---|---|---|
+| default | `sun2_cached_fifo_bridge` | the FIFO bridge below, with a direct-mapped read cache of 16-byte lines in front of it: 8 KiB by default (`WB_CACHE_IDX=9`, log2 of the lines), write-through and no-allocate. A read that hits answers in its first clock; a miss brings back the whole 128-bit DDR3 beat and keeps it |
+| `WB_CACHE=0` | `sun2_fifo_bridge` | requests out and read answers back through two asynchronous FIFOs, with the memory side on the controller's own clock. A write is acknowledged the clock after it is queued; a read waits for the answer carrying its own tag and drops any other |
+| `WB_FIFO=0` | `sun2_wishbone_bridge` | the original: every access waits for the controller's acknowledgement, which comes back through the adapter's own clock crossing (`boards/Wukong/wb_to_mig_ui.sv`, `boards/DECA/deca_wb_to_ddr3.sv`) |
+
+What the two newer ones are worth, measured on the boards with everything else
+equal — the dhrystone and memory-loop columns are `user` seconds, the others
+wall-clock, and every `patwr` pass read back 0 wrong words out of 8,388,608:
+
+| Wukong V3, 2/120 + Xylogics, 19.6 MHz | dhrystone | memory loop | 16 MiB `dd` | 16 MiB `patwr` |
+|---|---|---|---|---|
+| `WB_FIFO=0` | 69.8 s | 86.4 s | 188.1 s | 1716.0 s |
+| `WB_CACHE=0` | 63.4 s | 78.7 s | 168.5 s | 1562.2 s |
+| default | **26.7 s** | **31.2 s** | **74.4 s** | **608.8 s** |
+
+The DECA follows the same shape — 64.7, 58.4 and 30.4 s of dhrystone at
+16.667 MHz. The cache costs 4.5 block RAM tiles on a Wukong and 72,176 memory
+bits on the DECA; `WB_CACHE=0` is for a board that cannot spare them.
+
+It is coherent without trying: DVMA drives the same 68010 wires as the CPU, so
+every master's writes pass the cache, and the only other client of DDR3, the
+frame buffer's scan-out, only reads. The frame-buffer aperture is not cached.
+
+On the Wukong, `boards/Wukong/mig_arb.sv` owns MIG's `app_*` port and
+round-robins between the CPU's adapter (`wb_mig_sync.sv` behind the FIFO
+bridges) and the frame buffer's scan-out. One transaction in flight on the
+whole interface, because what MIG's `ORDERING = "NORM"` guarantees about
+read-data return order is not established here and the read path carries no
+tag. `app_wdf_mask` masks per byte, so sub-word writes need no
+read-modify-write.
 
 ### Board-level simulation
 
@@ -921,7 +1111,7 @@ but the boot PROM does not touch main memory until `L_M_MAP` around 600 ms,
 which is far past what a full DDR3 model can simulate in reasonable time.
 
 **The board testbench does not build with `FB=1`** — `sim/run_xsim_board.sh`
-compiles `fb_scanout.sv` and `hdmi_clkgen.sv` but none of
+compiles `hdmi_clkgen.sv` but none of
 `Inputs/hdmi/src/*.sv`, so `hdmi` is unresolved. Adding them is not quite free:
 without `SYNTHESIS`, `MODEL_TECH` or `ALTERA_RESERVED_QIS`, `serializer.sv`
 takes its generic IP-less branch, and both that branch and the `MODEL_TECH` one
@@ -939,8 +1129,11 @@ talking to the *actual* controller rather than a model of it — so there is a
 third test for exactly that:
 
 ```sh
-make -C sim migddr3    # wb_to_mig_ui + real MIG + Micron model, ~3 minutes
+make -C sim migddr3cached  # the default bridge + real MIG + Micron model, minutes
+make -C sim migddr3        # the same for the synchronous bridge and wb_to_mig_ui
 make -C sim adapter    # wb_to_mig_ui vs the reference, randomised, seconds
+make -C sim cachedbridge   # the read cache against a bus-level shadow
+make -C sim orphan     # a refused cycle must not leave a request behind (also orphancached)
 make -C sim dvma       # sun2_dvma: Wishbone master -> 68010 bus cycles
 make -C sim clkgen     # measure the generated clocks
 make -C sim phy        # phy_rtl8211_init vs an independent clause-22 PHY model
@@ -957,7 +1150,7 @@ the Vivado install — that one is an unsubstituted template full of
 `%MEM_DENSITY` placeholders. Either way it is referenced, never committed: it
 carries Micron's AS-IS licence, not an open one.
 
-### Things about this board worth knowing
+### Things about the Wukong worth knowing
 
 * **The V1 50 MHz input (M22) is not on a clock-capable pin**, so the XDC needs
   `CLOCK_DEDICATED_ROUTE FALSE` on it. V2/V3 moved the oscillator to M21.
@@ -981,3 +1174,70 @@ carries Micron's AS-IS licence, not an open one.
   be set *before* `read_ip`, or the IP silently locks against a default Kintex
   device; and `read_ip` alone is not enough — the IP needs `synth_ip`, or the
   top fails with a misleading "module not found".
+
+### The DECA
+
+Target: Arrow DECA, an Intel MAX 10 (10M50DAF484C6GES) with DDR3, built with
+Quartus (`QUARTUS_ROOTDIR`, `/opt/Altera/quartus` by default; developed on
+25.1). There is no hard memory controller, so DDR3 comes from
+`Inputs/BrianHG-DDR3`, run at 250 MHz — its own 400 MHz project is refused by
+current Quartus — with its read and write caches switched off, because a cache
+whose freshness is a timeout counted in clocks returned stale data to the CPU.
+
+```sh
+make -C syn quartus MACHINE=multibus CPU_DIV=60 XY450=1 DISK_OFF_MIB=1024
+make -C syn quartus MACHINE=vme CPU_DIV=60 VME_SCSI=1 DISK_OFF_MIB=1536
+make -C syn quartus MACHINE=vme CPU_DIV=60           # netboot only
+make -C syn lint-quartus                             # read the RTL, no fit
+syn/altera.sh quartus_pgm -m JTAG -o "p;build/syn/quartus/<dir>/sun2.sof"
+```
+
+`quartus` always builds RD68011. The knobs are the Wukong's, plus `CPU_DUTY`,
+below; output lands in `build/syn/quartus/deca-<machine>-rd68011-cpu<MHz>-...`.
+Every build diffs the board top's port list against `top_fpga.v` with
+`tools/portcheck.sh` and fails on an implicit net, for the same reasons as the
+Vivado gates.
+
+**The clock is 16.667 MHz (`CPU_DIV=60`).** The limit is the same half-period
+path inside the CPU core that caps the Wukong, and its two halves want the
+period split unevenly: `CPU_DUTY=53` takes the machine to 17.857 MHz
+(`CPU_DIV=56`) and a login prompt, which a 50/50 clock at that frequency does
+not reach. A 2/120 with the Xylogics and the default memory bridge is 26,625
+logic elements (54%) and 732,816 memory bits (44%), Fmax 17.69 MHz.
+
+**What fits:** a 2/50 with its on-board Ethernet and a SCSI disk, or a 2/120
+with the Xylogics or the SCSI card, the 3Com Ethernet card and the frame
+buffer. **Not the Sun MultiBus Ethernet card**, whose 256 KiB of on-card memory
+is 256 block RAMs on a device that has 182.
+
+**The console is a JTAG UART** over the board's USB-Blaster II, because the
+DECA has no serial port. `tools/deca_console_pty.sh` presents it as an ordinary
+terminal at `/tmp/deca-console`; it holds the JTAG chain while it runs, so stop
+it before programming or probing. The machine's raw 9600-baud transmit line is
+also on `GPIO0_D[0]` (P8 pin 3) for a 3.3 V USB-serial cable, which leaves the
+chain free. `quartus_stp -t tools/deca_reset.tcl` reads the machine's panels
+over JTAG — the front-panel LEDs, the debug ladder, DDR3 calibration, PHY link
+and the SD card's state — and with `reset` pulses the machine's reset.
+
+A few things about the board, each of which cost time:
+
+* **Initialised memory becomes logic unless told otherwise.** Without
+  `INTERNAL_FLASH_UPDATE_MODE "SINGLE COMP IMAGE WITH ERAM"` Quartus builds
+  every initialised ROM — the boot PROM, RD68011's microcode — out of gates,
+  silently, and the design does not fit. `syn/quartus.tcl` sets it.
+* **The SD card is behind a level translator**, U22 on the 1.5 V DDR3 rail,
+  and four of its eight pins steer the translator rather than carrying data.
+  **There is no card-detect line**, so an empty slot and a card that never
+  initialised look the same; `deca_reset.tcl` reports whether `blk_sd` came
+  ready and the capacity it read from the card, which is true of a blank card
+  and so proves the whole path before any image exists.
+* **The eight LEDs are active low, and `LED[7]` is the leftmost.**
+* **The JTAG UART's clock must be well above TCK** (10 MHz here). Below it
+  the host read each byte twice and out of order; at 1.7 times it, typed input
+  still arrived with adjacent bytes swapped. The console bridge runs on the
+  board's 50 MHz oscillator, and holds 2 KiB so a slow host loses nothing.
+
+`test/` holds a standalone design for each block that could be doubted on its
+own — `deca_console`, `deca_ddr3`, `deca_hdmi`, `deca_sdtest` and
+`deca_bridge` — each about a minute to build, so a failing block can be
+separated from the machine around it.
