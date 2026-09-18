@@ -25,6 +25,7 @@ make -C syn bitstream [MACHINE=vme] [CPU_HZ=40000000] [BOARD=v3] [XY450=1] [CPU=
 make -C syn bitstream FB=1 HDMI_MODE=1280x1024      # the display mode this board can drive
 make -C syn program [same knobs]          # JTAG, through a local hw_server
 make -C syn bitstream WB_FIFO=0           # the old synchronous bridge to memory (quartus too)
+make -C syn bitstream WB_CACHE=0          # the FIFO bridge without its read cache (quartus too)
 tools/mkxydisk -o build/disk/xy0.img       # a labelled, bootable disk image
 tools/ufsread IMG cat /vmunix -o OUT      # pull a file out of a 4.2BSD image
 tools/pcsym OUT 63c8e 40b6                # 68010 PCs -> kernel symbols
@@ -52,6 +53,7 @@ Simulation knobs that matter, all on `make -C sim xsim`:
 | `XSIMARGS="-testplusarg cycle_from=5600 -testplusarg cycle_to=6900"` | every clock edge between two times — **both** edges, since the 68000 bus uses both and sampling only posedges hides the half-cycle where DTACK is taken |
 | `EXTRA_DEFINES=SUSKA_PEEK` | adds Suska's own `DTACK_In`, `WAITSTATES`, `SLICE_CNT_P` and `RESET_OUT_I` to that trace (`CPU=suska` only) |
 | `WB_FIFO=0` | the synchronous bridge to memory instead of the default FIFO bridge, with the memory model back on cpu_clk -- see below |
+| `WB_CACHE=0` | the FIFO bridge without the read cache in front of it; `WB_CACHE_IDX=<n>` sizes the cache at 2^n 16-byte lines, 9 (8 KiB) by default |
 | `MAPS_ZERO=1` | power the segment and page maps up as zeros, the way a block RAM does, instead of X — the difference between simulation and a board at time zero |
 
 Unit tests (seconds to minutes, unlike a boot):
@@ -67,6 +69,7 @@ make -C sim xy450      # the Xylogics 450 disk controller, against a real disk i
 make -C sim xychain    # boots a 68010 program that drives chained IOPBs and takes the interrupt
 make -C sim scc        # the Z8530's interrupts, driven the way SunOS drives them
 make -C sim scanout    # fb_scanout: every pixel of a frame, against a known pattern
+make -C sim cachedbridge   # the read cache against a bus-level shadow, plus orphancached and migddr3cached
 ```
 
 A boot with `FB=1` writes `build/sim/xsim-vme-fb/fb.mem` — the aperture as raw
@@ -411,7 +414,9 @@ Measured with `/bin/time` and cron killed, 50000 passes cost **58.9 s of user,
 the printed 1433 once the 1.667 is taken out (860).  For calibration a real
 10 MHz 2/120 managed about 700, so the replica is roughly 60% of the original
 per clock -- a believable price for DDR3 at 7 to 13 clocks an access where the
-real machine had static RAM.
+real machine had static RAM.  (That price has since been mostly paid back: with
+the read cache below, the same 50000 passes cost 26.7 s of `user` at
+19.6 MHz, 1873/s, or about 955 per 10 MHz of clock.)
 
 **Quote `user`, not `real`, and never the benchmark's own figure.**  `user` is
 the only one of the three that held steady when cron was killed (60.0 to 58.9)
@@ -1191,7 +1196,8 @@ than registers, 336 LE smaller, and one depth everywhere is simpler.
 Nine to eleven percent everywhere, for about 500 LE on the DECA and Fmax that
 went up (17.71 -> 18.34 MHz VME+SCSI, 17.75 -> 18.18 MB+XY450). So it is the
 default; `WB_FIFO=0` builds the synchronous bridge, and its output directories
-and simulation run directories carry `-wbsync`.
+and simulation run directories carry `-wbsync`. (The FIFO bridge is itself now
+the cached one by default -- below -- so these figures are `WB_CACHE=0`.)
 
 **What that does to the regression fingerprint.** Consoles and bus-error counts
 are the same on both bridges -- MultiBus 22/274, VME 10/312, both cores,
@@ -1204,6 +1210,69 @@ which with the FIFO bridge is an 83 MHz clock of its own, not cpu_clk.
 Simulation is the other way round -- the FIFO path reaches the prompt 1-3% later
 -- because `tb_sun2`'s one-clock memory makes the crossings pure cost; that says
 nothing about a board.
+
+**And in front of the FIFO bridge, a read cache, which is the default too and
+more than doubles the speed of the machine.** `sun2_cached_fifo_bridge`
+(`WB_CACHE=1`, define `SUN2_WB_CACHE`, every flow, on by default wherever the
+FIFO bridge is) is the FIFO bridge with a direct-mapped cache of
+2^`WB_CACHE_IDX` 16-byte lines -- 9, 8 KiB, by default -- write-through and
+no-allocate. A read that hits raises DTACK in its data phase's first clock; a
+miss is queued on the same edge the FIFO bridge would queue it, and its answer
+brings back the whole 128-bit DDR3 beat (`wb_line_i`, from the board adapter)
+and installs it. Writes go to memory exactly as before and update the cached
+halfwords by UDS/LDS if the line is present.
+
+The design points worth knowing, because each one is a way for a cache to lie:
+
+* **The lookup runs on the bus address the clock before the phase**, which is
+  what makes a zero-wait hit possible, and it is sound because the address has
+  settled by then: `tb_sun2` checks every data phase, and 0 of about 10.6
+  million on the four reference boots had the physical address still moving
+  the clock before. A lookup is trusted only if it was made for the line now on
+  the bus and no cache write landed on the edge before it; a *write* whose
+  lookup cannot be trusted invalidates the line rather than guessing.
+* **Only an answer carrying the phase's own tag is installed.** A stale answer
+  -- the orphaned request the corruption hunt was about -- is dropped, never
+  cached, or the old bug would come back as a persistent one.
+* **Coherence comes free from the bus mux.** DVMA drives the same 68010 wires
+  as the CPU (`top_fpga`), so every master's writes pass the cache, and the
+  only other client of DDR3, `fb_scanout`, only reads. The frame-buffer
+  aperture is uncached all the same.
+* **Block RAM has no reset**, so a power-on sweep clears every valid bit before
+  the first lookup is trusted. `make -C sim cachedbridge` preloads the tag RAM
+  with valid entries so a missing sweep fails rather than passing on X.
+
+Measured through the real MIG and DDR3 model (`make -C sim migddr3cached`,
+cpu_clk at 12.5 MHz): a hit is 1 clock, a miss 7.0 -- the FIFO bridge's figure,
+so a miss costs nothing extra. `make -C sim orphancached` passes all 9 checks.
+On the boards, uncached FIFO bridge against cached, same settings otherwise,
+`patwr` 0 wrong of 8,388,608 on both and TAS still working:
+
+| | dhrystone `user` | memory loop `user` | 16 MiB `dd`+`sync` | 16 MiB `patwr` |
+|---|---|---|---|---|
+| Wukong V3 MB+MBether+XY450, 19.6 MHz | 63.4 -> 26.7 s | 78.7 -> 31.2 s | 168.5 -> 74.4 s | 1562.2 -> 608.8 s |
+| DECA MB+XY450, 16.667 MHz | 58.4 -> 30.4 s | 75.9 -> 36.7 s | 141.4 -> 77.9 s | 1489.0 -> 711.0 s |
+
+**With the cache the two boards are the same machine per clock**, which they
+were not before: dhrystone costs 523 million cpu_clk on the Wukong and 507
+million on the DECA, against 1243 and 973 uncached. What separated them was the
+miss latency in CPU clocks -- MIG's round trip is longer than BrianHG's -- and a
+cache that hits almost always takes that out of the comparison.
+
+It costs +156 LUTs and 4.5 BRAM tiles on the V3 (WNS 0.463 ns at 19.6 MHz, and
+0.094 ns on a rebuild with nothing changed but the build date -- placement),
+and +1,064 LE and +72,176 memory bits on the DECA (54% and 44% of the device,
+Fmax 17.69 MHz against 16.667). `WB_CACHE=0` is the uncached FIFO bridge, for a
+board without the block RAM, and its output and run directories carry
+`-nocache`; a non-default `WB_CACHE_IDX` carries `-wbcache<n>`. `WB_FIFO=0`
+turns the cache off with the rest of the FIFO path.
+
+The fingerprint moves again, in the same way: consoles and bus errors are
+unchanged (MultiBus 22/274, VME 10/312, both cores, byte-identical), and the
+memory-checker counts are not. `tb_sun2` checks a read that hits against a
+bus-level shadow of what was written, because a hit has no Wishbone transaction
+to compare with. Its reported hit rates (99.7% and up) describe the PROM, not
+SunOS; the board figures above are the ones that mean anything.
 
 **One frame buffer, two places.** Both machines have the same 1152x900 screen
 and both PROMs reach it at the same *virtual* addresses; only the page-map

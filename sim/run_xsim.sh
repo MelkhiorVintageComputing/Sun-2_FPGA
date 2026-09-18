@@ -56,7 +56,12 @@ case " $SUN2_DEFINES " in *" SUN2_XY450 "*)    rundir_tag="$rundir_tag-xy450" ;;
 case " $SUN2_DEFINES " in *" SUN2_VME_SCSI "*) rundir_tag="$rundir_tag-vmescsi" ;; esac
 case " $SUN2_DEFINES " in *" SUN2_MB_SCSI "*) rundir_tag="$rundir_tag-mbscsi" ;; esac
 case " $SUN2_DEFINES " in *" SUN2_WB_FIFO "*) ;; *) rundir_tag="$rundir_tag-wbsync" ;; esac
-case " $SUN2_DEFINES " in *" SUN2_WB_CACHE "*) rundir_tag="$rundir_tag-wbcache" ;; esac
+# The cache is the default wherever the FIFO bridge is, so it is its absence
+# that is tagged -- and only there: the synchronous bridge has no cache to lack.
+case " $SUN2_DEFINES " in
+	*" SUN2_WB_CACHE "*) ;;
+	*" SUN2_WB_FIFO "*) rundir_tag="$rundir_tag-nocache" ;;
+esac
 for _d in $SUN2_DEFINES; do
 	case "$_d" in SUN2_WB_CACHE_IDX=*) rundir_tag="$rundir_tag${_d#*=}" ;; esac
 done

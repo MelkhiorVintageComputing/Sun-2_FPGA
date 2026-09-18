@@ -80,7 +80,15 @@ module tb_mig_ddr3;
    wire [31:0] f_dat_w, f_dat_r;
    wire [3:0]  f_sel;
 
+   wire [127:0] f_line;
+`ifdef SUN2_WB_CACHE
+   // The cached bridge (make -C sim migddr3cached): reads that hit are
+   // answered from the cache, misses bring a whole line back.
+   sun2_cached_fifo_bridge bridge (
+       .wb_line_i (f_line),
+`else
    sun2_fifo_bridge bridge (
+`endif
        .SET_ENABLE (set_enable), .RESET_n (~rst_wb), .CLK (cpu_clk),
        .P_ADR_IN (p_adr), .P_DATA_IN (p_din), .P_DATA_OUT (p_dout),
        .P_RW_n (p_rw_n), .EN_LBYTE (p_lds), .EN_UBYTE (p_uds), .FB_PAGE (6'h0),
@@ -92,7 +100,7 @@ module tb_mig_ddr3;
    wb_mig_sync adapter_sync (
        .wb_cyc_i (f_cyc), .wb_stb_i (f_stb), .wb_adr_i (f_adr),
        .wb_dat_i (f_dat_w), .wb_sel_i (f_sel), .wb_we_i (f_we),
-       .wb_dat_o (f_dat_r), .wb_ack_o (f_ack),
+       .wb_dat_o (f_dat_r), .wb_ack_o (f_ack), .wb_line_o (f_line),
        .c_addr (c0_addr), .c_we (c0_we), .c_wdata (c0_wdata), .c_wmask (c0_wmask),
        .c_req (c0_req), .c_done (c0_done), .c_rdata (c0_rdata)
    );
@@ -250,6 +258,9 @@ module tb_mig_ddr3;
    // Writes as well as reads: acknowledging writes early is the whole point
    // of the FIFO bridge, so both paths report both.
    int  ww_lat_min = 1000, ww_lat_max = 0, ww_lat_sum = 0, ww_lat_n = 0;
+   // A cache hit is answered in the phase's first clock; everything else is
+   // a trip to memory.  Kept apart, because their mean says nothing.
+   int  rh_n = 0;
    int  wb_cnt = 0;
    bit  wb_busy = 1'b0, wb_busy_we = 1'b0;
 `ifdef SUN2_WB_FIFO
@@ -280,6 +291,8 @@ module tb_mig_ddr3;
                if (wb_cnt > wb_lat_max) wb_lat_max <= wb_cnt;
             end
          end
+      end else if (meas_start && meas_ack && !meas_we) begin
+         rh_n <= rh_n + 1;                    // answered in its first clock
       end else if (meas_start && !meas_ack) begin
          wb_busy    <= 1'b1;
          wb_busy_we <= meas_we;
@@ -304,7 +317,14 @@ module tb_mig_ddr3;
            $display("Wishbone write, STB to ACK:               min %0d, max %0d, mean %0.1f cpu_clk",
 `endif
                     ww_lat_min, ww_lat_max, real'(ww_lat_sum)/ww_lat_n);
+`ifdef SUN2_WB_CACHE
+         $display("Cached bridge read hit, phase to DTACK:   1 cpu_clk (DTACK in the phase's first clock), %0d reads", rh_n);
+`endif
          if (wb_lat_n > 0) begin
+`ifdef SUN2_WB_CACHE
+            $display("Cached bridge read miss, phase to DTACK:  min %0d, max %0d, mean %0.1f cpu_clk, %0d reads",
+                     wb_lat_min, wb_lat_max, real'(wb_lat_sum)/wb_lat_n, wb_lat_n);
+`else
 `ifdef SUN2_WB_FIFO
             $display("FIFO bridge read, phase to DTACK:         min %0d, max %0d, mean %0.1f cpu_clk (%0.1f ns at 12.5 MHz)",
 `else
@@ -312,6 +332,7 @@ module tb_mig_ddr3;
 `endif
                      wb_lat_min, wb_lat_max, real'(wb_lat_sum)/wb_lat_n,
                      (real'(wb_lat_sum)/wb_lat_n) * cpu_ns);
+`endif
             $display("");
             $display("=> set wb_ram_model ACK_LATENCY to %0d to model this bus in the board simulation",
                      (wb_lat_sum + wb_lat_n/2) / wb_lat_n);
@@ -337,8 +358,11 @@ module tb_mig_ddr3;
                         input logic [15:0] d, input bit uds, input bit lds,
                         output logic [15:0] q);
       begin
+         // The address a clock before the phase, as the machine puts it
+         // (tb_sun2 measures that): what the cached bridge's lookup needs.
          @(posedge cpu_clk);
          p_adr <= {a[21:0], a1}; p_rw_n <= rw_n; p_din <= d;
+         @(posedge cpu_clk);
          p_uds <= uds; p_lds <= lds; p_match <= 1'b1;
          @(posedge cpu_clk);
          while (!w_ack) @(posedge cpu_clk);

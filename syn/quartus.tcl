@@ -58,7 +58,7 @@ array set opt {
     -fb        0
     -wb_fifo   1
     -wb_req_addr 4
-    -wb_cache  0
+    -wb_cache  1
     -wb_cache_idx 9
     -eth5      224
     -eram      1

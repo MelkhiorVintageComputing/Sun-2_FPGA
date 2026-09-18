@@ -38,7 +38,7 @@ set cpu_div  0
 set mb_3c400 0
 set wb_fifo 1
 set wb_req_addr 4
-set wb_cache 0
+set wb_cache 1
 set wb_cache_idx 9
 if {[llength $argv] > 0} { set cpu_hz   [lindex $argv 0] }
 if {[llength $argv] > 1} { set machine  [lindex $argv 1] }
@@ -275,7 +275,7 @@ set ipdir   $top/build/ip/$board
 # not exist, and `make program' failed with "no such bitstream".  The failure is
 # loud only because the two names differ; had make looked where Vivado wrote,
 # the wrong machine would have been programmed silently.
-set outdir  $top/build/syn/vivado/$board-$machine[expr {$vme_scsi == 1 ? "-vmescsi" : ""}][expr {$mb_scsi == 1 ? "-mbscsi" : ""}][expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$mb_3c400 == 1 ? "-3c400" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}][expr {$wb_fifo == 0 ? "-wbsync" : ""}][expr {$wb_req_addr != 4 ? "-rq$wb_req_addr" : ""}][expr {$wb_cache == 1 ? "-wbcache[expr {$wb_cache_idx != 9 ? $wb_cache_idx : {}}]" : ""}]-cpu$cputag[expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}][expr {$disk_off_mib != 0 ? "-off${disk_off_mib}m" : ""}]
+set outdir  $top/build/syn/vivado/$board-$machine[expr {$vme_scsi == 1 ? "-vmescsi" : ""}][expr {$mb_scsi == 1 ? "-mbscsi" : ""}][expr {$mb_ether == 1 ? "-mbether" : ""}][expr {$mb_3c400 == 1 ? "-3c400" : ""}][expr {$fb == 1 ? "-fb" : ""}][expr {$xy450 == 1 ? "-xy450" : ""}][expr {$wb_fifo == 0 ? "-wbsync" : ""}][expr {$wb_req_addr != 4 ? "-rq$wb_req_addr" : ""}][expr {$wb_fifo == 1 ? ($wb_cache == 1 ? ($wb_cache_idx != 9 ? "-wbcache$wb_cache_idx" : "") : "-nocache") : ""}]-cpu$cputag[expr {$cpu ne "suska" ? "-$cpu" : ""}][expr {$fb == 1 ? "-$hdmimode" : ""}][expr {$eth5 != 224 ? [format "-eth%02x" $eth5] : ""}][expr {$cpu_div != 0 ? "-div$cpu_div" : ""}][expr {$disk_off_mib != 0 ? "-off${disk_off_mib}m" : ""}]
 set migrtl  $ipdir/sun2_mig/sun2_mig/user_design/rtl
 
 file mkdir $outdir

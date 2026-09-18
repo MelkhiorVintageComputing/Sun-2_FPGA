@@ -11,7 +11,7 @@
 #   make xsim FB=1         fit the frame buffer (either machine)
 #   make xsim XY450=1      fit the Xylogics 450 disk controller (MultiBus only)
 #   make xsim WB_FIFO=0    the synchronous bridge to memory (FIFO bridge is the default)
-#   make xsim WB_CACHE=1   the cached FIFO bridge; WB_CACHE_IDX=<log2 lines>, 9 by default
+#   make xsim WB_CACHE=0   the FIFO bridge without its read cache; WB_CACHE_IDX=<log2 lines>, 9 by default
 #   make xsim VME_SCSI=1   fit the Sun VME SCSI/RTC board (VME only)
 #   make xsim MB_SCSI=1    fit the MultiBus SCSI adapter (MultiBus only)
 #   make xsim CPU=rd68011  build with the RD68011 core instead of Suska
@@ -112,8 +112,10 @@ endif
 # the default; WB_FIFO=0 builds the synchronous sun2_wishbone_bridge.
 WB_FIFO ?= 1
 # The cached FIFO bridge (sun2_cached_fifo_bridge.v): the FIFO bridge with a
-# read cache of 2**WB_CACHE_IDX 16-byte lines.  Needs WB_FIFO=1.
-WB_CACHE ?= 0
+# read cache of 2**WB_CACHE_IDX 16-byte lines.  The default wherever the FIFO
+# bridge is; WB_CACHE=0 is the uncached FIFO bridge, and WB_FIFO=0 turns it off
+# with the rest of the FIFO path.
+WB_CACHE ?= $(if $(filter 1,$(WB_FIFO)),1,0)
 WB_CACHE_IDX ?= 9
 ifeq ($(WB_CACHE),1)
 ifneq ($(WB_FIFO),1)
@@ -283,7 +285,7 @@ board-phy:
 	$(MAKE) board-check MACHINE=vme
 
 # --- unit tests for the board layer ---------------------------------------
-clkgen adapter migddr3 dvma bridge phy mbether mb3c400 xy450 scc mm58167 scanout vtiming adv7513 vmescsi mbscsi blksd decauart decaconsole decaddr3 decaphy busarb orphan asyncfifo fifobridge orphanfifo migddr3fifo decaddr3sync cachedbridge: rom
+clkgen adapter migddr3 dvma bridge phy mbether mb3c400 xy450 scc mm58167 scanout vtiming adv7513 vmescsi mbscsi blksd decauart decaconsole decaddr3 decaphy busarb orphan asyncfifo fifobridge orphanfifo migddr3fifo decaddr3sync cachedbridge orphancached migddr3cached: rom
 	BOARD=$(BOARD) XSIMARGS="$(XSIMARGS)" ./run_unit.sh $@
 
 # --- a picture of what the machine drew -----------------------------------
@@ -342,7 +344,7 @@ iverilog: rom
 # CPU=rd68011' reads the Suska run's log and passes on it.  Note this still
 # does not carry CPU_HZ or BAUD, which also tag a run directory -- pass
 # FBIMAGE= or the log path by hand for those.
-RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)$(if $(filter 1,$(VME_SCSI)),-vmescsi,)$(if $(filter 1,$(MB_SCSI)),-mbscsi,)$(if $(filter 0,$(WB_FIFO)),-wbsync,)$(if $(filter 1,$(WB_CACHE)),-wbcache$(if $(filter 9,$(WB_CACHE_IDX)),,$(WB_CACHE_IDX)),)$(if $(filter 0,$(LOOPBUF)),,-lb$(LOOPBUF))$(if $(filter 0,$(RTE_LOOP)),,-rtelp)$(if $(filter 1,$(RTE_BUF)),,-nortebuf)$(CPUTAG)
+RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)$(if $(filter 1,$(VME_SCSI)),-vmescsi,)$(if $(filter 1,$(MB_SCSI)),-mbscsi,)$(if $(filter 0,$(WB_FIFO)),-wbsync,$(if $(filter 1,$(WB_CACHE)),$(if $(filter 9,$(WB_CACHE_IDX)),,-wbcache$(WB_CACHE_IDX)),-nocache))$(if $(filter 0,$(LOOPBUF)),,-lb$(LOOPBUF))$(if $(filter 0,$(RTE_LOOP)),,-rtelp)$(if $(filter 1,$(RTE_BUF)),,-nortebuf)$(CPUTAG)
 # What check_console.sh should expect, in order of what wins.  A display wins
 # outright: with one fitted the console moves to the screen and there is no
 # serial output left to check, whatever else is in the cage.  A disk beats an
@@ -361,4 +363,4 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: all rom xsim board board-check board-phy iverilog check clean
-.PHONY: clkgen adapter migddr3 dvma bridge phy mbether mb3c400 xy450 scc xychain vtiming adv7513 vmescsi mbscsi blksd mm58167 scanout decauart decaconsole decaddr3 decaphy busarb orphan asyncfifo fifobridge orphanfifo migddr3fifo decaddr3sync cachedbridge screenshot
+.PHONY: clkgen adapter migddr3 dvma bridge phy mbether mb3c400 xy450 scc xychain vtiming adv7513 vmescsi mbscsi blksd mm58167 scanout decauart decaconsole decaddr3 decaphy busarb orphan asyncfifo fifobridge orphanfifo migddr3fifo decaddr3sync cachedbridge orphancached migddr3cached screenshot
