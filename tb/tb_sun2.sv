@@ -1058,6 +1058,8 @@ module tb_sun2 #(
    reg [11:0]  cyc_ma;                 // ma_pmap2devices, the physical page
    reg [22:0]  cyc_pa;                 // P_A[23:1]; cyc_pa[0] is P_A[1], the half
    reg [15:0]  cyc_dat;                // P_DOUT
+   reg [15:0]  cyc_din;                // P_DIN, what a write cycle writes
+   reg         cyc_uds, cyc_lds;       // its strobes
    reg         in_cyc = 1'b0;
    reg         dvma_between = 1'b0;
    reg [22:0]  last_cpu_a = 23'h0;
@@ -1105,6 +1107,24 @@ module tb_sun2 #(
       mem_word = ram.fetch({1'b0, ma, pa[9:1]});
    endfunction
 
+   // What a read *should* return is what the bus last wrote there, not what
+   // the memory model holds at that moment.  The two are the same for a
+   // bridge that makes every read wait behind every queued write; they are
+   // not for a cache, which can answer a read while a write to the very same
+   // word is still queued on its way to memory -- correctly, and the memory
+   // model would call it wrong.  So every write cycle, CPU or master, updates
+   // a shadow of the halfwords it wrote as it completes on the bus, and the
+   // expectation is that shadow, falling back to the memory model only for
+   // what the bus has never written.
+   logic [15:0] bus_shadow [longint unsigned];
+   function automatic logic [15:0] expect_hw(input logic [11:0] ma, input logic [22:0] pa);
+      automatic longint unsigned k = {ma, pa[9:0]};
+      automatic logic [31:0] w;
+      if (bus_shadow.exists(k)) return bus_shadow[k];
+      w = mem_word(ma, pa);
+      return pa[0] ? {w[31:24], w[23:16]} : {w[15:8], w[7:0]};
+   endfunction
+
    always @(posedge dut.C100) begin
       if (!dut.sun2.P_AS_n) begin
          in_cyc   <= 1'b1;
@@ -1114,8 +1134,19 @@ module tb_sun2 #(
          cyc_ma   <= dut.sun2.ma_pmap2devices;
          cyc_pa   <= dut.sun2.P_A;
          cyc_dat  <= dut.sun2.P_DOUT;
+         cyc_din  <= dut.sun2.P_DIN;
+         cyc_uds  <= ~dut.sun2.P_UDS_n;
+         cyc_lds  <= ~dut.sun2.P_LDS_n;
       end else if (in_cyc) begin
          in_cyc <= 1'b0;
+         // A write to memory, CPU or master, as the bus completed it.
+         if (!cyc_rw && cyc_mm && !$isunknown(cyc_ma) && !$isunknown(cyc_pa)) begin
+            automatic longint unsigned k = {cyc_ma, cyc_pa[9:0]};
+            automatic logic [15:0] v = expect_hw(cyc_ma, cyc_pa);
+            if (cyc_uds) v[15:8] = cyc_din[15:8];
+            if (cyc_lds) v[ 7:0] = cyc_din[ 7:0];
+            bus_shadow[k] = v;
+         end
          if (cyc_dvma) begin
             dvma_cycles++;
             dvma_between <= 1'b1;
@@ -1154,7 +1185,7 @@ module tb_sun2 #(
                // this is still wrong and nothing may be concluded from it.
                if (prev_valid && !$isunknown(cyc_dat)) begin
                   logic [15:0] own;
-                  own = cyc_pa[0] ? {dw[31:24], dw[23:16]} : {dw[15:8], dw[7:0]};
+                  own = expect_hw(cyc_ma, cyc_pa);
                   dvma_rd++;
                   if (cyc_dat === prev_exp) dvma_lag++;
                   if (cyc_dat === own)      dvma_now++;
@@ -1167,7 +1198,7 @@ module tb_sun2 #(
                end
                prev_ma    <= cyc_ma;
                prev_pa    <= cyc_pa;
-               prev_exp   <= cyc_pa[0] ? {dw[31:24], dw[23:16]} : {dw[15:8], dw[7:0]};
+               prev_exp   <= expect_hw(cyc_ma, cyc_pa);
                prev_dvma  <= 1'b1;
                prev_valid <= 1'b1;
             end
@@ -1182,8 +1213,7 @@ module tb_sun2 #(
                // against its new value and reported as corruption.  That was
                // the whole of the residual 7% on the calibration run, all of
                // it at one address being rewritten in a loop.
-               w  = mem_word(cyc_ma, cyc_pa);
-               wa = cyc_pa[0] ? {w[31:24], w[23:16]} : {w[15:8], w[7:0]};
+               wa = expect_hw(cyc_ma, cyc_pa);
                if (prev_valid) begin
                   mem_rd++;
                   if (cyc_dat === prev_exp) match_a++;
@@ -1262,6 +1292,15 @@ module tb_sun2 #(
       // essentially every read and the other almost none.
       $display("DVMA memory reads checked: %0d, matching own cycle: %0d, matching previous: %0d",
                dvma_rd, dvma_now, dvma_lag);
+`ifdef SUN2_WB_CACHE
+      $display("cache: %0d read hits, %0d read misses (%0d with an untrusted lookup), %0d uncached reads, %0d fills; writes: %0d hits, %0d misses, %0d invalidations",
+               dut.sun2.wbridge.n_hit, dut.sun2.wbridge.n_miss, dut.sun2.wbridge.n_rd_notok,
+               dut.sun2.wbridge.n_uncached, dut.sun2.wbridge.n_fill, dut.sun2.wbridge.n_whit,
+               dut.sun2.wbridge.n_wmiss, dut.sun2.wbridge.n_winval);
+      if (dut.sun2.wbridge.n_hit + dut.sun2.wbridge.n_miss > 0)
+        $display("cache: read hit rate %0.1f%%",
+                 100.0 * dut.sun2.wbridge.n_hit / (dut.sun2.wbridge.n_hit + dut.sun2.wbridge.n_miss));
+`endif
    endtask
 
    task automatic wrap_up(input string why);

@@ -11,6 +11,7 @@
 #   make xsim FB=1         fit the frame buffer (either machine)
 #   make xsim XY450=1      fit the Xylogics 450 disk controller (MultiBus only)
 #   make xsim WB_FIFO=0    the synchronous bridge to memory (FIFO bridge is the default)
+#   make xsim WB_CACHE=1   the cached FIFO bridge; WB_CACHE_IDX=<log2 lines>, 9 by default
 #   make xsim VME_SCSI=1   fit the Sun VME SCSI/RTC board (VME only)
 #   make xsim MB_SCSI=1    fit the MultiBus SCSI adapter (MultiBus only)
 #   make xsim CPU=rd68011  build with the RD68011 core instead of Suska
@@ -110,6 +111,19 @@ endif
 # memory model on a clock of its own rather than cpu_clk.  Either machine, and
 # the default; WB_FIFO=0 builds the synchronous sun2_wishbone_bridge.
 WB_FIFO ?= 1
+# The cached FIFO bridge (sun2_cached_fifo_bridge.v): the FIFO bridge with a
+# read cache of 2**WB_CACHE_IDX 16-byte lines.  Needs WB_FIFO=1.
+WB_CACHE ?= 0
+WB_CACHE_IDX ?= 9
+ifeq ($(WB_CACHE),1)
+ifneq ($(WB_FIFO),1)
+$(error WB_CACHE=1 needs WB_FIFO=1: the cache sits in front of the FIFO bridge)
+endif
+DEFINES += SUN2_WB_CACHE
+ifneq ($(WB_CACHE_IDX),9)
+DEFINES += SUN2_WB_CACHE_IDX=$(WB_CACHE_IDX)
+endif
+endif
 ifeq ($(WB_FIFO),1)
 DEFINES += SUN2_WB_FIFO
 endif
@@ -328,7 +342,7 @@ iverilog: rom
 # CPU=rd68011' reads the Suska run's log and passes on it.  Note this still
 # does not carry CPU_HZ or BAUD, which also tag a run directory -- pass
 # FBIMAGE= or the log path by hand for those.
-RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)$(if $(filter 1,$(VME_SCSI)),-vmescsi,)$(if $(filter 1,$(MB_SCSI)),-mbscsi,)$(if $(filter 0,$(WB_FIFO)),-wbsync,)$(if $(filter 0,$(LOOPBUF)),,-lb$(LOOPBUF))$(if $(filter 0,$(RTE_LOOP)),,-rtelp)$(if $(filter 1,$(RTE_BUF)),,-nortebuf)$(CPUTAG)
+RUNTAG  = $(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)$(if $(filter 1,$(VME_SCSI)),-vmescsi,)$(if $(filter 1,$(MB_SCSI)),-mbscsi,)$(if $(filter 0,$(WB_FIFO)),-wbsync,)$(if $(filter 1,$(WB_CACHE)),-wbcache$(if $(filter 9,$(WB_CACHE_IDX)),,$(WB_CACHE_IDX)),)$(if $(filter 0,$(LOOPBUF)),,-lb$(LOOPBUF))$(if $(filter 0,$(RTE_LOOP)),,-rtelp)$(if $(filter 1,$(RTE_BUF)),,-nortebuf)$(CPUTAG)
 # What check_console.sh should expect, in order of what wins.  A display wins
 # outright: with one fitted the console moves to the screen and there is no
 # serial output left to check, whatever else is in the cage.  A disk beats an

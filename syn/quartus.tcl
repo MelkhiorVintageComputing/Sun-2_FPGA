@@ -58,6 +58,8 @@ array set opt {
     -fb        0
     -wb_fifo   1
     -wb_req_addr 4
+    -wb_cache  0
+    -wb_cache_idx 9
     -eth5      224
     -eram      1
     -jobs      8
@@ -228,6 +230,19 @@ if {$opt(-wb_fifo) != 0} {
         lappend defines SUN2_WB_REQ_ADDR=$opt(-wb_req_addr)
         puts "== FIFO bridge request queue depth [expr {1 << $opt(-wb_req_addr)}] =="
     }
+}
+# The cached FIFO bridge: a read cache of 2**wb_cache_idx 16-byte lines in
+# front of the FIFO bridge, which it needs.
+if {$opt(-wb_cache) != 0} {
+    if {$opt(-wb_fifo) == 0} {
+        puts "ERROR: WB_CACHE=1 needs WB_FIFO=1: the cache sits in front of the FIFO bridge"
+        exit 1
+    }
+    lappend defines SUN2_WB_CACHE
+    if {$opt(-wb_cache_idx) != 9} {
+        lappend defines SUN2_WB_CACHE_IDX=$opt(-wb_cache_idx)
+    }
+    puts "== read cache of [expr {1 << $opt(-wb_cache_idx)}] lines, [expr {16 << $opt(-wb_cache_idx)}] bytes =="
 }
 # Only when given.  Empty means "let sun2_config.vh choose", which it does per
 # machine, and both of its answers are inside this range by construction.
@@ -450,6 +465,7 @@ set v2001 [list \
     $top/rtl/sun2-common/sun2_wishbone_bridge.v \
     $top/rtl/sun2-common/sun2_async_fifo.v \
     $top/rtl/sun2-common/sun2_fifo_bridge.v \
+    $top/rtl/sun2-common/sun2_cached_fifo_bridge.v \
 ]
 
 set sv [list \

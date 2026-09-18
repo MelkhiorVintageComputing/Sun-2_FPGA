@@ -1186,12 +1186,23 @@ module sun2_fpga(input         cpu_clk,
    wire 				 L_M_MAP_SEEN;
    assign L_M_MAP_SEEN = (leds == 8'h8F); 
    
-`ifdef SUN2_WB_FIFO
-   // Requests and read answers cross to the memory controller's clock through
-   // two FIFOs, and writes are acknowledged once queued: sun2_fifo_bridge.v.
 `ifndef SUN2_WB_REQ_ADDR
  `define SUN2_WB_REQ_ADDR 4
 `endif
+`ifndef SUN2_WB_CACHE_IDX
+ `define SUN2_WB_CACHE_IDX 9
+`endif
+`ifdef SUN2_WB_CACHE
+   // The FIFO bridge with a read cache of 2**SUN2_WB_CACHE_IDX 16-byte lines in
+   // front of it: sun2_cached_fifo_bridge.v.
+   sun2_cached_fifo_bridge #(.FB_WB_BASE(`FB_WB_BASE), .REQ_ADDR(`SUN2_WB_REQ_ADDR),
+                             .IDX(`SUN2_WB_CACHE_IDX)) wbridge(.CLK(C100),
+				.WB_CLK(wb_clk_i),
+				.WB_RESET(wb_rst_i),
+				.wb_line_i(wb_line_i),
+`elsif SUN2_WB_FIFO
+   // Requests and read answers cross to the memory controller's clock through
+   // two FIFOs, and writes are acknowledged once queued: sun2_fifo_bridge.v.
    // The request queue's depth is 2**SUN2_WB_REQ_ADDR, 16 by default; the
    // answer queue stays at 4, since only one read is ever in flight.  16 is
    // no faster than 4 on any workload measured -- the queue drains faster

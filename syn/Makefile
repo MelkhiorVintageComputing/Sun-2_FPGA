@@ -54,6 +54,9 @@ XY450 ?= 0
 WB_FIFO ?= 1
 # log2 of the FIFO bridge's request-queue depth (4 = 16 entries, the default).
 WB_REQ_ADDR ?= 4
+# The cached FIFO bridge (sun2_cached_fifo_bridge.v), and log2 of its lines.
+WB_CACHE ?= 0
+WB_CACHE_IDX ?= 9
 VME_SCSI ?= 0
 # The MultiBus packaging of the same SCSI interface.  Mutually exclusive with
 # XY450: one micro-SD slot.
@@ -148,7 +151,7 @@ ETH5_D  = $(shell printf '%d' 0x$(ETH5))
 # altogether.
 SYNDIR  = $(TOP)/build/syn
 
-TAG     = $(if $(filter 1,$(VME_SCSI)),-vmescsi,)$(if $(filter 1,$(MB_SCSI)),-mbscsi,)$(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)$(if $(filter 0,$(WB_FIFO)),-wbsync,)$(if $(filter 4,$(WB_REQ_ADDR)),,-rq$(WB_REQ_ADDR))
+TAG     = $(if $(filter 1,$(VME_SCSI)),-vmescsi,)$(if $(filter 1,$(MB_SCSI)),-mbscsi,)$(if $(filter 1,$(MB_ETHER)),-mbether,)$(if $(filter 1,$(MB_3C400)),-3c400,)$(if $(filter 1,$(FB)),-fb,)$(if $(filter 1,$(XY450)),-xy450,)$(if $(filter 0,$(WB_FIFO)),-wbsync,)$(if $(filter 4,$(WB_REQ_ADDR)),,-rq$(WB_REQ_ADDR))$(if $(filter 1,$(WB_CACHE)),-wbcache$(if $(filter 9,$(WB_CACHE_IDX)),,$(WB_CACHE_IDX)),)
 OUTDIR  = $(SYNDIR)/vivado/$(BOARD)-$(MACHINE)$(TAG)-cpu$(CPU_MHZ_TAG)$(if $(filter-out suska,$(CPU)),-$(CPU),)$(if $(filter 1,$(FB)),-$(HDMI_MODE),)$(if $(filter-out e0,$(ETH5)),-eth$(ETH5),)$(if $(CPU_DIV),-div$(CPU_DIV),)$(if $(filter 0,$(DISK_OFF_MIB)),,-off$(DISK_OFF_MIB)m)
 # Absolute, because the recipes below run Vivado from $(WORKDIR) and $(OUTDIR)
 # is relative to here: a relative path resolves against the wrong directory and
@@ -181,7 +184,7 @@ inputs:
 
 bitstream: ip rom inputs | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
-		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB) $(XY450) $(CPU) $(HDMI_MODE) $(ALLOW_PW) $(ETH5_D) $(if $(CPU_DIV),$(CPU_DIV),0) $(MB_3C400) $(VME_SCSI) $(MB_SCSI) $(DISK_OFF_MIB) $(WB_FIFO) $(WB_REQ_ADDR)
+		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB) $(XY450) $(CPU) $(HDMI_MODE) $(ALLOW_PW) $(ETH5_D) $(if $(CPU_DIV),$(CPU_DIV),0) $(MB_3C400) $(VME_SCSI) $(MB_SCSI) $(DISK_OFF_MIB) $(WB_FIFO) $(WB_REQ_ADDR) $(WB_CACHE) $(WB_CACHE_IDX)
 	@echo "bitstream: $(BIT)"
 
 # Programming.  Same knobs as bitstream, so `make program CPU=rd68011
@@ -229,7 +232,7 @@ CPU_DUTY ?= 50
 # should have been: two builds that differ only in a knob absent from the name
 # share a directory and clobber each other, which is exactly the comparison the
 # knob was added to make.
-QDIR = $(abspath $(SYNDIR))/quartus/$(BOARD)-$(MACHINE)-$(CPU)$(if $(MEM_PAGES),-p$(MEM_PAGES),)-cpu$(CPU_MHZ_TAG)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)$(if $(filter 0,$(QSEED)),,-seed$(QSEED))$(if $(filter 50,$(CPU_DUTY)),,-duty$(CPU_DUTY))$(if $(filter 0,$(XY450)),,-xy450)$(if $(filter 0,$(VME_SCSI)),,-vmescsi)$(if $(filter 0,$(MB_SCSI)),,-mbscsi)$(if $(filter 0,$(DISK_OFF_MIB)),,-off$(DISK_OFF_MIB)m)$(if $(filter 0,$(LOOPBUF)),,-lb$(LOOPBUF))$(if $(filter 0,$(RTE_LOOP)),,-rtelp)$(if $(filter 1,$(RTE_BUF)),,-nortebuf)$(if $(filter 0,$(MB_ETHER)),,-mbether)$(if $(filter 0,$(MB_3C400)),,-3c400)$(if $(filter 0,$(FB)),,-fb)$(if $(filter 1,$(WB_FIFO)),,-wbsync)$(if $(filter 4,$(WB_REQ_ADDR)),,-rq$(WB_REQ_ADDR))
+QDIR = $(abspath $(SYNDIR))/quartus/$(BOARD)-$(MACHINE)-$(CPU)$(if $(MEM_PAGES),-p$(MEM_PAGES),)-cpu$(CPU_MHZ_TAG)-$(QTOPENT)$(if $(filter 0,$(ERAM)),-noeram,)$(if $(filter 0,$(QSEED)),,-seed$(QSEED))$(if $(filter 50,$(CPU_DUTY)),,-duty$(CPU_DUTY))$(if $(filter 0,$(XY450)),,-xy450)$(if $(filter 0,$(VME_SCSI)),,-vmescsi)$(if $(filter 0,$(MB_SCSI)),,-mbscsi)$(if $(filter 0,$(DISK_OFF_MIB)),,-off$(DISK_OFF_MIB)m)$(if $(filter 0,$(LOOPBUF)),,-lb$(LOOPBUF))$(if $(filter 0,$(RTE_LOOP)),,-rtelp)$(if $(filter 1,$(RTE_BUF)),,-nortebuf)$(if $(filter 0,$(MB_ETHER)),,-mbether)$(if $(filter 0,$(MB_3C400)),,-3c400)$(if $(filter 0,$(FB)),,-fb)$(if $(filter 1,$(WB_FIFO)),,-wbsync)$(if $(filter 4,$(WB_REQ_ADDR)),,-rq$(WB_REQ_ADDR))$(if $(filter 1,$(WB_CACHE)),-wbcache$(if $(filter 9,$(WB_CACHE_IDX)),,$(WB_CACHE_IDX)),)
 
 quartus-run: rom inputs
 	@# A port left off an instantiation is an undriven wire, not an error --
@@ -254,7 +257,7 @@ quartus-run: rom inputs
 		$(if $(MEM_PAGES),-mem_pages $(MEM_PAGES),) -cpu_hz $(CPU_HZ) \
 		-cpu_div $(if $(CPU_DIV),$(CPU_DIV),0) -eth5 $(ETH5_D) \
 		-eram $(ERAM) -jobs $(AJOBS) -seed $(QSEED) -cpu_duty $(CPU_DUTY) \
-		-xy450 $(XY450) -vme_scsi $(VME_SCSI) -mb_scsi $(MB_SCSI) -disk_off_mib $(DISK_OFF_MIB) -loopbuf $(LOOPBUF) -rte_loop $(RTE_LOOP) -rte_buf $(RTE_BUF) -mb_ether $(MB_ETHER) -mb_3c400 $(MB_3C400) -fb $(FB) -wb_fifo $(WB_FIFO) -wb_req_addr $(WB_REQ_ADDR) > $(QDIR)/quartus.log 2>&1 || \
+		-xy450 $(XY450) -vme_scsi $(VME_SCSI) -mb_scsi $(MB_SCSI) -disk_off_mib $(DISK_OFF_MIB) -loopbuf $(LOOPBUF) -rte_loop $(RTE_LOOP) -rte_buf $(RTE_BUF) -mb_ether $(MB_ETHER) -mb_3c400 $(MB_3C400) -fb $(FB) -wb_fifo $(WB_FIFO) -wb_req_addr $(WB_REQ_ADDR) -wb_cache $(WB_CACHE) -wb_cache_idx $(WB_CACHE_IDX) > $(QDIR)/quartus.log 2>&1 || \
 		{ echo "== FAILED, tail of $(QDIR)/quartus.log =="; tail -40 $(QDIR)/quartus.log; exit 1; }
 	@grep -E '^== ' $(QDIR)/quartus.log
 	@# An implicit net is a mis-parse, not a style point.  Vivado's equivalent

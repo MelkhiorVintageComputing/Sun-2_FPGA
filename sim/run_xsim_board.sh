@@ -119,6 +119,7 @@ xvlog --work sun2 "${defargs[@]}" \
 	"$top/rtl/sun2-common/sun2_wishbone_bridge.v" \
 	"$top/rtl/sun2-common/sun2_async_fifo.v" \
 	"$top/rtl/sun2-common/sun2_fifo_bridge.v" \
+	"$top/rtl/sun2-common/sun2_cached_fifo_bridge.v" \
 	"$top/rtl/sun2-common/tolog.v"
 
 echo "== compiling the board layer and testbench (SystemVerilog) =="
