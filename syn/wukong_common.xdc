@@ -15,6 +15,18 @@
 set_property CFGBVS VCCO        [current_design]
 set_property CONFIG_VOLTAGE 3.3 [current_design]
 
+# Loading from the SPI configuration flash.  Every revision has a Micron part
+# there -- N25Q064A on the V3, MT25QL128 on the V1 -- and both take the Quad
+# Output Fast Read (6Bh) that a x4 bus width issues, with no quad-enable bit to
+# set first.  Without these the FPGA reads a 3.8 MB bitstream one bit at a time
+# at its ~3 MHz default CCLK, which is about ten seconds from power to a
+# running machine; x4 at 33 MHz plus compression makes it a small fraction of
+# one.  33 MHz is well inside both parts' read ratings.  Compression also makes
+# JTAG programming quicker, and changes nothing about the design.
+set_property BITSTREAM.CONFIG.SPI_BUSWIDTH 4  [current_design]
+set_property BITSTREAM.CONFIG.CONFIGRATE   33 [current_design]
+set_property BITSTREAM.GENERAL.COMPRESS    TRUE [current_design]
+
 # ---------------------------------------------------------------------------
 # Clocks
 # ---------------------------------------------------------------------------

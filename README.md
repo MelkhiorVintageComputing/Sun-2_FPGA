@@ -966,6 +966,7 @@ make -C syn bitstream BOARD=v3 CPU=rd68011 CPU_DIV=51 \
 make -C syn bitstream BOARD=v3 CPU=rd68011 CPU_DIV=51 \
         MACHINE=vme VME_SCSI=1                       # a 2/50 with a SCSI disk
 make -C syn program [same knobs]    # JTAG, through a local hw_server
+make -C syn flash [same knobs]      # ... or into the SPI flash, for power-on
 ```
 
 | Knob | Values | |
@@ -979,6 +980,19 @@ make -C syn program [same knobs]    # JTAG, through a local hw_server
 | `DISK_OFF_MIB` | `0` | where on the SD card the disk image starts |
 | `FB`, `HDMI_MODE` | `0`, `1280x1024` | the frame buffer, and its video mode |
 | `WB_CACHE`, `WB_FIFO` | `1`, `1` | the memory bridge — see [Memory](#memory) |
+
+Every build writes two files: `sun2_wukong_<board>.bit` for JTAG, and beside it
+`sun2_wukong_<board>.bin`, the same bitstream without the `.bit` header, which
+is the image for the board's SPI configuration flash at address 0.
+`make -C syn flash` writes it there through Vivado, verifies it and
+reconfigures the board from it; openFPGALoader or a flash programmer can write
+it too. The flash is a Micron N25Q064A on a V3 (Vivado part
+`n25q64-3.3v-spi-x1_x2_x4`) and an MT25QL128 on a V1
+(`mt25ql128-spi-x1_x2_x4`), from `syn/boards.tcl`. Like `make program`, it
+replaces whatever the FPGA is running, so halt the Sun-2 first. The bitstream is compressed and
+asks for a x4 bus at 33 MHz (`syn/wukong_common.xdc`), so a board configures
+from flash in a fraction of a second rather than the ten or so the defaults
+would take.
 
 Each combination gets its own output directory under `build/syn/vivado/`,
 named from the board, the machine, the cards, the clock and the core — for

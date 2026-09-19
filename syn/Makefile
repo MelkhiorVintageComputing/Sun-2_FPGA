@@ -1,7 +1,8 @@
 # FPGA build for the QMTech Wukong, V1 or V3.
 #
 #   make ip                 generate the MIG DDR3 controller from mig/sun2_mig.prj
-#   make bitstream          build at the default 12.5 MHz CPU clock
+#   make bitstream          build at the default 12.5 MHz CPU clock; writes the
+#                           .bit and, beside it, the .bin for the SPI flash
 #   make bitstream CPU_HZ=40000000
 #   make bitstream MACHINE=vme
 #   make bitstream MB_ETHER=1     with the Sun MultiBus Ethernet card
@@ -16,6 +17,7 @@
 #   make quartus RTE_BUF=0        RD68011: an RTE empties the loop buffer window
 #   make bitstream CPU=rd68011    with the RD68011 core instead of Suska
 #   make program                  put the built bitstream on the board
+#   make flash                    write it into the board's SPI flash instead
 #   make both               both CPU clocks
 #
 #   make clean              drop the Vivado output; clean-quartus for the other
@@ -158,6 +160,8 @@ OUTDIR  = $(SYNDIR)/vivado/$(BOARD)-$(MACHINE)$(TAG)-cpu$(CPU_MHZ_TAG)$(if $(fil
 # is relative to here: a relative path resolves against the wrong directory and
 # program.tcl reports a bitstream that was never at that address.
 BIT     = $(abspath $(OUTDIR))/sun2_wukong_$(BOARD).bit
+# The same bitstream for the SPI configuration flash, written beside it.
+BIN     = $(BIT:.bit=.bin)
 WORKDIR = $(SYNDIR)/vivado/work-$(BOARD)
 
 all: bitstream
@@ -187,6 +191,7 @@ bitstream: ip rom inputs | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
 		-source $(HERE)/build.tcl -tclargs $(CPU_HZ) $(MACHINE) $(MB_ETHER) $(BOARD) $(FB) $(XY450) $(CPU) $(HDMI_MODE) $(ALLOW_PW) $(ETH5_D) $(if $(CPU_DIV),$(CPU_DIV),0) $(MB_3C400) $(VME_SCSI) $(MB_SCSI) $(DISK_OFF_MIB) $(WB_FIFO) $(WB_REQ_ADDR) $(WB_CACHE) $(WB_CACHE_IDX)
 	@echo "bitstream: $(BIT)"
+	@echo "flash image: $(BIN)"
 
 # Programming.  Same knobs as bitstream, so `make program CPU=rd68011
 # MB_ETHER=1' puts on the board exactly what the matching build produced --
@@ -194,6 +199,14 @@ bitstream: ip rom inputs | $(WORKDIR)
 program: | $(WORKDIR)
 	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
 		-source $(HERE)/program.tcl -tclargs $(BIT) $(HW_URL)
+
+# The same artefact, into the SPI configuration flash, so the board comes up as
+# this machine at power-on.  Same knobs as bitstream and program; the flash
+# part follows BOARD (syn/boards.tcl).  It replaces whatever the FPGA is
+# running as it starts, so halt the Sun-2 first.
+flash: | $(WORKDIR)
+	cd $(WORKDIR) && $(VIVADO) -mode batch -nojournal -nolog \
+		-source $(HERE)/program_flash.tcl -tclargs $(BIN) $(BOARD) $(HW_URL)
 
 # --- the Altera path ------------------------------------------------------
 #
@@ -307,6 +320,6 @@ clean-quartus:
 clean-ip:
 	rm -rf $(TOP)/build/ip
 
-.PHONY: all ip rom inputs bitstream both program clean clean-ip \
+.PHONY: all ip rom inputs bitstream both program flash clean clean-ip \
 	clean-quartus \
 	quartus-run lint-quartus quartus quartus-eram-delta

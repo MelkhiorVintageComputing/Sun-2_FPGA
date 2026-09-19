@@ -67,6 +67,19 @@ proc board_mig_part {board} {
     }
 }
 
+# The SPI configuration flash, in Vivado's get_cfgmem_parts spelling, for
+# `make flash'.  Both are Micron parts, from QMTech's own documents: the V1
+# hardware manual and schematic give an MT25QL128ABA1ESE (16 MiB), and the V3's
+# user manual and schematic an N25Q064A (8 MiB, 3.3 V).  The -1 V1 build is the
+# same board and the same chip.
+proc board_flash_part {board} {
+    switch -- $board {
+        v1 - v1s1 { return mt25ql128-spi-x1_x2_x4 }
+        v3        { return n25q64-3.3v-spi-x1_x2_x4 }
+        default   { return "" }
+    }
+}
+
 # Which toolchain a board belongs to.  Two vendors now: the Wukong revisions are
 # Xilinx and built by syn/build.tcl under Vivado; the Arrow DECA is Altera and
 # built by syn/quartus.tcl under Quartus.  Everything below the board layer is

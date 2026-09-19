@@ -22,8 +22,10 @@ make -C sim check MACHINE=vme             # pass/fail on the console log
 make -C sim board [BOARD_MEM=ddr3] [CPU=rd68011]   # as it will be on the Wukong
 make -C syn ip [BOARD=v3]                 # generate the MIG DDR3 controller (once per board)
 make -C syn bitstream [MACHINE=vme] [CPU_HZ=40000000] [BOARD=v3] [XY450=1] [CPU=rd68011]
+                                          # writes the .bit and a .bin for the SPI flash
 make -C syn bitstream FB=1 HDMI_MODE=1280x1024      # the display mode this board can drive
 make -C syn program [same knobs]          # JTAG, through a local hw_server
+make -C syn flash [same knobs]            # into the SPI flash, so it boots at power-on
 make -C syn bitstream WB_FIFO=0           # the old synchronous bridge to memory (quartus too)
 make -C syn bitstream WB_CACHE=0          # the FIFO bridge without its read cache (quartus too)
 tools/mkxydisk -o build/disk/xy0.img       # a labelled, bootable disk image

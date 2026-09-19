@@ -583,5 +583,12 @@ if {$wns < 0 || $whs < 0} {
     exit 1
 }
 
-write_bitstream -force $outdir/sun2_wukong_$board.bit
+# -bin_file writes sun2_wukong_$board.bin beside the .bit: the same bitstream
+# without the .bit file's header, which is the image the FPGA reads from its
+# SPI configuration flash at address 0 -- what bootgen -arch fpga makes from a
+# one-line .bif, and what Vivado's hw_cfgmem, openFPGALoader or a flash
+# programmer write.  The SPI bus width and clock it loads with are in
+# wukong_common.xdc.
+write_bitstream -force -bin_file $outdir/sun2_wukong_$board.bit
 puts "== wrote $outdir/sun2_wukong_$board.bit =="
+puts "== wrote $outdir/sun2_wukong_$board.bin =="
