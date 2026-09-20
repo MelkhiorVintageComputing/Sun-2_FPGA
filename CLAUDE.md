@@ -145,6 +145,18 @@ and release together the address enable stands for all of them. There used to
 be a shim in `rtl/experimental/` presenting Suska's interface; it is gone, and
 the reconciliation now lives where the wiring does.
 
+**The core's own clock ceiling moved, and the machine's cycle counts did not.**
+`Inputs/RD68011` `04cd25b` is the merge of its `rdata-split` work, and what it
+is worth is in the DECA section below -- 20 MHz where 18.8 was the cap. What
+matters here is that it costs the machine nothing and changes no fingerprint:
+both reference boots are byte-identical (MultiBus 22/274, VME 10/312) and reach
+the prompt at the *same simulated nanosecond* with the same memory-check counts
+as the core before it, 89 longword reads split by DVMA and all assembled
+correctly. `ctxprobe` passes every case including E, `refmodprobe` gives the
+same four entries, and `xychain` PASSes. A MultiBus boot with `LOOPBUF=16` is
+byte-identical too and reaches the prompt 6% sooner (1.0389 s against 1.1051 s),
+which is the loop buffer rather than the core change.
+
 **Short experiments run on both cores.** Neither is a reference for the other:
 Suska gets instruction restart wrong -- the bus error frame it pushes does not
 describe the cycle -- and RD68011 gets further into the kernel because of it,
@@ -662,6 +674,42 @@ STA re-times both halves against the real waveform:
 Free -- no logic, no area, no frequency change. **What it cannot do is raise
 the ceiling**, because the two halves share one period: the constraint is their
 *sum*, 53.3 ns at best, which caps cpu_clk near 18.8 MHz however it is split.
+
+**That ceiling was the core's, and the core moved: the DECA runs at 20 MHz.**
+RD68011 `04cd25b` keeps read data away from every unit that does not read it --
+the adder, the shifter, the multiplier, the divider and the bit test take their
+operands from source buses that leave it out, which its microcode assembler
+enforces -- so the path this file measured for months is not the limit any more;
+its own `doc/critical-path.md` puts the limit at the bus unit's turnaround.
+Measured here, MultiBus with the Xylogics at `CPU_DIV=50`:
+
+```
+                     worst setup, slow 85 C     what it is
+  20 MHz 50/50            -0.235 ns            fails: ucode ROM address -> u_biu|d_o
+  20 MHz 53/47            +0.514 ns            boots SunOS to a login prompt
+  20 MHz 53/47 LOOPBUF=16 +0.154 ns            boots, and 3% faster
+```
+
+The failing path is still a **half-period** one, rising edge to falling, so the
+duty knob is still what buys it: the falling-to-rising family has 2.4 ns spare
+at 20 MHz and hands 1.7 ns of it over. 26,285 LE at 53%, 26,883 with the loop
+buffer.
+
+**On the board, CPU work scales with the clock and disk work does not.** Same
+machine, same card, `LOOPBUF=16` at both clocks, `user` seconds:
+
+```
+                    16.667 MHz   20 MHz    ratio   (clock ratio 1.200)
+  dhrystone            30.35       25.15   1.207
+  memory loop          36.7        30.5    1.203
+  patwr, user         580.4       485.3    1.196
+  16 MiB dd, real     143-149     135-145  card-bound, not CPU-bound
+```
+
+`patwr` is 0 wrong of 8,388,608 at 20 MHz and TAS still works on stack, static
+data and heap. **The `dd` figures are a card property**: a fresh micro-SD card
+wrote at half the rate of the old one at *both* clocks, which is why the control
+was re-run on the same card rather than compared against the table above.
 
 **And the experiment split the problem in two, which is the useful part.** At
 15.625 MHz the better split visibly helped -- one run of three got past the
