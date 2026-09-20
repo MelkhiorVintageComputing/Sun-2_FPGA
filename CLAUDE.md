@@ -805,6 +805,39 @@ invalidate a decode that indexes the returned bit string MSB-first.
 So "no card" and "a card that never initialised" are the same reading, and the
 only way to tell them apart is to try another card.
 
+**The SD byte stream is continuous now, and it is worth 5% of a read.**
+`Inputs/Wish5380` `bde4ef3` hands `sd_spi` one byte of lookahead, so a byte
+costs 16 system clocks rather than 19 -- 2.00 clocks a bit against 2.37 -- and
+`scsi_targ` reads ahead into the other bank. Measured here on the DECA at
+20 MHz, MultiBus with the Xylogics, the same card and the two bitstreams
+alternated:
+
+```
+  16 MiB                     before        after
+  raw read, bs=64k        54.0, 54.5    51.3, 51.5     -5.3%
+  raw read, bs=8k         65.0, 61.4    58.9, 61.1, 59.6   noisy
+  filesystem read              66.3          63.0
+  filesystem write + sync     136.4     136.7, 143.7    unchanged
+  patwr (0 wrong)             590.8         588.6       unchanged
+```
+
+**Only the 64 KB raw read is worth quoting**, and the arithmetic says why it is
+the right instrument: 19 clocks a byte to 16 at 20 MHz is 76 us a sector, so
+32768 sectors should save 2.5 s against the 2.85 measured. The 8 KB runs spread
+3.6 s between repeats of the *same* bitstream, which is wider than the effect.
+The other two rows cannot move: a filesystem write is the card's own program
+time (52 s of CPU in 136 s) and `patwr` is 83% user time. And even on a raw
+read the card is only about a quarter of the elapsed time here -- the rest is
+the controller, DVMA and the driver -- so an SD-side gain arrives diluted,
+which is what upstream's own "through programmed I/O the card is not the long
+pole" says from the other end.
+
+**The declaration-order trap caught this update too**, and it is the same one
+`xvlog` has sprung twice before: `scsi_targ.sv` assigned the sector buffer's
+address from a signal declared fifty lines later, which Verilator, Icarus and
+Yosys all accept. Every SCSI test and the whole Quartus build refused to
+compile. It is fixed upstream in the same commit, so nothing is carried here.
+
 **Resolved 2026-09-13: the single-word disk corruption was a phantom DDR3
 request, and it is fixed on both boards.** This file carried the hunt for most of
 a month; the full record, every elimination included, is in
